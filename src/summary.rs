@@ -39,6 +39,40 @@ pub struct HarnessStat {
     pub cost_eur: f64,
 }
 
+/// One row of the live feed — a real recent turn, trimmed to what the dashboard shows
+/// (no project/path, so nothing identifying leaks into the feed).
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentEvent {
+    pub ts: i64,
+    pub harness: String,
+    pub agent: String,
+    pub model: String,
+    pub tokens_out: u64,
+    pub cost_eur: f64,
+    pub duration_ms: Option<u64>,
+}
+
+/// The `n` most recent events (newest first) as feed rows. Cheap: collect + sort by ts.
+pub fn recent_events<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    n: usize,
+) -> Vec<RecentEvent> {
+    let mut v: Vec<&Event> = events.into_iter().collect();
+    v.sort_by(|a, b| b.ts.cmp(&a.ts));
+    v.into_iter()
+        .take(n)
+        .map(|e| RecentEvent {
+            ts: e.ts,
+            harness: e.harness.as_str().to_string(),
+            agent: e.agent.clone(),
+            model: e.model.clone(),
+            tokens_out: e.tokens_out,
+            cost_eur: e.cost_eur,
+            duration_ms: e.duration_ms,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Summary {
     pub events: u64,
@@ -68,6 +102,8 @@ pub struct Summary {
     pub budget_day_eur: Option<f64>,
     pub budget_week_eur: Option<f64>,
     pub budget_month_eur: Option<f64>,
+    /// Newest turns for the live feed (filled by the server per request; empty in `--scan-only`).
+    pub recent: Vec<RecentEvent>,
 }
 
 /// Aggregate any set of events (a slice, or a filtered iterator for a time range).
@@ -95,6 +131,7 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         budget_day_eur: None,
         budget_week_eur: None,
         budget_month_eur: None,
+        recent: Vec::new(),
     };
 
     let mut sessions = std::collections::BTreeSet::new();

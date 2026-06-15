@@ -127,8 +127,9 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
         <span style="width:7px; height:7px; border-radius:50%; background:var(--ax,#34d399); box-shadow:0 0 9px var(--ax,#34d399); animation:axBlink 1.4s infinite;"></span>
         <span style="font-family:var(--mono); font-size:11px; letter-spacing:0.2em; color:#a7c2b4;">LIVE FEED</span>
-        <span style="font-family:var(--mono); font-size:11px; color:#5d7268;">decorative pulses</span>
+        <span style="font-family:var(--mono); font-size:11px; color:#5d7268;">newest turns &middot; live</span>
       </div>
+      <div style="display:grid; grid-template-columns:74px 1fr 84px 78px 64px; gap:14px; padding:0 8px 7px; font-family:var(--mono); font-size:9.5px; letter-spacing:0.16em; color:#46564e;"><span>TIME</span><span>AGENT &middot; MODEL</span><span style="text-align:right;">OUT</span><span style="text-align:right;">COST</span><span style="text-align:right;">TOOK</span></div>
       <div id="feed" style="display:flex; flex-direction:column; gap:2px;"></div>
     </div>
 
@@ -175,7 +176,7 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
         <span style="font-family:var(--mono); font-size:10.5px; letter-spacing:0.1em; color:#46564e;">hover &rarr; isolate in mesh</span>
       </div>
       <div style="border:1px solid rgba(var(--axr,52,211,153),0.1); border-radius:14px; overflow:hidden; background:linear-gradient(180deg,rgba(11,18,15,0.5),rgba(7,11,9,0.5));">
-        <div style="display:grid; grid-template-columns:minmax(160px,1.5fr) 120px 130px minmax(170px,1.3fr); gap:24px; align-items:center; padding:12px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.1); font-family:var(--mono); font-size:10px; letter-spacing:0.18em; color:#5d7268;"><div>AGENT</div><div style="text-align:right;">TOKENS OUT</div><div style="text-align:right;">COST</div><div>SIGNAL</div></div>
+        <div style="display:grid; grid-template-columns:minmax(140px,1.3fr) 100px 100px 104px minmax(130px,1fr); gap:18px; align-items:center; padding:12px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.1); font-family:var(--mono); font-size:10px; letter-spacing:0.16em; color:#5d7268;"><div>AGENT</div><div style="text-align:right;">TOKENS IN</div><div style="text-align:right;">TOKENS OUT</div><div style="text-align:right;">COST</div><div>SIGNAL</div></div>
         <div id="agentRows"></div>
       </div>
     </div>
@@ -188,7 +189,7 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
         <div style="flex:1; height:1px; background:linear-gradient(90deg, rgba(var(--axr,52,211,153),0.18), transparent);"></div>
       </div>
       <div style="border:1px solid rgba(var(--axr,52,211,153),0.1); border-radius:14px; overflow:hidden; background:linear-gradient(180deg,rgba(11,18,15,0.5),rgba(7,11,9,0.5));">
-        <div style="display:grid; grid-template-columns:minmax(160px,1.5fr) 120px 130px minmax(170px,1.3fr); gap:24px; align-items:center; padding:12px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.1); font-family:var(--mono); font-size:10px; letter-spacing:0.18em; color:#5d7268;"><div>MODEL</div><div style="text-align:right;">TOKENS OUT</div><div style="text-align:right;">COST</div><div>SIGNAL</div></div>
+        <div style="display:grid; grid-template-columns:minmax(140px,1.3fr) 100px 100px 104px minmax(130px,1fr); gap:18px; align-items:center; padding:12px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.1); font-family:var(--mono); font-size:10px; letter-spacing:0.16em; color:#5d7268;"><div>MODEL</div><div style="text-align:right;">TOKENS IN</div><div style="text-align:right;">TOKENS OUT</div><div style="text-align:right;">COST</div><div>SIGNAL</div></div>
         <div id="modelRows"></div>
       </div>
     </div>
@@ -263,6 +264,7 @@ const fmtInt = n => Math.round(n).toLocaleString('en-US');
 const fmtCompact = n => { n = Math.round(n); if (n >= 1e9) return (n/1e9).toFixed(1)+'B'; if (n >= 1e6) return (n/1e6).toFixed(1)+'M'; if (n >= 1e3) return (n/1e3).toFixed(1)+'K'; return ''+n; };
 const fmtEur = n => '€' + Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 const pctFmt = v => v.toFixed(1) + '%';
+const fmtDur = ms => { if(ms==null) return '—'; if(ms<1000) return Math.round(ms)+'ms'; const s=ms/1000; if(s<60) return (s<10?s.toFixed(1):Math.round(s))+'s'; const m=Math.floor(s/60); return m+'m'+Math.round(s-m*60)+'s'; };
 // Smooth number tweening: each registered element eases toward its target every frame.
 // New elements start at 0 (count-up intro); thereafter they glide between values.
 const tweens = new Map();
@@ -298,6 +300,7 @@ const AX = {
     const c = this.brain; if (!c) return;
     const dpr = Math.min(window.devicePixelRatio||1, 2);
     const w = c.clientWidth, h = c.clientHeight;
+    if (!(w>0) || !(h>0)) return;   // degenerate size (e.g. mid-resize) → skip; keep coords finite
     c.width = w*dpr; c.height = h*dpr; c.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
     this.W=w; this.H=h; this.cx=w/2; this.cy=h/2;
     const base = Math.min(w,h); this.f = base*1.05; this.xs = 1.42;
@@ -326,7 +329,7 @@ const AX = {
 
   pickEdge(){ if(!this.edges) return 0; let r=Math.random()*this.wsum, acc=0; for(let i=0;i<this.edges.length;i++){ acc+=this.edges[i].w; if(r<=acc) return i; } return 0; },
   // Pick an edge weighted by CURRENT node activity (real data flow); -1 when nothing is active.
-  pickActiveEdge(){ if(!this.edges) return -1; let sum=0; const w=this.edges.map(e=>{ const a=(this.nodes[e.a].act||0)+(this.nodes[e.b].act||0); sum+=a; return a; }); if(sum<0.02) return -1; let r=Math.random()*sum, acc=0; for(let i=0;i<w.length;i++){ acc+=w[i]; if(r<=acc) return i; } return w.length-1; },
+  pickActiveEdge(){ if(!this.edges) return -1; let sum=0; const w=this.edges.map(e=>{ const a=Math.min(this.nodes[e.a].act||0, this.nodes[e.b].act||0); sum+=a; return a; }); if(sum<0.02) return -1; let r=Math.random()*sum, acc=0; for(let i=0;i<w.length;i++){ acc+=w[i]; if(r<=acc) return i; } return w.length-1; },
   // A node gained tokens/cost → light it and the path back to the core, so the beam flows along it.
   bumpActivity(n, amt){ n.act=Math.min(1,(n.act||0)+amt); if(n.kind==='agent'){ const m=this.nodes[n.parent]; if(m) m.act=Math.min(1,(m.act||0)+amt*0.7); if(this.nodes[0]) this.nodes[0].act=Math.min(1,(this.nodes[0].act||0)+amt*0.5); } else if(n.kind==='model'){ if(this.nodes[0]) this.nodes[0].act=Math.min(1,(this.nodes[0].act||0)+amt*0.6); } },
   subtreeSet(id){ if(id==null||!this.nodes) return null; const s=new Set(); const n=this.nodes[id]; s.add(0); s.add(id); if(n.kind==='core'){ this.nodes.forEach(x=>s.add(x.id)); } else if(n.kind==='model'){ (n.children||[]).forEach(c=>s.add(c)); } else if(n.kind==='agent'){ s.add(n.parent); } return s; },
@@ -352,6 +355,7 @@ const AX = {
   drawBrain(now){
     const c = this.brain; if (!c || !this.nodes) return;
     const ctx = c.getContext('2d'), w=this.W, h=this.H, time=now*0.001, A=this.A;
+    if (!(w>0) || !(h>0) || !Number.isFinite(this.f)) return;   // never draw with non-finite geometry
     const speedF = this.intensity/7; ctx.clearRect(0,0,w,h);
     this.yaw += 0.0016*speedF;
     if (this.drag==null && this.mouse && this.mouse.on){ this.tPitch=0.18+(this.mouse.y/h-0.5)*0.5; this.tYawOff=(this.mouse.x/w-0.5)*0.7; }
@@ -389,25 +393,36 @@ const AX = {
 
   loop(now){ requestAnimationFrame(t=>this.loop(t)); try{ stepTweens(); this.drawWave(); this.drawBrain(now); }catch(err){ if(!this._logged){ console.error('AXON loop error:', err); this._logged=true; } } },
 
-  // ---- live feed (decorative pulses synthesized from real agents) ----
-  feedActions:['Edit','Read','Write','Bash','Grep','Glob','Task'],
-  feedPaths:['src/ingest/claude.rs','src/store.rs','ui/dist/index.html','src/main.rs','tests/m2_fixtures.rs','assets/pricing.toml','DESIGN.md','src/normalize.rs','src/server.rs','Cargo.toml'],
-  genFeed(){ const ag=this.agentsData; if(!ag.length) return null; const w=ag.map(a=>Math.sqrt(a[1]||1)); const sum=w.reduce((p,x)=>p+x,0); let r=Math.random()*sum, idx=0; for(let i=0;i<w.length;i++){ r-=w[i]; if(r<=0){ idx=i; break; } } const a=ag[idx]; const d=new Date(); return { time:d.toTimeString().slice(0,8), agent:a[0], color:this.agentColor(a[2]), action:this.feedActions[Math.floor(Math.random()*this.feedActions.length)], path:this.feedPaths[Math.floor(Math.random()*this.feedPaths.length)], tok:'+'+fmtCompact(40+Math.random()*4200) }; },
-  feedRowEl(s, animate){ const d=document.createElement('div'); d.style.cssText='display:grid; grid-template-columns:88px 150px 1fr 92px; gap:14px; align-items:center; padding:7px 8px; border-radius:7px; font-family:var(--mono); font-size:12.5px;'+(animate?' animation:axStreamIn .5s ease;':''); d.innerHTML='<span style="color:#46564e;">'+s.time+'</span><span style="display:flex; align-items:center; gap:7px; color:#cfe3d8;"><span style="width:6px; height:6px; border-radius:50%; background:'+s.color+'; box-shadow:0 0 7px '+s.color+';"></span>'+esc(s.agent)+'</span><span style="color:#7c8b80; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><span style="color:#9fb8ab;">'+s.action+'</span> '+s.path+'</span><span style="color:var(--ax2,#6ee7b7); text-align:right;">'+s.tok+'</span>'; return d; },
-  seedFeed(){ const el=$('feed'); if(!el) return; el.innerHTML=''; for(let i=0;i<6;i++){ const s=this.genFeed(); if(s) el.appendChild(this.feedRowEl(s, false)); } },
-  pushFeed(){ const el=$('feed'); if(!el) return; const s=this.genFeed(); if(!s) return; el.insertBefore(this.feedRowEl(s, true), el.firstChild); while(el.children.length>6) el.removeChild(el.lastChild); },
+  // ---- live feed (REAL recent turns from /api/summary.recent — newest first) ----
+  harnessColor(h){ const A=this.A; return ({'claude-code':'rgb('+A.lighter+')','codex':'#4fd6e6','opencode':'#f5b13d'})[h] || 'rgb('+A.rgb+')'; },
+  feedKey(e){ return e.ts+'|'+e.agent+'|'+e.model+'|'+e.tokens_out+'|'+(e.duration_ms||0); },
+  feedRowEl(e, animate){ const d=document.createElement('div'); d.style.cssText='display:grid; grid-template-columns:74px 1fr 84px 78px 64px; gap:14px; align-items:center; padding:7px 8px; border-radius:7px; font-family:var(--mono); font-size:12.5px;'+(animate?' animation:axStreamIn .5s ease;':'');
+    const col=this.harnessColor(e.harness); const t=new Date(e.ts).toTimeString().slice(0,8); const model=esc(String(e.model).replace('claude-',''));
+    d.innerHTML='<span style="color:#46564e;">'+t+'</span>'
+      +'<span style="display:flex; align-items:center; gap:7px; min-width:0;"><span style="width:6px; height:6px; border-radius:50%; background:'+col+'; box-shadow:0 0 7px '+col+'; flex:0 0 auto;"></span><span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#cfe3d8;">'+esc(e.agent)+' <span style="color:#5d7268;">&middot; '+model+'</span></span></span>'
+      +'<span style="color:var(--ax2,#6ee7b7); text-align:right;">+'+fmtCompact(e.tokens_out)+'</span>'
+      +'<span style="color:#9fb8ab; text-align:right;">'+fmtEur(e.cost_eur)+'</span>'
+      +'<span style="color:#7c8b80; text-align:right;">'+fmtDur(e.duration_ms)+'</span>';
+    return d; },
+  // Render newest-first; on each poll prepend only turns we haven't shown (no full-table flash).
+  renderFeed(){ const el=$('feed'); if(!el) return; const recent=(this.data&&this.data.recent)||[]; if(!recent.length) return; this.feedSeen=this.feedSeen||new Set();
+    if(!this._feedInit){ el.innerHTML=''; recent.slice(0,8).forEach(e=>{ el.appendChild(this.feedRowEl(e,false)); this.feedSeen.add(this.feedKey(e)); }); this._feedInit=true; return; }
+    const fresh=recent.filter(e=>!this.feedSeen.has(this.feedKey(e)));
+    fresh.reverse().forEach(e=>{ el.insertBefore(this.feedRowEl(e,true), el.firstChild); this.feedSeen.add(this.feedKey(e)); });
+    while(el.children.length>8) el.removeChild(el.lastChild);
+    if(this.feedSeen.size>400) this.feedSeen=new Set(recent.map(e=>this.feedKey(e))); },
 
   gate(k, sig, fn){ this._sig = this._sig || {}; if (this._sig[k] !== sig){ this._sig[k] = sig; fn(); } },
 
   buildRows(containerId, rows, max){
     const el = $(containerId), map = new Map();
     el.innerHTML = rows.map(r=>{ const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1);
-      return '<div class="axrow" data-name="'+esc(r[0])+'" style="display:grid; grid-template-columns:minmax(160px,1.5fr) 120px 130px minmax(170px,1.3fr); gap:24px; align-items:center; padding:14px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.05); transition:background .15s;"><div style="font-family:var(--mono); font-size:14px; color:#cfe3d8;">'+esc(r[0])+'</div><div class="cTok" style="font-family:var(--mono); font-size:14px; color:#8aa99a; text-align:right;">—</div><div class="cCost" style="font-family:var(--mono); font-size:14px; color:var(--ax2,#6ee7b7); text-align:right;">—</div><div style="position:relative; height:2px; background:rgba(var(--axr,52,211,153),0.08);"><div class="cFill" style="position:absolute; left:0; top:0; height:100%; width:'+pct+'%; background:linear-gradient(90deg, rgba(var(--axr,52,211,153),0.12), var(--ax,#34d399)); transition:width .8s cubic-bezier(.2,.8,.2,1);"></div><div class="cNode" style="position:absolute; left:'+pct+'%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--ax2,#6ee7b7); box-shadow:0 0 11px 2px rgba(var(--axr,52,211,153),0.8); transition:left .8s cubic-bezier(.2,.8,.2,1);"></div></div></div>';
+      return '<div class="axrow" data-name="'+esc(r[0])+'" style="display:grid; grid-template-columns:minmax(140px,1.3fr) 100px 100px 104px minmax(130px,1fr); gap:18px; align-items:center; padding:14px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.05); transition:background .15s;"><div style="font-family:var(--mono); font-size:14px; color:#cfe3d8;">'+esc(r[0])+'</div><div class="cIn" style="font-family:var(--mono); font-size:14px; color:#6f8579; text-align:right;">—</div><div class="cTok" style="font-family:var(--mono); font-size:14px; color:#8aa99a; text-align:right;">—</div><div class="cCost" style="font-family:var(--mono); font-size:14px; color:var(--ax2,#6ee7b7); text-align:right;">—</div><div style="position:relative; height:2px; background:rgba(var(--axr,52,211,153),0.08);"><div class="cFill" style="position:absolute; left:0; top:0; height:100%; width:'+pct+'%; background:linear-gradient(90deg, rgba(var(--axr,52,211,153),0.12), var(--ax,#34d399)); transition:width .8s cubic-bezier(.2,.8,.2,1);"></div><div class="cNode" style="position:absolute; left:'+pct+'%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--ax2,#6ee7b7); box-shadow:0 0 11px 2px rgba(var(--axr,52,211,153),0.8); transition:left .8s cubic-bezier(.2,.8,.2,1);"></div></div></div>';
     }).join('');
-    el.querySelectorAll('.axrow').forEach(row=>map.set(row.getAttribute('data-name'), {tok:row.querySelector('.cTok'), cost:row.querySelector('.cCost'), fill:row.querySelector('.cFill'), node:row.querySelector('.cNode')}));
+    el.querySelectorAll('.axrow').forEach(row=>map.set(row.getAttribute('data-name'), {inn:row.querySelector('.cIn'), tok:row.querySelector('.cTok'), cost:row.querySelector('.cCost'), fill:row.querySelector('.cFill'), node:row.querySelector('.cNode')}));
     return map;
   },
-  updateRows(map, rows, max){ rows.forEach(r=>{ const e=map.get(r[0]); if(!e) return; tnum(e.tok, r[1], fmtCompact); tnum(e.cost, r[2], fmtEur); const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1)+'%'; e.fill.style.width=pct; e.node.style.left=pct; }); },
+  updateRows(map, rows, max){ rows.forEach(r=>{ const e=map.get(r[0]); if(!e) return; tnum(e.inn, r[3]||0, fmtCompact); tnum(e.tok, r[1], fmtCompact); tnum(e.cost, r[2], fmtEur); const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1)+'%'; e.fill.style.width=pct; e.node.style.left=pct; }); },
 
   updateBudget(s){
     const rows = [['DAILY', s.today_cost_eur, s.budget_day_eur],['WEEKLY', s.week_cost_eur, s.budget_week_eur],['MONTHLY', s.month_cost_eur, s.budget_month_eur]];
@@ -477,6 +492,8 @@ const AX = {
     $('shareAgent').textContent = topAgent?topAgent[0]:'—';
 
     $('footStatus').textContent = 'MIT © 2026 · loopback-only · live · '+fmtInt(s.unattributed_token_pct)+'% unattributed';
+
+    this.renderFeed();
   },
 
   updateChips(){ const present=new Set((this.data&&this.data.by_harness||[]).map(h=>h.harness)); const all=[['claude-code','CLAUDE CODE'],['codex','CODEX'],['opencode','OPENCODE']]; $('chips').innerHTML=all.map(([k,lbl])=>{ const on=present.has(k); return '<span style="display:flex; align-items:center; gap:7px; padding:5px 11px; border:1px solid '+(on?'rgba(var(--axr,52,211,153),0.26)':'rgba(255,255,255,0.07)')+'; border-radius:7px; font-size:10.5px; letter-spacing:0.14em; color:'+(on?'#a7c2b4':'#4a5a52')+';"><span style="width:6px; height:6px; border-radius:50%; '+(on?'background:var(--ax,#34d399); box-shadow:0 0 9px var(--ax,#34d399); animation:axBlink 1.5s infinite;':'border:1px solid #3a4a42;')+'"></span>'+lbl+'</span>'; }).join(''); },
@@ -486,14 +503,13 @@ const AX = {
   applyData(s){
     const structuralSame = this.sameSig(s);
     this.data = s;
-    this.agentsData = (s.by_agent||[]).map(a=>[a.agent, a.tokens_out, a.cost_eur]);
-    this.modelsData = (s.by_model||[]).map(m=>[m.model, m.tokens_out, m.cost_eur]);
+    this.agentsData = (s.by_agent||[]).map(a=>[a.agent, a.tokens_out, a.cost_eur, a.tokens_in]);
+    this.modelsData = (s.by_model||[]).map(m=>[m.model, m.tokens_out, m.cost_eur, m.tokens_in]);
     this.total = s.cost_eur;
     if (!this.started){
       this.brain=$('brain'); this.wave=$('wave'); this.bindBrain();
       this.layout(); this.started=true;
       requestAnimationFrame(t=>this.loop(t)); // drives drawing + number tweens
-      this.seedFeed(); setInterval(()=>this.pushFeed(), 1600);
     } else if (!structuralSame){ this.layout(); } else { this.refreshNodes(); }
     this.setData(); // sets tween targets + in-place DOM updates
   },

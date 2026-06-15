@@ -22,7 +22,10 @@ use axum::{Json, Router};
 use tower_http::compression::CompressionLayer;
 
 use crate::model::Event;
-use crate::summary::{build_summary, Summary};
+use crate::summary::{build_summary, recent_events, Summary};
+
+/// How many recent turns the live feed shows.
+const FEED_LEN: usize = 12;
 
 /// The dashboard — a single self-contained file, embedded at compile time. Edit
 /// `ui/dist/index.html` to change the UI; no build step, no external assets (§16).
@@ -78,13 +81,15 @@ async fn api_summary(
 ) -> Json<Summary> {
     let all = state.summary.read().unwrap_or_else(|p| p.into_inner());
     let range = q.range.as_deref().unwrap_or("all");
+    let events = state.events.read().unwrap_or_else(|p| p.into_inner());
     if range == "all" {
-        return Json(all.clone());
+        let mut s = all.clone();
+        s.recent = recent_events(events.iter(), FEED_LEN);
+        return Json(s);
     }
     // Re-aggregate over the selected window; carry the range-independent panels (rtk, budget,
     // today/week/month spend) from the all-time summary.
     let since = since_ms(range);
-    let events = state.events.read().unwrap_or_else(|p| p.into_inner());
     let mut s = build_summary(events.iter().filter(|e| e.ts >= since));
     s.rtk = all.rtk.clone();
     s.today_cost_eur = all.today_cost_eur;
@@ -93,6 +98,7 @@ async fn api_summary(
     s.budget_day_eur = all.budget_day_eur;
     s.budget_week_eur = all.budget_week_eur;
     s.budget_month_eur = all.budget_month_eur;
+    s.recent = recent_events(events.iter().filter(|e| e.ts >= since), FEED_LEN);
     Json(s)
 }
 
