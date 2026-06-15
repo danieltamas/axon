@@ -14,6 +14,7 @@ use clap::Parser;
 use axon::ingest;
 use axon::normalize;
 use axon::pricing::Pricing;
+use axon::rtk;
 use axon::server;
 use axon::store::Store;
 use axon::summary::{build_summary, Summary};
@@ -99,7 +100,10 @@ fn scan_to_summary() -> anyhow::Result<Summary> {
     let db = db_path();
     let mut store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
     store.upsert_all(&events)?;
-    Ok(build_summary(&store.all_events()?))
+
+    let mut summary = build_summary(&store.all_events()?);
+    summary.rtk = rtk::savings(); // optional; None if rtk is not installed
+    Ok(summary)
 }
 
 fn print_cli_summary(s: &Summary, port: u16) {
@@ -127,9 +131,17 @@ fn print_cli_summary(s: &Summary, port: u16) {
         commafy(s.loc_removed)
     );
     println!(
-        "  Cost          €{:.2}  (all logged history, EUR)",
-        s.cost_eur
+        "  Cost          {}  (all logged history, EUR)",
+        eur(s.cost_eur)
     );
+    if let Some(r) = &s.rtk {
+        println!(
+            "  RTK saved     {} tokens ({:.1}%) over {} commands",
+            compact(r.tokens_saved),
+            r.saved_pct,
+            commafy(r.commands)
+        );
+    }
     if !top_agents.is_empty() {
         println!("  Top agents    {}", top_agents.join(", "));
     }
@@ -140,6 +152,22 @@ fn print_cli_summary(s: &Summary, port: u16) {
         );
     }
     println!("  Dashboard →   http://127.0.0.1:{port}");
+}
+
+/// Format euros with thousands separators: 5607.61 → "€5,607.61".
+fn eur(n: f64) -> String {
+    let cents = (n * 100.0).round() as u64;
+    format!("€{}.{:02}", commafy(cents / 100), cents % 100)
+}
+
+/// Compact large counts: 134_504_579 → "134.5M".
+fn compact(n: u64) -> String {
+    match n {
+        n if n >= 1_000_000_000 => format!("{:.1}B", n as f64 / 1e9),
+        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
+        n if n >= 1_000 => format!("{:.1}K", n as f64 / 1e3),
+        n => n.to_string(),
+    }
 }
 
 /// Group a number into thousands with commas (35929 → "35,929").

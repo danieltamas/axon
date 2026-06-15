@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::model::Event;
+use crate::rtk::RtkSavings;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelStat {
@@ -47,6 +48,8 @@ pub struct Summary {
     pub unattributed_token_pct: f64,
     pub by_model: Vec<ModelStat>,
     pub by_agent: Vec<AgentStat>,
+    /// Optional RTK (token-saver) analytics; `None` if rtk is not installed.
+    pub rtk: Option<RtkSavings>,
 }
 
 pub fn build_summary(events: &[Event]) -> Summary {
@@ -65,6 +68,7 @@ pub fn build_summary(events: &[Event]) -> Summary {
         unattributed_token_pct: 0.0,
         by_model: Vec::new(),
         by_agent: Vec::new(),
+        rtk: None,
     };
 
     let mut sessions = std::collections::BTreeSet::new();
