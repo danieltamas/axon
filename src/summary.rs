@@ -58,7 +58,7 @@ pub fn recent_events<'a>(
     n: usize,
 ) -> Vec<RecentEvent> {
     let mut v: Vec<&Event> = events.into_iter().collect();
-    v.sort_by(|a, b| b.ts.cmp(&a.ts));
+    v.sort_by_key(|e| std::cmp::Reverse(e.ts)); // newest first
     v.into_iter()
         .take(n)
         .map(|e| RecentEvent {
