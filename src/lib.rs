@@ -13,5 +13,6 @@ pub mod ingest;
 pub mod model;
 pub mod normalize;
 pub mod pricing;
+pub mod server;
 pub mod store;
 pub mod summary;

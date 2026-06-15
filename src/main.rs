@@ -1,10 +1,12 @@
 //! Axon — local, harness-agnostic observability for AI coding agents.
 //!
-//! Thin CLI over the `axon` library. M1 implements `--scan-only`: parse Claude Code logs
-//! (main threads + sub-agents) → normalize → SQLite → print a JSON summary. The live server
-//! and three.js dashboard arrive in M3/M4 (see DESIGN.md §14).
+//! Thin CLI over the `axon` library.
+//! - `axon --scan-only` — parse Claude logs → SQLite → print a JSON summary, then exit.
+//! - `axon` — same scan, then print a short CLI summary, open the browser, and serve the
+//!   local dashboard (M3-lite: analytics only; the live 3D brain lands in M4).
 
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
@@ -12,8 +14,9 @@ use clap::Parser;
 use axon::ingest;
 use axon::normalize;
 use axon::pricing::Pricing;
+use axon::server;
 use axon::store::Store;
-use axon::summary::build_summary;
+use axon::summary::{build_summary, Summary};
 
 /// Axon — see DESIGN.md for the full build spec.
 #[derive(Parser, Debug)]
@@ -36,30 +39,47 @@ struct Cli {
     otel: Option<String>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-
     if cli.scan_only {
         return run_scan_only();
     }
+    run_server(&cli).await
+}
 
-    eprintln!(
-        "axon {}: the live dashboard (server + 3D brain) lands in M3/M4.\n\
-         Available now: `axon --scan-only` — Claude ingest -> SQLite -> JSON summary.\n\
-         flags: port={} no_open={} otel={:?}",
-        env!("CARGO_PKG_VERSION"),
-        cli.port,
-        cli.no_open,
-        cli.otel
-    );
+/// `--scan-only`: print the JSON summary on stdout and exit.
+fn run_scan_only() -> anyhow::Result<()> {
+    let summary = scan_to_summary()?;
+    println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
 }
 
-/// M1 entry point: scan `~/.claude/projects`, store events, print the JSON summary on stdout.
-fn run_scan_only() -> anyhow::Result<()> {
+/// Bare `axon`: scan, print a CLI summary, open the browser, and serve the dashboard.
+async fn run_server(cli: &Cli) -> anyhow::Result<()> {
+    let summary = scan_to_summary()?;
+    print_cli_summary(&summary, cli.port);
+
+    if let Some(otel) = &cli.otel {
+        eprintln!("axon: --otel {otel} ignored (OTEL export is M6; needs --features otel)");
+    }
+
+    let url = format!("http://127.0.0.1:{}", cli.port);
+    if !cli.no_open {
+        if let Err(e) = webbrowser::open(&url) {
+            eprintln!("axon: couldn't open a browser ({e}); open {url} yourself");
+        }
+    }
+    println!("  serving {url} — press Ctrl-C to stop\n");
+
+    let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
+    server::serve(addr, Arc::new(server::AppState { summary })).await
+}
+
+/// Scan `~/.claude/projects`, normalize, persist to SQLite, and aggregate.
+fn scan_to_summary() -> anyhow::Result<Summary> {
     let pricing = load_pricing();
-    let projects = claude_projects_dir();
-    let turns = ingest::scan_claude_root(&projects);
+    let turns = ingest::scan_claude_root(&claude_projects_dir());
 
     let mut events = Vec::with_capacity(turns.len());
     let mut skipped = 0usize;
@@ -79,11 +99,61 @@ fn run_scan_only() -> anyhow::Result<()> {
     let db = db_path();
     let mut store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
     store.upsert_all(&events)?;
+    Ok(build_summary(&store.all_events()?))
+}
 
-    let all = store.all_events()?;
-    let summary = build_summary(&all);
-    println!("{}", serde_json::to_string_pretty(&summary)?);
-    Ok(())
+fn print_cli_summary(s: &Summary, port: u16) {
+    let top_agents: Vec<&str> = s
+        .by_agent
+        .iter()
+        .take(4)
+        .map(|a| a.agent.as_str())
+        .collect();
+    println!("\n  Axon — local AI-agent observability\n");
+    println!(
+        "  Events        {} across {} sessions",
+        commafy(s.events),
+        commafy(s.sessions)
+    );
+    println!(
+        "  Tokens out    {}  (in {}, cache-read {})",
+        commafy(s.tokens_out),
+        commafy(s.tokens_in),
+        commafy(s.cache_read)
+    );
+    println!(
+        "  Lines edited  {} added / {} removed",
+        commafy(s.loc_added),
+        commafy(s.loc_removed)
+    );
+    println!(
+        "  Cost          €{:.2}  (all logged history, EUR)",
+        s.cost_eur
+    );
+    if !top_agents.is_empty() {
+        println!("  Top agents    {}", top_agents.join(", "));
+    }
+    if !s.unpriced_models.is_empty() {
+        println!(
+            "  Unpriced      {}  (cost is a floor, not exact)",
+            s.unpriced_models.join(", ")
+        );
+    }
+    println!("  Dashboard →   http://127.0.0.1:{port}");
+}
+
+/// Group a number into thousands with commas (35929 → "35,929").
+fn commafy(n: u64) -> String {
+    let s = n.to_string();
+    let len = s.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Load `~/.config/axon/pricing.toml` if present, else the bundled defaults.
@@ -101,28 +171,26 @@ fn load_pricing() -> Pricing {
     Pricing::bundled()
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
+fn home() -> std::path::PathBuf {
+    std::env::var_os("HOME").map(Into::into).unwrap_or_default()
 }
 
-fn config_dir() -> PathBuf {
+fn config_dir() -> std::path::PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
+        .map(Into::into)
         .unwrap_or_else(|| home().join(".config"))
 }
 
-fn data_dir() -> PathBuf {
+fn data_dir() -> std::path::PathBuf {
     std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
+        .map(Into::into)
         .unwrap_or_else(|| home().join(".local").join("share"))
 }
 
-fn claude_projects_dir() -> PathBuf {
+fn claude_projects_dir() -> std::path::PathBuf {
     home().join(".claude").join("projects")
 }
 
-fn db_path() -> PathBuf {
+fn db_path() -> std::path::PathBuf {
     data_dir().join("axon").join("axon.db")
 }

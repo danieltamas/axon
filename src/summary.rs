@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::model::Event;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ModelStat {
     pub model: String,
     pub events: u64,
@@ -19,7 +19,7 @@ pub struct ModelStat {
     pub unpriced: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AgentStat {
     pub agent: String,
     pub is_subagent: bool,
@@ -29,7 +29,7 @@ pub struct AgentStat {
     pub cost_eur: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Summary {
     pub events: u64,
     pub sessions: u64,
