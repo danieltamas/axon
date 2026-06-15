@@ -1,0 +1,68 @@
+name: release
+
+# Build self-contained binaries on real runners and attach them to the GitHub Release
+# for the pushed tag. (Future versions should rely on this instead of committing binaries.)
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: axon-macos
+            universal: true
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: axon-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: axon-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build macOS universal binary
+        if: matrix.universal
+        run: |
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          lipo -create -output "${{ matrix.artifact }}" \
+            target/x86_64-apple-darwin/release/axon \
+            target/aarch64-apple-darwin/release/axon
+
+      - name: Build Linux binary
+        if: ${{ !matrix.universal }}
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/axon" "${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum axon-* > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
