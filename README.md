@@ -56,20 +56,25 @@ top — the gap nobody fills.
 
 ## Install
 
-> Pre-built binaries, the `curl` installer, and the Homebrew tap land with the **first tagged
-> release**. Until then, build from source.
+Prebuilt, self-contained binaries live in [`bin/`](./bin/) — no toolchain needed, nothing to
+configure. Download one, make it executable, run it:
 
 ```bash
-# From source (needs a Rust toolchain — https://rustup.rs)
-git clone https://github.com/danieltamas/axon
-cd axon
-cargo build --release        # -> target/release/axon
+# macOS (universal — Apple Silicon + Intel)
+curl -fsSLO https://github.com/danieltamas/axon/raw/main/bin/axon-macos
+chmod +x axon-macos
+xattr -d com.apple.quarantine axon-macos 2>/dev/null   # unsigned: clear Gatekeeper quarantine
+./axon-macos                                            # scans your logs, opens the dashboard
 
-# Planned for the first release:
-# cargo install axon
-# brew install danieltamas/tap/axon
-# curl -fsSL https://github.com/danieltamas/axon/releases/latest/download/install.sh | sh
+# Linux (x86_64 — use axon-linux-arm64 on ARM: Graviton, Pi, Asahi)
+curl -fsSLO https://github.com/danieltamas/axon/raw/main/bin/axon-linux-x64
+chmod +x axon-linux-x64
+./axon-linux-x64
 ```
+
+Checksums: [`bin/SHA256SUMS`](./bin/SHA256SUMS). Or build from source (needs
+[Rust](https://rustup.rs)): `cargo build --release` → `target/release/axon`. The `cargo install`
+/ Homebrew / `curl | sh` paths come with the first tagged GitHub release.
 
 ## Usage
 
