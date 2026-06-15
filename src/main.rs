@@ -137,8 +137,10 @@ fn scan_to_summary() -> anyhow::Result<Summary> {
     let cfg = Config::load(&config_dir().join("axon").join("config.toml"));
     summary.budget_day_eur = cfg.budget_eur_per_day;
     summary.budget_week_eur = cfg.budget_eur_per_week;
+    summary.budget_month_eur = cfg.budget_eur_per_month;
     summary.today_cost_eur = windowed_cost(&all, local_day_start_ms());
     summary.week_cost_eur = windowed_cost(&all, local_week_start_ms());
+    summary.month_cost_eur = windowed_cost(&all, local_month_start_ms());
     Ok(summary)
 }
 
@@ -152,6 +154,12 @@ fn local_week_start_ms() -> i64 {
     let today = chrono::Local::now().date_naive();
     let back = today.weekday().num_days_from_monday() as u64;
     day_start_ms(today - chrono::Days::new(back))
+}
+
+/// Epoch-ms of local midnight on the 1st of the current month.
+fn local_month_start_ms() -> i64 {
+    let today = chrono::Local::now().date_naive();
+    day_start_ms(today.with_day(1).unwrap_or(today))
 }
 
 fn day_start_ms(date: chrono::NaiveDate) -> i64 {

@@ -11,6 +11,8 @@ pub struct Config {
     pub budget_eur_per_day: Option<f64>,
     /// Soft spend cap per local week (Mon–Sun). `None` = no cap.
     pub budget_eur_per_week: Option<f64>,
+    /// Soft spend cap per local calendar month. `None` = no cap.
+    pub budget_eur_per_month: Option<f64>,
 }
 
 impl Config {

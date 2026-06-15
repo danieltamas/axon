@@ -6,3 +6,4 @@
 # Omit a line for "no cap" (spend is still shown, just without a meter).
 budget_eur_per_day = 20.0
 budget_eur_per_week = 100.0
+budget_eur_per_month = 400.0
