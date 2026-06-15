@@ -2,9 +2,15 @@
 name = "axon"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.74"
 description = "Local, harness-agnostic observability for AI coding agents — one binary, in your browser."
 license = "MIT"
-repository = "" # TODO
+repository = "https://github.com/danieltamas/axon"
+homepage = "https://github.com/danieltamas/axon"
+readme = "README.md"
+authors = ["Daniel Tamas <hello@danieltamas.ro>"]
+keywords = ["observability", "ai", "llm", "cost", "claude"]
+categories = ["command-line-utilities", "development-tools"]
 
 # Versions are indicative — run `cargo update` and pin during M1.
 [dependencies]
@@ -23,6 +29,7 @@ webbrowser = "1"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] } # ISO-8601 → epoch ms
 blake3 = "1"                                        # idempotent Event ids (hash of message.id etc.)
+toml = "0.8"                                        # parse pricing.toml (rates per model)
 
 # Optional OTEL export. HTTP+rustls ONLY (never gRPC — keeps static musl builds clean). Off by default.
 opentelemetry = { version = "0.24", optional = true }
