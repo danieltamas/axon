@@ -70,9 +70,10 @@ pub struct Summary {
     pub budget_month_eur: Option<f64>,
 }
 
-pub fn build_summary(events: &[Event]) -> Summary {
+/// Aggregate any set of events (a slice, or a filtered iterator for a time range).
+pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary {
     let mut s = Summary {
-        events: events.len() as u64,
+        events: 0,
         sessions: 0,
         tokens_in: 0,
         tokens_out: 0,
@@ -103,6 +104,7 @@ pub fn build_summary(events: &[Event]) -> Summary {
     let mut unattributed_out: u64 = 0;
 
     for e in events {
+        s.events += 1;
         s.tokens_in += e.tokens_in;
         s.tokens_out += e.tokens_out;
         s.cache_read += e.cache_read;

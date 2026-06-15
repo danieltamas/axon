@@ -25,6 +25,13 @@ html,body{margin:0;padding:0;background:#05080a;}
 @keyframes axCardIn{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:translateX(0);}}
 @keyframes axStreamIn{from{opacity:0;transform:translateX(-10px);background:rgba(var(--axr,52,211,153),0.12);}to{opacity:1;transform:translateX(0);background:transparent;}}
 @keyframes axSpark{from{stroke-dashoffset:240;}to{stroke-dashoffset:0;}}
+@keyframes axSheen{0%{transform:translateX(-120%);}100%{transform:translateX(240%);}}
+.sheen{position:relative; overflow:hidden;}
+.sheen::after{content:""; position:absolute; top:0; bottom:0; left:0; width:38%; background:linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent); animation:axSheen 2.2s linear infinite;}
+.rbtn{background:transparent; border:none; border-right:1px solid rgba(var(--axr,52,211,153),0.12); color:#5d7268; font-family:var(--mono); font-size:10.5px; letter-spacing:0.12em; padding:5px 10px; cursor:pointer; transition:color .15s, background .15s;}
+.rbtn:last-child{border-right:none;}
+.rbtn:hover{color:#a7c2b4;}
+.rbtn.ractive{background:rgba(var(--axr,52,211,153),0.16); color:#eafff4;}
 .axrow:hover{background:rgba(var(--axr,52,211,153),0.06) !important;}
 .axbtn{cursor:pointer;transition:background .15s;}
 .axbtn:hover{background:rgba(var(--axr,52,211,153),0.14) !important;}
@@ -59,6 +66,12 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-family:var(--mono);">
         <span id="chips" style="display:flex; gap:8px; flex-wrap:wrap;"></span>
+        <span id="rangeSel" style="display:flex; border:1px solid rgba(var(--axr,52,211,153),0.18); border-radius:7px; overflow:hidden;">
+          <button class="rbtn" data-range="today">TODAY</button>
+          <button class="rbtn" data-range="7d">7D</button>
+          <button class="rbtn" data-range="30d">30D</button>
+          <button class="rbtn ractive" data-range="all">ALL</button>
+        </span>
         <span style="padding:5px 11px; border:1px solid rgba(var(--axr,52,211,153),0.12); border-radius:7px; font-size:10.5px; letter-spacing:0.13em; color:#5d7268;">127.0.0.1&nbsp;·&nbsp;0&nbsp;EGRESS</span>
         <span style="display:flex; align-items:center; gap:8px; padding:5px 11px; font-size:12px; letter-spacing:0.12em; color:#a7c2b4;"><span style="width:7px; height:7px; border-radius:50%; background:var(--ax2,#6ee7b7); box-shadow:0 0 10px var(--ax,#34d399); animation:axBlink 1.5s infinite;"></span><span id="hdrEvents">0</span> EVENTS</span>
       </div>
@@ -150,7 +163,7 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
         </div>
       </div>
       <div id="rtkLine" style="font-family:var(--mono); font-size:13px; color:#7c8b80;"></div>
-      <div style="margin-top:16px; height:8px; border-radius:6px; background:rgba(var(--axr,52,211,153),0.08); overflow:hidden;"><div id="rtkBar" style="height:100%; width:0%; border-radius:6px; background:linear-gradient(90deg,#1f9f78,var(--ax2,#6ee7b7)); box-shadow:0 0 16px rgba(var(--axr,52,211,153),0.6); transition:width 1.2s cubic-bezier(.2,.8,.2,1);"></div></div>
+      <div style="margin-top:16px; height:8px; border-radius:6px; background:rgba(var(--axr,52,211,153),0.08); overflow:hidden;"><div id="rtkBar" class="sheen" style="height:100%; width:0%; border-radius:6px; background:linear-gradient(90deg,#1f9f78,var(--ax2,#6ee7b7)); box-shadow:0 0 16px rgba(var(--axr,52,211,153),0.6); transition:width 1.2s cubic-bezier(.2,.8,.2,1);"></div></div>
     </div>
 
     <div style="margin-bottom:30px;">
@@ -249,6 +262,12 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const fmtInt = n => Math.round(n).toLocaleString('en-US');
 const fmtCompact = n => { n = Math.round(n); if (n >= 1e9) return (n/1e9).toFixed(1)+'B'; if (n >= 1e6) return (n/1e6).toFixed(1)+'M'; if (n >= 1e3) return (n/1e3).toFixed(1)+'K'; return ''+n; };
 const fmtEur = n => '€' + Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const pctFmt = v => v.toFixed(1) + '%';
+// Smooth number tweening: each registered element eases toward its target every frame.
+// New elements start at 0 (count-up intro); thereafter they glide between values.
+const tweens = new Map();
+function tnum(el, target, fmt){ if(!el) return; const t = tweens.get(el); if(!t) tweens.set(el, {cur:0, tgt:target, fmt}); else { t.tgt=target; t.fmt=fmt; } }
+function stepTweens(){ tweens.forEach((t,el)=>{ if(!el.isConnected){ tweens.delete(el); return; } const d=t.tgt-t.cur; if(Math.abs(d) < Math.max(0.5, Math.abs(t.tgt)*1e-4)) t.cur=t.tgt; else t.cur+=d*0.16; el.textContent=t.fmt(t.cur); }); }
 
 // ---- fixed accent (the design's phosphor green) ----
 const ACCENT = '#34d399';
@@ -265,7 +284,7 @@ const AX = {
   A: computeAcc(ACCENT),
   intensity: 7,
   agentsData: [], modelsData: [], total: 0,
-  data: null, started: false, sig: '',
+  data: null, started: false, sig: '', range: 'all',
   mouse: { on:false }, ripples: [], waveOff: 0,
   yaw:-0.4, pitch:0.18, yawOff:0, tPitch:0.18, tYawOff:0,
   focusId:null, pinned:false, hoverId:null, drag:null, _lastFocusId:undefined, _downX:0, _downY:0, _dragMoved:false,
@@ -317,10 +336,13 @@ const AX = {
     const dpr = Math.min(window.devicePixelRatio||1, 2);
     if (c.width !== Math.round(c.clientWidth*dpr)){ c.width=c.clientWidth*dpr; c.height=c.clientHeight*dpr; c.getContext('2d').setTransform(dpr,0,0,dpr,0,0); }
     const ctx = c.getContext('2d'), w=c.clientWidth, h=c.clientHeight, A=this.A;
-    ctx.clearRect(0,0,w,h); this.waveOff += 1.7; const mid = h*0.56;
+    // Energy is driven by real activity: surges when events arrive (see setData), calms when idle.
+    const energy = 0.35 + Math.min(2.2, this.pulse||0);
+    this.pulse = (this.pulse||0) * 0.95;
+    ctx.clearRect(0,0,w,h); this.waveOff += 1.6 * (1 + (this.pulse||0)*0.7); const mid = h*0.56;
     ctx.beginPath();
-    for(let x=0;x<=w;x+=2){ const t=(x+this.waveOff)*0.02; const base=Math.sin(t)*3+Math.sin(t*2.3)*1.5; const spike=Math.pow(Math.max(0,Math.sin(t*0.37)),24)*21+Math.pow(Math.max(0,Math.sin(t*0.37+2.1)),42)*14; const y=mid-base-spike; if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
-    ctx.strokeStyle='rgba('+A.rgb+',0.72)'; ctx.lineWidth=1.4; ctx.shadowColor='rgba('+A.rgb+',0.6)'; ctx.shadowBlur=6; ctx.stroke(); ctx.shadowBlur=0;
+    for(let x=0;x<=w;x+=2){ const t=(x+this.waveOff)*0.02; const base=(Math.sin(t)*3+Math.sin(t*2.3)*1.5)*energy; const spike=(Math.pow(Math.max(0,Math.sin(t*0.37)),24)*21+Math.pow(Math.max(0,Math.sin(t*0.37+2.1)),42)*14)*Math.min(2.4,energy); const y=mid-base-spike; if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
+    ctx.strokeStyle='rgba('+A.rgb+','+(0.5+0.3*Math.min(1,energy/2.4))+')'; ctx.lineWidth=1.4; ctx.shadowColor='rgba('+A.rgb+',0.6)'; ctx.shadowBlur=4+7*Math.min(1,(this.pulse||0)); ctx.stroke(); ctx.shadowBlur=0;
   },
 
   drawBrain(now){
@@ -361,72 +383,92 @@ const AX = {
     this.nodes.forEach(n=>{ const show=n.kind!=='agent'||n.id===this.focusId; if(!show) return; ctx.globalAlpha=Math.max(0.2,n.lit); ctx.fillStyle='hsla('+Math.round((A.h+(n.hueOff||0)+360)%360)+',72%,82%,'+(n.kind==='core'?0.95:0.85)+')'; ctx.fillText(n.label.toUpperCase(), n.sx, n.sy+n.r*n.sc*1.5+13); ctx.globalAlpha=1; });
   },
 
-  loop(now){ requestAnimationFrame(t=>this.loop(t)); try{ this.drawWave(); this.drawBrain(now); }catch(err){ if(!this._logged){ console.error('AXON loop error:', err); this._logged=true; } } },
+  loop(now){ requestAnimationFrame(t=>this.loop(t)); try{ stepTweens(); this.drawWave(); this.drawBrain(now); }catch(err){ if(!this._logged){ console.error('AXON loop error:', err); this._logged=true; } } },
 
   // ---- live feed (decorative pulses synthesized from real agents) ----
   feedActions:['Edit','Read','Write','Bash','Grep','Glob','Task'],
   feedPaths:['src/ingest/claude.rs','src/store.rs','ui/dist/index.html','src/main.rs','tests/m2_fixtures.rs','assets/pricing.toml','DESIGN.md','src/normalize.rs','src/server.rs','Cargo.toml'],
   genFeed(){ const ag=this.agentsData; if(!ag.length) return null; const w=ag.map(a=>Math.sqrt(a[1]||1)); const sum=w.reduce((p,x)=>p+x,0); let r=Math.random()*sum, idx=0; for(let i=0;i<w.length;i++){ r-=w[i]; if(r<=0){ idx=i; break; } } const a=ag[idx]; const d=new Date(); return { time:d.toTimeString().slice(0,8), agent:a[0], color:this.agentColor(a[2]), action:this.feedActions[Math.floor(Math.random()*this.feedActions.length)], path:this.feedPaths[Math.floor(Math.random()*this.feedPaths.length)], tok:'+'+fmtCompact(40+Math.random()*4200) }; },
-  renderFeed(){ const el=$('feed'); const rows=[]; for(let i=0;i<6;i++){ const s=this.genFeed(); if(!s) break; rows.push('<div style="display:grid; grid-template-columns:88px 150px 1fr 92px; gap:14px; align-items:center; padding:7px 8px; border-radius:7px; font-family:var(--mono); font-size:12.5px; animation:axStreamIn .5s ease;"><span style="color:#46564e;">'+s.time+'</span><span style="display:flex; align-items:center; gap:7px; color:#cfe3d8;"><span style="width:6px; height:6px; border-radius:50%; background:'+s.color+'; box-shadow:0 0 7px '+s.color+';"></span>'+esc(s.agent)+'</span><span style="color:#7c8b80; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><span style="color:#9fb8ab;">'+s.action+'</span> '+s.path+'</span><span style="color:var(--ax2,#6ee7b7); text-align:right;">'+s.tok+'</span></div>'); } el.innerHTML=rows.join(''); },
+  feedRowEl(s, animate){ const d=document.createElement('div'); d.style.cssText='display:grid; grid-template-columns:88px 150px 1fr 92px; gap:14px; align-items:center; padding:7px 8px; border-radius:7px; font-family:var(--mono); font-size:12.5px;'+(animate?' animation:axStreamIn .5s ease;':''); d.innerHTML='<span style="color:#46564e;">'+s.time+'</span><span style="display:flex; align-items:center; gap:7px; color:#cfe3d8;"><span style="width:6px; height:6px; border-radius:50%; background:'+s.color+'; box-shadow:0 0 7px '+s.color+';"></span>'+esc(s.agent)+'</span><span style="color:#7c8b80; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><span style="color:#9fb8ab;">'+s.action+'</span> '+s.path+'</span><span style="color:var(--ax2,#6ee7b7); text-align:right;">'+s.tok+'</span>'; return d; },
+  seedFeed(){ const el=$('feed'); if(!el) return; el.innerHTML=''; for(let i=0;i<6;i++){ const s=this.genFeed(); if(s) el.appendChild(this.feedRowEl(s, false)); } },
+  pushFeed(){ const el=$('feed'); if(!el) return; const s=this.genFeed(); if(!s) return; el.insertBefore(this.feedRowEl(s, true), el.firstChild); while(el.children.length>6) el.removeChild(el.lastChild); },
 
-  paint(animT){
+  gate(k, sig, fn){ this._sig = this._sig || {}; if (this._sig[k] !== sig){ this._sig[k] = sig; fn(); } },
+
+  buildRows(containerId, rows, max){
+    const el = $(containerId), map = new Map();
+    el.innerHTML = rows.map(r=>{ const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1);
+      return '<div class="axrow" data-name="'+esc(r[0])+'" style="display:grid; grid-template-columns:minmax(160px,1.5fr) 120px 130px minmax(170px,1.3fr); gap:24px; align-items:center; padding:14px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.05); transition:background .15s;"><div style="font-family:var(--mono); font-size:14px; color:#cfe3d8;">'+esc(r[0])+'</div><div class="cTok" style="font-family:var(--mono); font-size:14px; color:#8aa99a; text-align:right;">—</div><div class="cCost" style="font-family:var(--mono); font-size:14px; color:var(--ax2,#6ee7b7); text-align:right;">—</div><div style="position:relative; height:2px; background:rgba(var(--axr,52,211,153),0.08);"><div class="cFill" style="position:absolute; left:0; top:0; height:100%; width:'+pct+'%; background:linear-gradient(90deg, rgba(var(--axr,52,211,153),0.12), var(--ax,#34d399)); transition:width .8s cubic-bezier(.2,.8,.2,1);"></div><div class="cNode" style="position:absolute; left:'+pct+'%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--ax2,#6ee7b7); box-shadow:0 0 11px 2px rgba(var(--axr,52,211,153),0.8); transition:left .8s cubic-bezier(.2,.8,.2,1);"></div></div></div>';
+    }).join('');
+    el.querySelectorAll('.axrow').forEach(row=>map.set(row.getAttribute('data-name'), {tok:row.querySelector('.cTok'), cost:row.querySelector('.cCost'), fill:row.querySelector('.cFill'), node:row.querySelector('.cNode')}));
+    return map;
+  },
+  updateRows(map, rows, max){ rows.forEach(r=>{ const e=map.get(r[0]); if(!e) return; tnum(e.tok, r[1], fmtCompact); tnum(e.cost, r[2], fmtEur); const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1)+'%'; e.fill.style.width=pct; e.node.style.left=pct; }); },
+
+  updateBudget(s){
+    const rows = [['DAILY', s.today_cost_eur, s.budget_day_eur],['WEEKLY', s.week_cost_eur, s.budget_week_eur],['MONTHLY', s.month_cost_eur, s.budget_month_eur]];
+    this.gate('budgetStruct', rows.map(r=>r[0]+':'+(r[2]!=null)).join('|'), ()=>{
+      $('budgetRows').innerHTML = rows.map((r,i)=>'<div data-bi="'+i+'" style="display:grid; grid-template-columns:120px 1fr 170px 90px; gap:20px; align-items:center; padding:16px 0; border-bottom:1px solid rgba(var(--axr,52,211,153),0.06);"><div style="font-family:var(--mono); font-size:14px; color:#cfe3d8;">'+r[0]+'</div><div style="height:8px; border-radius:5px; background:rgba(var(--axr,52,211,153),0.08); overflow:hidden;"><div class="bFill" style="height:100%; width:0%; border-radius:5px; transition:width 1s cubic-bezier(.2,.8,.2,1);"></div></div><div class="bVal" style="font-family:var(--mono); font-size:13px; color:#9fb8ab; text-align:right;">—</div><div class="bBadge" style="justify-self:end; font-family:var(--mono); font-size:10px; letter-spacing:0.12em; padding:4px 10px; border-radius:6px;"></div></div>').join('');
+      this.budgetEls = [...$('budgetRows').querySelectorAll('[data-bi]')].map(el=>({fill:el.querySelector('.bFill'), val:el.querySelector('.bVal'), badge:el.querySelector('.bBadge')}));
+    });
+    if(!this.budgetEls) return;
+    rows.forEach((r,i)=>{ const e=this.budgetEls[i]; if(!e) return; const spent=r[1], cap=r[2];
+      if(cap){ const p=100*spent/cap, over=spent>cap, near=p>=80; const col=over?'linear-gradient(90deg,#a32638,#e4495f)':near?'linear-gradient(90deg,#b8862f,#f5b13d)':'linear-gradient(90deg,#1f9f78,var(--ax2,#6ee7b7))'; const bc=over?'#e4495f':near?'#f5b13d':'var(--ax,#34d399)'; e.fill.style.width=Math.min(100,p)+'%'; e.fill.style.background=col; e.fill.style.opacity='1'; tnum(e.val, spent, v=>fmtEur(v)+' / '+fmtEur(cap)); e.badge.textContent=over?'OVER':near?'WARN':'OK'; e.badge.style.color=bc; e.badge.style.border='1px solid '+bc; }
+      else { e.fill.style.width='0%'; e.fill.style.opacity='0.3'; tnum(e.val, spent, v=>fmtEur(v)+' / no cap'); e.badge.textContent='—'; e.badge.style.color='#46564e'; e.badge.style.border='none'; }
+    });
+  },
+
+  setData(){
     const s = this.data; if (!s) return;
-    const t = animT==null?1:animT;
-    $('kEvents').textContent = fmtInt(s.events*t);
-    $('kSessions').textContent = fmtInt(s.sessions*t);
-    $('kTokensIn').textContent = fmtCompact(s.tokens_in*t);
-    $('kTokensOut').textContent = fmtCompact(s.tokens_out*t);
-    $('kLines').textContent = fmtInt(s.loc_added*t);
-    $('kCost').textContent = fmtEur(s.cost_eur*t);
-    $('hdrEvents').textContent = fmtInt(s.events);
+    // drive the header wave from real activity: each new event injects energy
+    if (this._prevEvents != null && s.events > this._prevEvents) this.pulse = Math.min(2.2, (this.pulse||0) + Math.min(1.4, (s.events - this._prevEvents) * 0.3));
+    this._prevEvents = s.events;
+    // tweened scalars — glide between values every frame, no snapping
+    tnum($('kEvents'), s.events, fmtInt); tnum($('hdrEvents'), s.events, fmtInt);
+    tnum($('kSessions'), s.sessions, fmtInt);
+    tnum($('kTokensIn'), s.tokens_in, fmtCompact); tnum($('kTokensOut'), s.tokens_out, fmtCompact);
+    tnum($('kLines'), s.loc_added, fmtInt);
+    tnum($('kCost'), s.cost_eur, fmtEur);
+    tnum($('costTotal'), s.cost_eur, v=>fmtEur(v)+' total');
 
-    // tables
-    const maxA = Math.max(1, ...this.agentsData.map(a=>a[2]||0));
-    const maxM = Math.max(1, ...this.modelsData.map(m=>m[2]||0));
-    const rowHtml = (name, tok, cost, pct) => '<div class="axrow" data-name="'+esc(name)+'" style="display:grid; grid-template-columns:minmax(160px,1.5fr) 120px 130px minmax(170px,1.3fr); gap:24px; align-items:center; padding:14px 22px; border-bottom:1px solid rgba(var(--axr,52,211,153),0.05); transition:background .15s;"><div style="font-family:var(--mono); font-size:14px; color:#cfe3d8;">'+esc(name)+'</div><div style="font-family:var(--mono); font-size:14px; color:#8aa99a; text-align:right;">'+tok+'</div><div style="font-family:var(--mono); font-size:14px; color:var(--ax2,#6ee7b7); text-align:right;">'+cost+'</div><div style="position:relative; height:2px; background:rgba(var(--axr,52,211,153),0.08);"><div style="position:absolute; left:0; top:0; height:100%; width:'+pct+'%; background:linear-gradient(90deg, rgba(var(--axr,52,211,153),0.12), var(--ax,#34d399));"></div><div style="position:absolute; left:'+pct+'%; top:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--ax2,#6ee7b7); box-shadow:0 0 11px 2px rgba(var(--axr,52,211,153),0.8);"></div></div></div>';
-    $('agentRows').innerHTML = this.agentsData.slice(0,14).map(a=>rowHtml(a[0], fmtCompact(a[1]), fmtEur(a[2]), (Math.max(0.04, Math.pow((a[2]||0)/maxA,0.4))*100).toFixed(1))).join('');
-    $('modelRows').innerHTML = this.modelsData.slice(0,14).map(m=>rowHtml(m[0], fmtCompact(m[1]), fmtEur(m[2]), (Math.max(0.05, Math.pow((m[2]||0)/maxM,0.4))*100).toFixed(1))).join('');
-    $('agentCount').textContent = '· ' + this.agentsData.length;
-    $('modelCount').textContent = '· ' + this.modelsData.length;
+    // tables — rebuild only when the row SET changes; otherwise update cells/bars in place
+    const aTop=this.agentsData.slice(0,14), mTop=this.modelsData.slice(0,14);
+    const aMax=Math.max(1,...this.agentsData.map(a=>a[2]||0)), mMax=Math.max(1,...this.modelsData.map(m=>m[2]||0));
+    this.gate('aRows', aTop.map(a=>a[0]).join('|'), ()=>{ this.agentMap=this.buildRows('agentRows', aTop, aMax); $('agentCount').textContent='· '+this.agentsData.length; });
+    this.gate('mRows', mTop.map(m=>m[0]).join('|'), ()=>{ this.modelMap=this.buildRows('modelRows', mTop, mMax); $('modelCount').textContent='· '+this.modelsData.length; });
+    if(this.agentMap) this.updateRows(this.agentMap, aTop, aMax);
+    if(this.modelMap) this.updateRows(this.modelMap, mTop, mMax);
 
-    // cost attribution by harness
+    this.gate('chips', (s.by_harness||[]).map(h=>h.harness).join('|'), ()=>this.updateChips());
+
+    // cost attribution by harness — segments rebuilt on set change, widths/values updated live
+    const harn = s.by_harness||[];
     const HCOL = {'claude-code':'rgb('+this.A.lighter+')','codex':'#4fd6e6','opencode':'#f5b13d'};
     const hcol = (n,i)=> HCOL[n] || ['rgb('+this.A.rgb+')','rgb('+this.A.dark+')','#b78bff'][i%3];
-    const harn = s.by_harness||[];
-    $('costTotal').textContent = fmtEur(s.cost_eur) + ' total';
-    $('costBar').innerHTML = harn.map((hh,i)=>'<div style="width:'+(s.cost_eur?Math.max(1,100*hh.cost_eur/s.cost_eur):0)+'%; background:'+hcol(hh.harness,i)+'; transform-origin:left; animation:axGrowX 1.1s cubic-bezier(.2,.8,.2,1) forwards;" title="'+esc(hh.harness)+'"></div>').join('');
-    $('costLegend').innerHTML = harn.map((hh,i)=>'<div style="display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px;"><span style="width:9px; height:9px; border-radius:2px; background:'+hcol(hh.harness,i)+';"></span><span style="color:#cfe3d8;">'+esc(hh.harness)+'</span><span style="color:#5d7268;">'+fmtEur(hh.cost_eur)+'</span></div>').join('');
+    this.gate('costStruct', harn.map(h=>h.harness).join('|'), ()=>{
+      $('costBar').innerHTML = harn.map((h,i)=>'<div style="width:0%; background:'+hcol(h.harness,i)+'; transition:width 1s cubic-bezier(.2,.8,.2,1);" title="'+esc(h.harness)+'"></div>').join('');
+      $('costLegend').innerHTML = harn.map((h,i)=>'<div style="display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px;"><span style="width:9px; height:9px; border-radius:2px; background:'+hcol(h.harness,i)+';"></span><span style="color:#cfe3d8;">'+esc(h.harness)+'</span><span class="cleg" style="color:#5d7268;">—</span></div>').join('');
+    });
+    harn.forEach((h,i)=>{ const seg=$('costBar').children[i]; if(seg) seg.style.width=(s.cost_eur?Math.max(1,100*h.cost_eur/s.cost_eur):0)+'%'; const row=$('costLegend').children[i]; if(row){ const lg=row.querySelector('.cleg'); if(lg) tnum(lg, h.cost_eur, fmtEur); } });
 
-    // rtk
-    if (s.rtk){ const r=s.rtk, pct=r.saved_pct.toFixed(1); $('rtkSaved').textContent=fmtCompact(r.tokens_saved); $('rtkEff').textContent=pct+'%'; $('brainEff').textContent=pct+'%'; $('effRing').style.strokeDashoffset=(188.5*(1-r.saved_pct/100)).toFixed(1); $('rtkLine').textContent=pct+'% reduction · '+fmtInt(r.commands)+' commands proxied · '+fmtCompact(r.input_tokens)+' → '+fmtCompact(r.output_tokens); $('rtkBar').style.width=pct+'%'; }
-    else { $('rtkPanel').style.display='none'; $('brainEff').textContent='n/a'; }
+    if (s.rtk){ const r=s.rtk; tnum($('rtkSaved'), r.tokens_saved, fmtCompact); tnum($('rtkEff'), r.saved_pct, pctFmt); tnum($('brainEff'), r.saved_pct, pctFmt); $('effRing').style.strokeDashoffset=(188.5*(1-r.saved_pct/100)).toFixed(1); $('rtkLine').textContent=r.saved_pct.toFixed(1)+'% reduction · '+fmtInt(r.commands)+' commands proxied · '+fmtCompact(r.input_tokens)+' → '+fmtCompact(r.output_tokens); $('rtkBar').style.width=r.saved_pct.toFixed(1)+'%'; }
+    else this.gate('rtkhide','1',()=>{ $('rtkPanel').style.display='none'; $('brainEff').textContent='n/a'; });
 
-    // unpriced
-    if (s.unpriced_models && s.unpriced_models.length){ $('unpriced').style.display='flex'; $('unpricedList').textContent=s.unpriced_models.join(', '); }
-    else { $('unpriced').style.display='none'; }
+    this.gate('unpriced', (s.unpriced_models||[]).join('|'), ()=>{ if(s.unpriced_models && s.unpriced_models.length){ $('unpriced').style.display='flex'; $('unpricedList').textContent=s.unpriced_models.join(', '); } else $('unpriced').style.display='none'; });
 
-    // brain meta
     $('brainOut').textContent = fmtCompact(s.tokens_out)+' out · '+fmtInt(s.sessions)+' sessions';
 
-    // hall of fame
-    const topAgent = this.agentsData[0], busiestModel = this.modelsData.slice().sort((a,b)=>b[1]-a[1])[0], topHarness = harn[0];
-    const hofCard = (label, name, sub) => '<div style="position:relative; padding:18px; border:1px solid rgba(var(--axr,52,211,153),0.14); border-radius:14px; background:linear-gradient(180deg,rgba(16,28,22,0.65),rgba(8,13,11,0.65)); overflow:hidden;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:0.2em; color:#5d7268;">'+label+'</div><div style="font-family:var(--mono); font-weight:700; font-size:20px; color:#eafff4; margin:15px 0 7px; word-break:break-all;">'+esc(name)+'</div><div style="font-family:var(--mono); font-size:13px; color:var(--ax2,#6ee7b7);">'+sub+'</div></div>';
-    $('hof').innerHTML =
-      hofCard('♛ TOP EARNER', topAgent?topAgent[0]:'—', topAgent?fmtEur(topAgent[2])+' · '+(s.cost_eur?(topAgent[2]/s.cost_eur*100).toFixed(1):0)+'% of spend':'') +
-      hofCard('▲ BUSIEST MODEL', busiestModel?busiestModel[0].replace('claude-',''):'—', busiestModel?fmtCompact(busiestModel[1])+' tokens out':'') +
-      hofCard('❖ MOST EFFICIENT', s.rtk?'RTK proxy':'—', s.rtk?s.rtk.saved_pct.toFixed(1)+'% · '+fmtCompact(s.rtk.tokens_saved)+' saved':'') +
-      hofCard('◈ BUSIEST HARNESS', topHarness?topHarness.harness:'—', topHarness?fmtEur(topHarness.cost_eur)+' · '+fmtInt(topHarness.events)+' events':'');
+    // hall of fame — rebuild only when the standings actually change
+    const topAgent=this.agentsData[0], busiestModel=this.modelsData.slice().sort((a,b)=>b[1]-a[1])[0], topHarness=harn[0];
+    const hofSig=[topAgent&&topAgent[0], topAgent&&Math.round(topAgent[2]), busiestModel&&busiestModel[0], busiestModel&&Math.round(busiestModel[1]/1e5), s.rtk&&Math.round(s.rtk.saved_pct), topHarness&&topHarness.harness, topHarness&&Math.round(topHarness.cost_eur)].join('|');
+    this.gate('hof', hofSig, ()=>{
+      const card=(label,name,sub)=>'<div style="position:relative; padding:18px; border:1px solid rgba(var(--axr,52,211,153),0.14); border-radius:14px; background:linear-gradient(180deg,rgba(16,28,22,0.65),rgba(8,13,11,0.65)); overflow:hidden;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:0.2em; color:#5d7268;">'+label+'</div><div style="font-family:var(--mono); font-weight:700; font-size:20px; color:#eafff4; margin:15px 0 7px; word-break:break-all;">'+esc(name)+'</div><div style="font-family:var(--mono); font-size:13px; color:var(--ax2,#6ee7b7);">'+sub+'</div></div>';
+      $('hof').innerHTML = card('♛ TOP EARNER', topAgent?topAgent[0]:'—', topAgent?fmtEur(topAgent[2])+' · '+(s.cost_eur?(topAgent[2]/s.cost_eur*100).toFixed(1):0)+'% of spend':'') + card('▲ BUSIEST MODEL', busiestModel?busiestModel[0].replace('claude-',''):'—', busiestModel?fmtCompact(busiestModel[1])+' tokens out':'') + card('❖ MOST EFFICIENT', s.rtk?'RTK proxy':'—', s.rtk?s.rtk.saved_pct.toFixed(1)+'% · '+fmtCompact(s.rtk.tokens_saved)+' saved':'') + card('◈ BUSIEST HARNESS', topHarness?topHarness.harness:'—', topHarness?fmtEur(topHarness.cost_eur)+' · '+fmtInt(topHarness.events)+' events':'');
+    });
 
-    // budget
-    const brow = (label, spent, cap) => { let bar, txt, badge;
-      if (cap){ const p=100*spent/cap; const over=spent>cap, near=p>=80; const col=over?'linear-gradient(90deg,#a32638,#e4495f)':near?'linear-gradient(90deg,#b8862f,#f5b13d)':'linear-gradient(90deg,#1f9f78,var(--ax2,#6ee7b7))'; const bc=over?'#e4495f':near?'#f5b13d':'var(--ax,#34d399)'; bar='<div style="height:8px; border-radius:5px; background:rgba(var(--axr,52,211,153),0.08); overflow:hidden;"><div style="height:100%; width:'+Math.min(100,p)+'%; border-radius:5px; background:'+col+'; transform-origin:left; animation:axGrowX 1.2s cubic-bezier(.2,.8,.2,1) forwards;"></div></div>'; txt=fmtEur(spent)+' / '+fmtEur(cap); badge='<div style="justify-self:end; font-family:var(--mono); font-size:10px; letter-spacing:0.12em; color:'+bc+'; padding:4px 10px; border:1px solid '+bc+'; border-radius:6px;">'+(over?'OVER':near?'WARN':'OK')+'</div>'; }
-      else { bar='<div style="height:8px; border-radius:5px; background:rgba(var(--axr,52,211,153),0.06); opacity:0.4;"></div>'; txt=fmtEur(spent)+' / no cap'; badge='<div style="justify-self:end; font-family:var(--mono); font-size:10px; color:#46564e;">—</div>'; }
-      return '<div style="display:grid; grid-template-columns:120px 1fr 170px 90px; gap:20px; align-items:center; padding:16px 0; border-bottom:1px solid rgba(var(--axr,52,211,153),0.06);"><div style="font-family:var(--mono); font-size:14px; color:#cfe3d8;">'+label+'</div>'+bar+'<div style="font-family:var(--mono); font-size:13px; color:#9fb8ab; text-align:right;">'+txt+'</div>'+badge+'</div>'; };
-    $('budgetRows').innerHTML = brow('DAILY', s.today_cost_eur, s.budget_day_eur) + brow('WEEKLY', s.week_cost_eur, s.budget_week_eur) + brow('MONTHLY', s.month_cost_eur, s.budget_month_eur);
+    this.updateBudget(s);
 
-    // share card
-    $('shareSpend').textContent = fmtEur(s.cost_eur);
-    $('shareTokens').textContent = fmtCompact(s.tokens_out);
+    tnum($('shareSpend'), s.cost_eur, fmtEur); tnum($('shareTokens'), s.tokens_out, fmtCompact);
     $('shareSaved').textContent = s.rtk?fmtCompact(s.rtk.tokens_saved):'—';
     $('shareAgent').textContent = topAgent?topAgent[0]:'—';
 
@@ -443,18 +485,13 @@ const AX = {
     this.agentsData = (s.by_agent||[]).map(a=>[a.agent, a.tokens_out, a.cost_eur]);
     this.modelsData = (s.by_model||[]).map(m=>[m.model, m.tokens_out, m.cost_eur]);
     this.total = s.cost_eur;
-    this.updateChips();
     if (!this.started){
       this.brain=$('brain'); this.wave=$('wave'); this.bindBrain();
       this.layout(); this.started=true;
-      requestAnimationFrame(t=>this.loop(t));
-      // count-up once
-      const t0=performance.now(); const dur=1200; const step=()=>{ const k=Math.min(1,(performance.now()-t0)/dur); this.paint(1-Math.pow(1-k,3)); if(k<1) requestAnimationFrame(step); else this.paint(1); }; step();
-      this.renderFeed(); setInterval(()=>this.renderFeed(), 1200);
-    } else {
-      if (!structuralSame) this.layout(); else this.refreshNodes();
-      this.paint(1);
-    }
+      requestAnimationFrame(t=>this.loop(t)); // drives drawing + number tweens
+      this.seedFeed(); setInterval(()=>this.pushFeed(), 1600);
+    } else if (!structuralSame){ this.layout(); } else { this.refreshNodes(); }
+    this.setData(); // sets tween targets + in-place DOM updates
   },
   refreshNodes(){ if(!this.nodes) return; const maxM=Math.max(1,...this.modelsData.map(m=>m[2]||0)), maxA=Math.max(1,...this.agentsData.map(a=>a[2]||0)); const byName={}; this.modelsData.forEach(m=>byName[m[0]]=[m,maxM,'model']); this.agentsData.forEach(a=>byName[a[0]]=[a,maxA,'agent']); this.nodes.forEach(n=>{ const e=byName[n.fullName]; if(e){ n.tokens=fmtCompact(e[0][1]); n.costNum=e[0][2]; n.r=(e[2]==='model'?7+9*Math.sqrt((e[0][2]||1)/e[1]):3.2+5.4*Math.sqrt((e[0][2]||1)/e[1])); } }); },
 
@@ -473,17 +510,24 @@ const AX = {
   // ---- share card PNG ----
   drawShareCard(){
     const s=this.data; if(!s) return null;
-    const S=1080, cv=document.createElement('canvas'); cv.width=S; cv.height=S; const ctx=cv.getContext('2d'); const A=this.A;
-    const grad=ctx.createLinearGradient(0,0,S,S); grad.addColorStop(0,'#0d1a14'); grad.addColorStop(1,'#06100b'); ctx.fillStyle=grad; ctx.fillRect(0,0,S,S);
-    const rg=ctx.createRadialGradient(S*0.8,0,0,S*0.8,0,S*0.7); rg.addColorStop(0,'rgba('+A.rgb+',0.18)'); rg.addColorStop(1,'rgba('+A.rgb+',0)'); ctx.fillStyle=rg; ctx.fillRect(0,0,S,S);
-    ctx.strokeStyle='rgba('+A.rgb+',0.05)'; for(let y=0;y<S;y+=56){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(S,y); ctx.stroke(); }
-    const mono='"JetBrains Mono", monospace';
-    ctx.fillStyle='#eafff4'; ctx.font='700 64px '+mono; ctx.textBaseline='top'; ctx.fillText('A X O N', 80, 80);
-    ctx.fillStyle='#5d7268'; ctx.font='400 26px '+mono; ctx.fillText('WEEKLY RECAP · 100% local', 80, 168);
+    const A=this.A, PAD=10, CARD=1080, S=CARD+PAD*2;            // 10px page-bg padding around the card
+    const cv=document.createElement('canvas'); cv.width=S; cv.height=S; const ctx=cv.getContext('2d');
+    ctx.fillStyle='#05080a'; ctx.fillRect(0,0,S,S);             // padding / behind rounded corners
+    const x=PAD, y=PAD, w=CARD, h=CARD, r=24;
+    const round=()=>{ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); };
+    round(); const grad=ctx.createLinearGradient(x,y,x+w,y+h); grad.addColorStop(0,'#0d1a14'); grad.addColorStop(1,'#06100b'); ctx.fillStyle=grad; ctx.fill();
+    ctx.save(); round(); ctx.clip();
+    const rg=ctx.createRadialGradient(x+w*0.8,y,0,x+w*0.8,y,w*0.7); rg.addColorStop(0,'rgba('+A.rgb+',0.18)'); rg.addColorStop(1,'rgba('+A.rgb+',0)'); ctx.fillStyle=rg; ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle='rgba('+A.rgb+',0.05)'; for(let yy=y;yy<y+h;yy+=56){ ctx.beginPath(); ctx.moveTo(x,yy); ctx.lineTo(x+w,yy); ctx.stroke(); }
+    ctx.restore();
+    round(); ctx.strokeStyle='rgba('+A.rgb+',0.45)'; ctx.lineWidth=2; ctx.stroke();   // the card border
+    const mono='"JetBrains Mono", monospace'; ctx.textBaseline='top';
+    ctx.fillStyle='#eafff4'; ctx.font='700 64px '+mono; ctx.fillText('A X O N', x+70, y+70);
+    ctx.fillStyle='#5d7268'; ctx.font='400 26px '+mono; ctx.fillText('WEEKLY RECAP · 100% local', x+70, y+158);
     const topAgent=this.agentsData[0];
     const cells=[['SPEND', fmtEur(s.cost_eur), 'rgb('+A.lighter+')'],['TOKENS OUT', fmtCompact(s.tokens_out), '#eafff4'],['SAVED BY RTK', s.rtk?fmtCompact(s.rtk.tokens_saved):'—', '#eafff4'],['TOP AGENT', topAgent?topAgent[0]:'—', '#eafff4']];
-    cells.forEach((c,i)=>{ const x=80+(i%2)*480, y=360+Math.floor(i/2)*230; ctx.fillStyle='#5d7268'; ctx.font='400 24px '+mono; ctx.fillText(c[0], x, y); ctx.fillStyle=c[2]; ctx.font='700 70px '+mono; ctx.fillText(c[1], x, y+38); });
-    ctx.fillStyle='#46564e'; ctx.font='400 24px '+mono; ctx.fillText('github.com/danieltamas/axon', 80, S-72);
+    cells.forEach((c,i)=>{ const cx=x+70+(i%2)*478, cy=y+330+Math.floor(i/2)*220; ctx.fillStyle='#5d7268'; ctx.font='400 24px '+mono; ctx.fillText(c[0], cx, cy); ctx.fillStyle=c[2]; ctx.font='700 66px '+mono; ctx.fillText(c[1], cx, cy+36); });
+    ctx.fillStyle='#46564e'; ctx.font='400 24px '+mono; ctx.fillText('github.com/danieltamas/axon', x+70, y+h-72);
     return cv;
   },
 };
@@ -500,13 +544,18 @@ function startBoot(){
 }
 
 function load(){
-  fetch('/api/summary').then(r=>r.json()).then(s=>AX.applyData(s)).catch(()=>{});
+  fetch('/api/summary?range='+encodeURIComponent(AX.range)).then(r=>r.json()).then(s=>AX.applyData(s)).catch(()=>{});
 }
 
 document.addEventListener('DOMContentLoaded', ()=>{
   startBoot();
   load();
-  setInterval(load, 15000);
+  setInterval(load, 2000);
+  document.querySelectorAll('#rangeSel .rbtn').forEach(b=>b.addEventListener('click', ()=>{
+    AX.range = b.getAttribute('data-range');
+    document.querySelectorAll('#rangeSel .rbtn').forEach(x=>x.classList.toggle('ractive', x===b));
+    load();
+  }));
   $('btnPng').addEventListener('click', ()=>{ const cv=AX.drawShareCard(); if(!cv) return; cv.toBlob(b=>{ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download='axon-recap.png'; a.click(); URL.revokeObjectURL(u); }); });
   $('btnCopy').addEventListener('click', ()=>{ const cv=AX.drawShareCard(); if(!cv||!navigator.clipboard||!window.ClipboardItem) return; cv.toBlob(b=>{ navigator.clipboard.write([new ClipboardItem({'image/png':b})]).catch(()=>{}); }); });
 });

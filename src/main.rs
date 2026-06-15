@@ -14,6 +14,7 @@ use clap::Parser;
 
 use axon::config::Config;
 use axon::ingest;
+use axon::model::Event;
 use axon::normalize;
 use axon::pricing::Pricing;
 use axon::rtk;
@@ -53,17 +54,14 @@ async fn main() -> anyhow::Result<()> {
 
 /// `--scan-only`: print the JSON summary on stdout and exit.
 fn run_scan_only() -> anyhow::Result<()> {
-    let summary = scan_to_summary()?;
+    let (summary, _) = scan()?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
 }
 
-/// How often the background task re-scans logs to keep the dashboard live.
-const REFRESH_SECS: u64 = 20;
-
 /// Bare `axon`: scan, print a CLI summary, open the browser, and serve the live dashboard.
 async fn run_server(cli: &Cli) -> anyhow::Result<()> {
-    let summary = scan_to_summary()?;
+    let (summary, events) = scan()?;
     print_cli_summary(&summary, cli.port);
 
     if let Some(otel) = &cli.otel {
@@ -72,6 +70,7 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
 
     let state = Arc::new(server::AppState {
         summary: std::sync::RwLock::new(summary),
+        events: std::sync::RwLock::new(events),
     });
     spawn_refresher(state.clone());
 
@@ -81,30 +80,58 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
             eprintln!("axon: couldn't open a browser ({e}); open {url} yourself");
         }
     }
-    println!("  serving {url} — live (re-scans every {REFRESH_SECS}s) — press Ctrl-C to stop\n");
+    println!("  serving {url} — live (file-watch) — press Ctrl-C to stop\n");
 
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
     server::serve(addr, state).await
 }
 
-/// Re-scan logs on an interval and swap the result into shared state, so the dashboard is
-/// live. The scan is blocking (fs + SQLite), so it runs on the blocking pool. (The eventual
-/// M4 ideal is an incremental file-watch → SSE pipeline; this is the pragmatic version.)
+/// Keep the dashboard live by re-scanning whenever a log file changes (via `notify`
+/// file-watch), debounced, with a 15s periodic fallback. The scan is blocking (fs + SQLite)
+/// so it runs on the blocking pool — it never stalls the server, and the browser (a separate
+/// process) keeps animating at 60fps regardless. A min-gap caps re-scan frequency under load.
+/// (Incremental tailing — re-reading only changed bytes — is the future optimization.)
 fn spawn_refresher(state: Arc<server::AppState>) {
+    use std::time::Duration;
+    let trigger = Arc::new(tokio::sync::Notify::new());
+    let poke = trigger.clone();
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok() {
+            poke.notify_one();
+        }
+    });
+
     tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(REFRESH_SECS)).await;
-            match tokio::task::spawn_blocking(scan_to_summary).await {
-                Ok(Ok(s)) => *state.summary.write().unwrap_or_else(|p| p.into_inner()) = s,
-                Ok(Err(e)) => eprintln!("axon: background re-scan failed: {e:#}"),
-                Err(e) => eprintln!("axon: background re-scan task error: {e}"),
+        // Hold the watcher for the task's lifetime; register the log roots.
+        let mut watcher = watcher.ok();
+        if let Some(w) = watcher.as_mut() {
+            use notify::{RecursiveMode, Watcher};
+            for path in [claude_projects_dir(), codex_sessions_dir(), opencode_dir()] {
+                let _ = w.watch(&path, RecursiveMode::Recursive);
             }
+        }
+        loop {
+            tokio::select! {
+                _ = trigger.notified() => {}                                  // a log changed
+                _ = tokio::time::sleep(Duration::from_secs(15)) => {}          // periodic fallback
+            }
+            tokio::time::sleep(Duration::from_millis(600)).await; // debounce a write burst
+            match tokio::task::spawn_blocking(scan).await {
+                Ok(Ok((s, ev))) => {
+                    *state.summary.write().unwrap_or_else(|p| p.into_inner()) = s;
+                    *state.events.write().unwrap_or_else(|p| p.into_inner()) = ev;
+                }
+                Ok(Err(e)) => eprintln!("axon: re-scan failed: {e:#}"),
+                Err(e) => eprintln!("axon: re-scan task error: {e}"),
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await; // min gap between re-scans
         }
     });
 }
 
-/// Scan `~/.claude/projects`, normalize, persist to SQLite, and aggregate.
-fn scan_to_summary() -> anyhow::Result<Summary> {
+/// Scan all harnesses, normalize, persist to SQLite, and aggregate. Returns the all-time
+/// summary plus the raw events (so the server can re-aggregate for a selected time range).
+fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     let pricing = load_pricing();
     let mut turns = ingest::scan_claude_root(&claude_projects_dir());
     turns.extend(ingest::scan_codex_root(&codex_sessions_dir()));
@@ -141,7 +168,7 @@ fn scan_to_summary() -> anyhow::Result<Summary> {
     summary.today_cost_eur = windowed_cost(&all, local_day_start_ms());
     summary.week_cost_eur = windowed_cost(&all, local_week_start_ms());
     summary.month_cost_eur = windowed_cost(&all, local_month_start_ms());
-    Ok(summary)
+    Ok((summary, all))
 }
 
 /// Epoch-ms of local midnight today.
@@ -314,8 +341,12 @@ fn codex_sessions_dir() -> std::path::PathBuf {
     home().join(".codex").join("sessions")
 }
 
+fn opencode_dir() -> std::path::PathBuf {
+    data_dir().join("opencode")
+}
+
 fn opencode_db_path() -> std::path::PathBuf {
-    data_dir().join("opencode").join("opencode.db")
+    opencode_dir().join("opencode.db")
 }
 
 fn db_path() -> std::path::PathBuf {

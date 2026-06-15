@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::extract::{Request, State};
+use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -21,7 +21,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::compression::CompressionLayer;
 
-use crate::summary::Summary;
+use crate::model::Event;
+use crate::summary::{build_summary, Summary};
 
 /// The dashboard — a single self-contained file, embedded at compile time. Edit
 /// `ui/dist/index.html` to change the UI; no build step, no external assets (§16).
@@ -30,7 +31,10 @@ const INDEX_HTML: &str = include_str!("../ui/dist/index.html");
 /// Shared application state. A background task periodically re-scans and swaps the summary
 /// in, so the dashboard is live (poll-based).
 pub struct AppState {
+    /// All-time summary, refreshed in the background (carries rtk + budget panels).
     pub summary: std::sync::RwLock<Summary>,
+    /// Raw events, so `/api/summary?range=` can re-aggregate for a selected window.
+    pub events: std::sync::RwLock<Vec<Event>>,
 }
 
 /// Build the router with the loopback/Origin guard and gzip compression applied.
@@ -63,9 +67,50 @@ async fn api_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
-async fn api_summary(State(state): State<Arc<AppState>>) -> Json<Summary> {
-    let guard = state.summary.read().unwrap_or_else(|p| p.into_inner());
-    Json(guard.clone())
+#[derive(serde::Deserialize)]
+struct RangeQuery {
+    range: Option<String>,
+}
+
+async fn api_summary(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RangeQuery>,
+) -> Json<Summary> {
+    let all = state.summary.read().unwrap_or_else(|p| p.into_inner());
+    let range = q.range.as_deref().unwrap_or("all");
+    if range == "all" {
+        return Json(all.clone());
+    }
+    // Re-aggregate over the selected window; carry the range-independent panels (rtk, budget,
+    // today/week/month spend) from the all-time summary.
+    let since = since_ms(range);
+    let events = state.events.read().unwrap_or_else(|p| p.into_inner());
+    let mut s = build_summary(events.iter().filter(|e| e.ts >= since));
+    s.rtk = all.rtk.clone();
+    s.today_cost_eur = all.today_cost_eur;
+    s.week_cost_eur = all.week_cost_eur;
+    s.month_cost_eur = all.month_cost_eur;
+    s.budget_day_eur = all.budget_day_eur;
+    s.budget_week_eur = all.budget_week_eur;
+    s.budget_month_eur = all.budget_month_eur;
+    Json(s)
+}
+
+/// Epoch-ms lower bound for a range key: `today` (local midnight), `7d`/`30d` (rolling), else 0.
+fn since_ms(range: &str) -> i64 {
+    use chrono::{Duration, Local};
+    let now = Local::now();
+    match range {
+        "today" => now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .and_then(|d| d.and_local_timezone(Local).single())
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0),
+        "7d" => (now - Duration::days(7)).timestamp_millis(),
+        "30d" => (now - Duration::days(30)).timestamp_millis(),
+        _ => 0,
+    }
 }
 
 /// Reject non-loopback `Host` and cross-origin `Origin`/`Referer` (DESIGN.md §16).
