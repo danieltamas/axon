@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/socials/axon-github-banner-1280x640.png" alt="Axon — local, harness-agnostic observability for AI coding agents" width="100%">
+</p>
+
 # Axon
 
 **Local, harness-agnostic observability for AI coding agents — one Rust binary, in your browser.**
