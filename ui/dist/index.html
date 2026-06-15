@@ -291,7 +291,7 @@ const AX = {
 
   agentColor(c){ const A=this.A; return c>1000?'rgb('+A.lighter+')':c>10?'rgb('+A.rgb+')':'rgb('+A.dark+')'; },
   makeDend(id,count){ const a=[]; for(let i=0;i<count;i++){ const base=(i/count)*6.2832, j=Math.sin(id*13.1+i*7.3); a.push({ang:base+j*0.45, len:1.8+Math.abs(Math.sin(id*5.2+i))*1.3, ph:(Math.sin(id*3.1+i*2.2)+1)*3.14}); } return a; },
-  buildParticles(){ const count=Math.round(16+this.intensity*19); this.particles=[]; for(let i=0;i<count;i++) this.particles.push({e:this.pickEdge(), t:Math.random(), sp:0.004+Math.random()*0.012}); },
+  buildParticles(){ const count=Math.round(16+this.intensity*19); this.particles=[]; for(let i=0;i<count;i++) this.particles.push({e:0, t:0, sp:0.004+Math.random()*0.012, alive:false}); },
   fib(n,i){ const g=Math.PI*(3-Math.sqrt(5)); const y=1-(i/(n-1||1))*2; const rr=Math.sqrt(Math.max(0,1-y*y)); const th=g*i; return [Math.cos(th)*rr, y, Math.sin(th)*rr]; },
 
   layout(){
@@ -312,7 +312,7 @@ const AX = {
       for(let k=1;k<=M.length;k++){ const n=nodes[k]; const dd=Math.hypot(n.p[0]-pos[0],n.p[1]-pos[1],n.p[2]-pos[2]); if(dd<bd){bd=dd;best=k;} }
       const id=nodes.length; nodes.push({ id, kind:'agent', fullName:g[0], label:g[0], p:pos, r:3.2+5.4*Math.sqrt((g[2]||1)/maxA), lit:1, flash:0, tokens:fmtCompact(g[1]), costNum:g[2], parent:best }); nodes[best].children.push(id); });
     this.nodes = nodes;
-    nodes.forEach(n=>{ n.seed=(Math.sin(n.id*99.7)*0.5+0.5)*6.2832; n.ox=0; n.oy=0; n.vx=0; n.vy=0;
+    nodes.forEach(n=>{ n.seed=(Math.sin(n.id*99.7)*0.5+0.5)*6.2832; n.ox=0; n.oy=0; n.vx=0; n.vy=0; n.act=0.6; n.prevCost=n.costNum;
       if(n.kind==='core'){ n.hueOff=0; n.dend=this.makeDend(n.id,10); } else if(n.kind==='model'){ n.hueOff=(n.id-3)*26; n.dend=this.makeDend(n.id,7); } else { n.hueOff=((n.id*53)%150)-60; n.dend=this.makeDend(n.id,5); } });
     const edges = [];
     for(let i=1;i<=M.length;i++) edges.push({ a:0, b:i, w:Math.sqrt(M[i-1][1]||1) });
@@ -325,6 +325,10 @@ const AX = {
   },
 
   pickEdge(){ if(!this.edges) return 0; let r=Math.random()*this.wsum, acc=0; for(let i=0;i<this.edges.length;i++){ acc+=this.edges[i].w; if(r<=acc) return i; } return 0; },
+  // Pick an edge weighted by CURRENT node activity (real data flow); -1 when nothing is active.
+  pickActiveEdge(){ if(!this.edges) return -1; let sum=0; const w=this.edges.map(e=>{ const a=(this.nodes[e.a].act||0)+(this.nodes[e.b].act||0); sum+=a; return a; }); if(sum<0.02) return -1; let r=Math.random()*sum, acc=0; for(let i=0;i<w.length;i++){ acc+=w[i]; if(r<=acc) return i; } return w.length-1; },
+  // A node gained tokens/cost → light it and the path back to the core, so the beam flows along it.
+  bumpActivity(n, amt){ n.act=Math.min(1,(n.act||0)+amt); if(n.kind==='agent'){ const m=this.nodes[n.parent]; if(m) m.act=Math.min(1,(m.act||0)+amt*0.7); if(this.nodes[0]) this.nodes[0].act=Math.min(1,(this.nodes[0].act||0)+amt*0.5); } else if(n.kind==='model'){ if(this.nodes[0]) this.nodes[0].act=Math.min(1,(this.nodes[0].act||0)+amt*0.6); } },
   subtreeSet(id){ if(id==null||!this.nodes) return null; const s=new Set(); const n=this.nodes[id]; s.add(0); s.add(id); if(n.kind==='core'){ this.nodes.forEach(x=>s.add(x.id)); } else if(n.kind==='model'){ (n.children||[]).forEach(c=>s.add(c)); } else if(n.kind==='agent'){ s.add(n.parent); } return s; },
   rot(p){ const cy=Math.cos(this.yaw+this.yawOff), sy=Math.sin(this.yaw+this.yawOff), cx=Math.cos(this.pitch), sx=Math.sin(this.pitch); let x=p[0],y=p[1],z=p[2]; let x1=x*cy+z*sy, z1=-x*sy+z*cy; let y1=y*cx-z1*sx, z2=y*sx+z1*cx; const sc=this.f/(this.f+z2); return { sx:this.cx+x1*sc*this.xs, sy:this.cy+y1*sc, sc, z:z2 }; },
   focusLabel(name){ if(!this.nodes) return; const n=this.nodes.find(x=>x.fullName===name); if(n){ this.pinned=false; this.focusId=n.id; this.syncDetail(); } },
@@ -354,14 +358,14 @@ const AX = {
     else if (this.drag==null){ this.tPitch=0.18; this.tYawOff=0; }
     this.pitch += (this.tPitch-this.pitch)*0.06; this.yawOff += (this.tYawOff-this.yawOff)*0.06;
     const set = this.subtreeSet(this.focusId);
-    this.nodes.forEach(n=>{ const pr=this.rot(n.p); n.nx=pr.sx; n.ny=pr.sy; n.sc=pr.sc; n.z=pr.z; n.flash*=0.92; const target=set?(set.has(n.id)?1:0.14):1; n.lit+=(target-n.lit)*0.12; });
+    this.nodes.forEach(n=>{ const pr=this.rot(n.p); n.nx=pr.sx; n.ny=pr.sy; n.sc=pr.sc; n.z=pr.z; n.flash*=0.92; n.act=(n.act||0)*0.99; if(n.act<0.01) n.act=0; const target=set?(set.has(n.id)?1:0.14):1; n.lit+=(target-n.lit)*0.12; });
     this.nodes.forEach(n=>{ let tx,ty,k; if(this.drag===n.id && this.mouse && this.mouse.on){ tx=this.mouse.x-n.nx; ty=this.mouse.y-n.ny; k=0.45; } else { let cx=0,cy=0,cnt=0; (this.adj[n.id]||[]).forEach(m=>{ cx+=this.nodes[m].ox; cy+=this.nodes[m].oy; cnt++; }); tx=cnt?(cx/cnt)*0.42:0; ty=cnt?(cy/cnt)*0.42:0; k=0.16; } n.vx+=(tx-n.ox)*k; n.vy+=(ty-n.oy)*k; if(this.drag!==n.id){ n.vx+=-n.ox*0.05; n.vy+=-n.oy*0.05; } n.vx*=0.80; n.vy*=0.80; n.ox+=n.vx; n.oy+=n.vy; n.sx=n.nx+n.ox; n.sy=n.ny+n.oy; });
     ctx.globalCompositeOperation='lighter';
     this.stars.forEach(s=>{ const pr=this.rot(s); const a=s[3]*0.5*pr.sc; ctx.fillStyle='rgba('+A.light+','+a+')'; ctx.fillRect(pr.sx,pr.sy,1.4*pr.sc,1.4*pr.sc); });
     ctx.globalCompositeOperation='source-over';
     this.edges.forEach(e=>{ e.fire=(e.fire||0)*0.9; const a=this.nodes[e.a], b=this.nodes[e.b]; const lit=set?((set.has(e.a)&&set.has(e.b))?1:0.08):1; const g=ctx.createLinearGradient(a.sx,a.sy,b.sx,b.sy); g.addColorStop(0,'rgba('+A.rgb+','+((0.13+0.5*e.fire)*lit)+')'); g.addColorStop(0.5,'rgba('+A.rgb+','+((0.05+0.3*e.fire)*lit)+')'); g.addColorStop(1,'rgba('+A.rgb+','+((0.03+0.4*e.fire)*lit)+')'); ctx.strokeStyle=g; ctx.lineWidth=0.8+1.8*e.fire; ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke(); });
     ctx.globalCompositeOperation='lighter'; const hHead=(Math.round(A.h)+12)%360;
-    this.particles.forEach(p=>{ p.t+=p.sp*(0.5+speedF*0.5); const e=this.edges[p.e]; if(!e){ p.e=this.pickEdge(); p.t=0; return; } if(p.t>=1){ const tn=this.nodes[e.b]; tn.flash=1; e.fire=1; if(this.ripples.length<30) this.ripples.push({id:e.b,t:0}); p.e=this.pickEdge(); p.t=0; p.sp=0.004+Math.random()*0.012; return; } const na=this.nodes[e.a], nb=this.nodes[e.b]; const lit=set?((set.has(e.a)&&set.has(e.b))?1:0.05):1; const hx=na.sx+(nb.sx-na.sx)*p.t, hy=na.sy+(nb.sy-na.sy)*p.t, hsc=na.sc+(nb.sc-na.sc)*p.t; const rad=2.4*hsc; const gr=ctx.createRadialGradient(hx,hy,0,hx,hy,rad*3.4); gr.addColorStop(0,'hsla('+hHead+',100%,95%,'+(0.95*lit)+')'); gr.addColorStop(0.5,'rgba('+A.lighter+','+(0.4*lit)+')'); gr.addColorStop(1,'rgba('+A.rgb+',0)'); ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(hx,hy,rad*3.4,0,7); ctx.fill(); for(let k=1;k<4;k++){ const tt=p.t-k*0.045; if(tt<0) break; const tx2=na.sx+(nb.sx-na.sx)*tt, ty2=na.sy+(nb.sy-na.sy)*tt, tsc=na.sc+(nb.sc-na.sc)*tt; ctx.fillStyle='hsla('+Math.round(A.h)+',95%,82%,'+((1-k/4)*0.55*lit)+')'; ctx.beginPath(); ctx.arc(tx2,ty2,1.5*tsc*(1-k/5),0,7); ctx.fill(); } });
+    this.particles.forEach(p=>{ if(!p.alive){ const ne=this.pickActiveEdge(); if(ne<0) return; p.e=ne; p.t=Math.random()*0.12; p.alive=true; p.sp=0.004+Math.random()*0.012; } p.t+=p.sp*(0.5+speedF*0.5); const e=this.edges[p.e]; if(!e){ p.alive=false; return; } if(p.t>=1){ const tn=this.nodes[e.b]; tn.flash=1; e.fire=1; if(this.ripples.length<30) this.ripples.push({id:e.b,t:0}); const ne=this.pickActiveEdge(); if(ne<0){ p.alive=false; } else { p.e=ne; p.t=0; p.sp=0.004+Math.random()*0.012; } return; } const na=this.nodes[e.a], nb=this.nodes[e.b]; const lit=set?((set.has(e.a)&&set.has(e.b))?1:0.05):1; const hx=na.sx+(nb.sx-na.sx)*p.t, hy=na.sy+(nb.sy-na.sy)*p.t, hsc=na.sc+(nb.sc-na.sc)*p.t; const rad=2.4*hsc; const gr=ctx.createRadialGradient(hx,hy,0,hx,hy,rad*3.4); gr.addColorStop(0,'hsla('+hHead+',100%,95%,'+(0.95*lit)+')'); gr.addColorStop(0.5,'rgba('+A.lighter+','+(0.4*lit)+')'); gr.addColorStop(1,'rgba('+A.rgb+',0)'); ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(hx,hy,rad*3.4,0,7); ctx.fill(); for(let k=1;k<4;k++){ const tt=p.t-k*0.045; if(tt<0) break; const tx2=na.sx+(nb.sx-na.sx)*tt, ty2=na.sy+(nb.sy-na.sy)*tt, tsc=na.sc+(nb.sc-na.sc)*tt; ctx.fillStyle='hsla('+Math.round(A.h)+',95%,82%,'+((1-k/4)*0.55*lit)+')'; ctx.beginPath(); ctx.arc(tx2,ty2,1.5*tsc*(1-k/5),0,7); ctx.fill(); } });
     for(let i=this.ripples.length-1;i>=0;i--){ const rp=this.ripples[i]; rp.t+=0.03; if(rp.t>=1){ this.ripples.splice(i,1); continue; } const n=this.nodes[rp.id]; const rad=n.r*n.sc*(1+rp.t*2.6); ctx.strokeStyle='hsla('+Math.round((A.h+(n.hueOff||0)+360)%360)+',100%,86%,'+(0.6*(1-rp.t)*n.lit)+')'; ctx.lineWidth=1.8*(1-rp.t*0.5); ctx.beginPath(); ctx.arc(n.sx,n.sy,rad,0,7); ctx.stroke(); }
     ctx.globalCompositeOperation='source-over';
     this.hoverId=null;
@@ -493,7 +497,7 @@ const AX = {
     } else if (!structuralSame){ this.layout(); } else { this.refreshNodes(); }
     this.setData(); // sets tween targets + in-place DOM updates
   },
-  refreshNodes(){ if(!this.nodes) return; const maxM=Math.max(1,...this.modelsData.map(m=>m[2]||0)), maxA=Math.max(1,...this.agentsData.map(a=>a[2]||0)); const byName={}; this.modelsData.forEach(m=>byName[m[0]]=[m,maxM,'model']); this.agentsData.forEach(a=>byName[a[0]]=[a,maxA,'agent']); this.nodes.forEach(n=>{ const e=byName[n.fullName]; if(e){ n.tokens=fmtCompact(e[0][1]); n.costNum=e[0][2]; n.r=(e[2]==='model'?7+9*Math.sqrt((e[0][2]||1)/e[1]):3.2+5.4*Math.sqrt((e[0][2]||1)/e[1])); } }); },
+  refreshNodes(){ if(!this.nodes) return; const maxM=Math.max(1,...this.modelsData.map(m=>m[2]||0)), maxA=Math.max(1,...this.agentsData.map(a=>a[2]||0)); const byName={}; this.modelsData.forEach(m=>byName[m[0]]=[m,maxM,'model']); this.agentsData.forEach(a=>byName[a[0]]=[a,maxA,'agent']); this.nodes.forEach(n=>{ const e=byName[n.fullName]; if(e){ const newCost=e[0][2]||0; const prev=(n.prevCost==null?newCost:n.prevCost); if(newCost-prev>1e-9) this.bumpActivity(n,1); n.prevCost=newCost; n.tokens=fmtCompact(e[0][1]); n.costNum=newCost; n.r=(e[2]==='model'?7+9*Math.sqrt((newCost||1)/e[1]):3.2+5.4*Math.sqrt((newCost||1)/e[1])); } }); },
 
   bindBrain(){ const c=this.brain; if(!c) return;
     c.addEventListener('mousemove', e=>{ const r=c.getBoundingClientRect(); const x=e.clientX-r.left, y=e.clientY-r.top; this.mouse={x,y,on:true}; if(this.drag!=null && (Math.abs(x-this._downX)>3||Math.abs(y-this._downY)>3)) this._dragMoved=true; });
