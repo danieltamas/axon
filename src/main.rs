@@ -56,7 +56,10 @@ fn run_scan_only() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Bare `axon`: scan, print a CLI summary, open the browser, and serve the dashboard.
+/// How often the background task re-scans logs to keep the dashboard live.
+const REFRESH_SECS: u64 = 20;
+
+/// Bare `axon`: scan, print a CLI summary, open the browser, and serve the live dashboard.
 async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     let summary = scan_to_summary()?;
     print_cli_summary(&summary, cli.port);
@@ -65,16 +68,37 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
         eprintln!("axon: --otel {otel} ignored (OTEL export is M6; needs --features otel)");
     }
 
+    let state = Arc::new(server::AppState {
+        summary: std::sync::RwLock::new(summary),
+    });
+    spawn_refresher(state.clone());
+
     let url = format!("http://127.0.0.1:{}", cli.port);
     if !cli.no_open {
         if let Err(e) = webbrowser::open(&url) {
             eprintln!("axon: couldn't open a browser ({e}); open {url} yourself");
         }
     }
-    println!("  serving {url} — press Ctrl-C to stop\n");
+    println!("  serving {url} — live (re-scans every {REFRESH_SECS}s) — press Ctrl-C to stop\n");
 
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
-    server::serve(addr, Arc::new(server::AppState { summary })).await
+    server::serve(addr, state).await
+}
+
+/// Re-scan logs on an interval and swap the result into shared state, so the dashboard is
+/// live. The scan is blocking (fs + SQLite), so it runs on the blocking pool. (The eventual
+/// M4 ideal is an incremental file-watch → SSE pipeline; this is the pragmatic version.)
+fn spawn_refresher(state: Arc<server::AppState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(REFRESH_SECS)).await;
+            match tokio::task::spawn_blocking(scan_to_summary).await {
+                Ok(Ok(s)) => *state.summary.write().unwrap_or_else(|p| p.into_inner()) = s,
+                Ok(Err(e)) => eprintln!("axon: background re-scan failed: {e:#}"),
+                Err(e) => eprintln!("axon: background re-scan task error: {e}"),
+            }
+        }
+    });
 }
 
 /// Scan `~/.claude/projects`, normalize, persist to SQLite, and aggregate.

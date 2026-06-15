@@ -22,10 +22,11 @@ use tower_http::compression::CompressionLayer;
 
 use crate::summary::Summary;
 
-/// Shared, read-only application state. M1/M3-lite snapshots the data at boot; the live
-/// file-watch → refresh pipeline arrives in M4.
+/// Shared application state. A background task periodically re-scans and swaps the summary
+/// in, so the dashboard is live (poll-based). The incremental file-watch → SSE pipeline is
+/// the eventual M4 ideal; this is the pragmatic version.
 pub struct AppState {
-    pub summary: Summary,
+    pub summary: std::sync::RwLock<Summary>,
 }
 
 /// Build the router with the loopback/Origin guard and gzip compression applied.
@@ -59,7 +60,8 @@ async fn api_health() -> Json<serde_json::Value> {
 }
 
 async fn api_summary(State(state): State<Arc<AppState>>) -> Json<Summary> {
-    Json(state.summary.clone())
+    let guard = state.summary.read().unwrap_or_else(|p| p.into_inner());
+    Json(guard.clone())
 }
 
 /// Reject non-loopback `Host` and cross-origin `Origin`/`Referer` (DESIGN.md §16).
@@ -162,6 +164,7 @@ const INDEX_HTML: &str = r##"<!doctype html>
   .g .val .u{font-size:13px;color:var(--grn-dim);margin-left:3px}
   .g.cost .val{color:var(--grn);text-shadow:0 0 15px rgba(84,240,160,.25)}
   @keyframes rise{to{opacity:1;transform:translateY(0)}}
+  body.loaded .g{animation:none;opacity:1;transform:none}
   .rtk{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;
     border:1px solid var(--line);background:linear-gradient(180deg,#0a1612,var(--panel2));padding:18px 22px;margin-bottom:24px}
   .rtk .hd{color:var(--grn-dim);font-size:10px;letter-spacing:.24em;text-transform:uppercase;margin-bottom:11px}
@@ -247,7 +250,9 @@ function rows(items,key,max){
   }).join('');
 }
 
-fetch('/api/summary').then(r=>r.json()).then(s=>{
+let first = true;
+function render(s){
+  if (!first) document.body.classList.add('loaded'); // suppress entry animation on refresh
   $('gauges').innerHTML =
     gauge('Events', grp(s.events)) + gauge('Sessions', grp(s.sessions)) +
     gauge('Tokens in', cmp(s.tokens_in)) + gauge('Tokens out', cmp(s.tokens_out)) +
@@ -274,9 +279,8 @@ fetch('/api/summary').then(r=>r.json()).then(s=>{
     $('harness').innerHTML = `<div class="hd">Harnesses</div><div class="hbar">${segs}</div><div class="hleg">${leg}</div>`;
   }
 
-  if (s.unpriced_models && s.unpriced_models.length){
-    $('warn').innerHTML = `<div class="warn">⚠ unpriced models — cost is a floor, not exact: <b>${s.unpriced_models.map(esc).join(', ')}</b></div>`;
-  }
+  $('warn').innerHTML = (s.unpriced_models && s.unpriced_models.length)
+    ? `<div class="warn">⚠ unpriced models — cost is a floor, not exact: <b>${s.unpriced_models.map(esc).join(', ')}</b></div>` : '';
 
   const aMax = Math.max(1, ...s.by_agent.map(a=>a.tokens_out));
   const mMax = Math.max(1, ...s.by_model.map(m=>m.tokens_out));
@@ -286,9 +290,16 @@ fetch('/api/summary').then(r=>r.json()).then(s=>{
   $('foot').innerHTML =
     `<span><span class="k">unattributed</span> ${s.unattributed_token_pct.toFixed(1)}%</span>`+
     `<span><span class="k">currency</span> EUR</span>`+
-    `<span><span class="k">mode</span> snapshot · live updates land in M4</span>`;
+    `<span><span class="k">mode</span> live · auto-refresh 15s</span>`;
   $('stat').textContent = grp(s.events) + ' events';
-}).catch(()=>{ $('warn').innerHTML = '<div class="warn">failed to load /api/summary</div>'; });
+  first = false;
+}
+function load(){
+  fetch('/api/summary').then(r=>r.json()).then(render)
+    .catch(()=>{ $('warn').innerHTML = '<div class="warn">failed to load /api/summary</div>'; });
+}
+load();
+setInterval(load, 15000);
 </script>
 </body>
 </html>
