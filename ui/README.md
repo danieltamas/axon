@@ -1,6 +1,11 @@
 # Axon UI (Vue 3 + TresJS)
 
-The dashboard. Build output (`ui/dist`) is **committed** and embedded into the Rust binary via `rust-embed`, so `cargo build` / `cargo install axon` needs no Node.
+The browser dashboard.
+
+> [!NOTE]
+> **Not yet scaffolded — arrives in M3/M4** (see [DESIGN.md §14](../DESIGN.md)). This README is
+> the contributor brief for building it. Once built, `ui/dist` is **committed** and embedded
+> into the Rust binary via `rust-embed`, so `cargo build` / `cargo install axon` needs no Node.
 
 - **Stack:** Vue 3 + Vite + TresJS (three.js) + `@tresjs/cientos` + postprocessing (bloom) + Pinia + `vue-echarts` + native `EventSource`.
 - **Landing = "Mission Control"** (DESIGN.md §10.1): the live brain (nodes = models, size = **cost**, color = harness, **stable radial layout**) **plus** a cost/budget HUD on the same screen.
