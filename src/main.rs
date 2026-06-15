@@ -9,15 +9,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use chrono::Datelike;
 use clap::Parser;
 
+use axon::config::Config;
 use axon::ingest;
 use axon::normalize;
 use axon::pricing::Pricing;
 use axon::rtk;
 use axon::server;
 use axon::store::Store;
-use axon::summary::{build_summary, Summary};
+use axon::summary::{build_summary, windowed_cost, Summary};
 
 /// Axon — see DESIGN.md for the full build spec.
 #[derive(Parser, Debug)]
@@ -127,9 +129,36 @@ fn scan_to_summary() -> anyhow::Result<Summary> {
     let mut store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
     store.upsert_all(&events)?;
 
-    let mut summary = build_summary(&store.all_events()?);
+    let all = store.all_events()?;
+    let mut summary = build_summary(&all);
     summary.rtk = rtk::savings(); // optional; None if rtk is not installed
+
+    // Budget caps (config) + spend in the current local day / week.
+    let cfg = Config::load(&config_dir().join("axon").join("config.toml"));
+    summary.budget_day_eur = cfg.budget_eur_per_day;
+    summary.budget_week_eur = cfg.budget_eur_per_week;
+    summary.today_cost_eur = windowed_cost(&all, local_day_start_ms());
+    summary.week_cost_eur = windowed_cost(&all, local_week_start_ms());
     Ok(summary)
+}
+
+/// Epoch-ms of local midnight today.
+fn local_day_start_ms() -> i64 {
+    day_start_ms(chrono::Local::now().date_naive())
+}
+
+/// Epoch-ms of local midnight on the most recent Monday.
+fn local_week_start_ms() -> i64 {
+    let today = chrono::Local::now().date_naive();
+    let back = today.weekday().num_days_from_monday() as u64;
+    day_start_ms(today - chrono::Days::new(back))
+}
+
+fn day_start_ms(date: chrono::NaiveDate) -> i64 {
+    date.and_hms_opt(0, 0, 0)
+        .and_then(|ndt| ndt.and_local_timezone(chrono::Local).single())
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0)
 }
 
 fn print_cli_summary(s: &Summary, port: u16) {
@@ -160,6 +189,17 @@ fn print_cli_summary(s: &Summary, port: u16) {
         "  Cost          {}  (all logged history, EUR)",
         eur(s.cost_eur)
     );
+    {
+        let span = |spent: f64, cap: Option<f64>| match cap {
+            Some(c) => format!("{} / {} ({:.0}%)", eur(spent), eur(c), pct(spent, c)),
+            None => eur(spent),
+        };
+        println!(
+            "  Spend         today {} · week {}",
+            span(s.today_cost_eur, s.budget_day_eur),
+            span(s.week_cost_eur, s.budget_week_eur)
+        );
+    }
     if let Some(r) = &s.rtk {
         println!(
             "  RTK saved     {} tokens ({:.1}%) over {} commands",
@@ -186,6 +226,15 @@ fn print_cli_summary(s: &Summary, port: u16) {
         );
     }
     println!("  Dashboard →   http://127.0.0.1:{port}");
+}
+
+/// Percent of a budget cap consumed (0 if the cap is non-positive).
+fn pct(spent: f64, cap: f64) -> f64 {
+    if cap > 0.0 {
+        100.0 * spent / cap
+    } else {
+        0.0
+    }
 }
 
 /// Format euros with thousands separators: 5607.61 → "€5,607.61".

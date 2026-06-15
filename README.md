@@ -15,21 +15,24 @@ leaderboards, budget alerts, and shareable cards.
 **100% local. No server. No account. Nothing leaves your machine.**
 
 > [!NOTE]
-> **Early access.** The first working slice ships today: **Claude Code ingestion** with exact
-> per-sub-agent attribution, available via `axon --scan-only` (JSON). The live web dashboard
-> and the 3D brain are in active development — see the [roadmap](#roadmap). The complete,
-> fixture-verified build spec lives in **[DESIGN.md](./DESIGN.md)**.
+> **Early access.** Working today: **cross-harness ingestion** (Claude Code, Codex, OpenCode)
+> with exact per-sub-agent attribution, a **live local dashboard** (`axon`), budget awareness,
+> and RTK token-savings — plus headless JSON (`axon --scan-only`). The three.js "brain" and
+> shareable cards are next — see the [roadmap](#roadmap). The complete, fixture-verified build
+> spec lives in **[DESIGN.md](./DESIGN.md)**.
 
 ## What it does
 
 | | Capability | Status |
 |---|---|---|
-| 🧩 | **Cross-harness** ingest from the logs harnesses already write (Claude Code, Codex, OpenCode) | Claude ✅ · others 🔭 |
+| 🧩 | **Cross-harness** ingest from the logs harnesses already write — Claude Code, Codex, OpenCode (Ollama via OpenCode) | ✅ |
 | 🎯 | **Exact per-named-agent attribution** — see what each sub-agent (`coder`, `security`, `Explore`…) actually cost, no heuristics | ✅ |
-| 💸 | **Cost & budget awareness** — per model/agent/project, with daily/weekly budget alerts | engine ✅ · alerts 🔭 |
+| 💸 | **Cost & budget awareness** — per model/agent/harness, today/this-week spend with daily/weekly budget alerts | ✅ |
+| 🖥️ | **Live local dashboard** — auto-refreshing telemetry instrument at `localhost`, no restart | ✅ |
+| ♻️ | **RTK integration** — surfaces Rust Token Killer's token savings, if installed | ✅ |
 | 🧠 | **Live "brain"** — three.js view of models firing, sized by cost | 🔭 |
 | 🏆 | **Local leaderboards + Hall of Fame** and shareable PNG/WebM cards | 🔭 |
-| 🔒 | **Enforced privacy** — loopback-only, assets bundled, SQLite `0600`, zero egress by default | ✅ (design) |
+| 🔒 | **Enforced privacy** — loopback-only + Origin checks, assets bundled, SQLite `0600`, zero egress by default | ✅ |
 
 Legend: ✅ available · 🚧 in progress · 🔭 planned.
 
@@ -67,36 +70,42 @@ cargo build --release        # -> target/release/axon
 ## Usage
 
 ```bash
-# Available now — scan your local Claude Code logs and print a JSON summary, then exit:
-axon --scan-only
-
-# Planned — start the local dashboard and open the browser:
-axon                 # serves http://localhost:7777
+# Start the live dashboard and open the browser (re-scans in the background):
+axon                 # serves http://127.0.0.1:7777
 axon --port 8080 --no-open
+
+# Headless — scan your logs, print a JSON summary, then exit:
+axon --scan-only
 ```
 
-`axon --scan-only` walks `~/.claude/projects/`, collapses each turn, attributes every
-sub-agent, and prints totals plus per-model and per-agent breakdowns:
+Both commands scan **all three harnesses** — `~/.claude/projects/`, `~/.codex/sessions/`, and
+OpenCode's `opencode.db`. Optional budget caps live in `~/.config/axon/config.toml` (see
+[`assets/config.example.toml`](./assets/config.example.toml)); the dashboard's Spend panel and
+the CLI then show today/this-week spend with amber/red alerts.
+
+`axon --scan-only` collapses each turn, attributes every sub-agent, and prints totals plus
+per-model, per-agent, and per-harness breakdowns:
 
 ```jsonc
 {
-  "events": 35929,
-  "sessions": 97,
-  "tokens_out": 29126648,
-  "cost_eur": 0.0,                       // 0.0 until you set real rates in pricing.toml
-  "unpriced_models": ["claude-opus-4.7"],// models missing from the map, surfaced loudly
-  "unattributed_token_pct": 0.0,         // honesty gauge: tokens not tied to a named agent
-  "by_agent": [
-    { "agent": "main",       "tokens_out": 26875175 },
-    { "agent": "general-purpose", "tokens_out": 1813567 },
-    { "agent": "security",   "tokens_out": 49300 }
+  "events": 38483,
+  "sessions": 206,
+  "tokens_out": 36320161,
+  "cost_eur": 8187.32,                    // computed from pricing.toml (USD rates × fx → EUR)
+  "unpriced_models": ["gpt-5.4"],        // models missing from the map, surfaced loudly (cost is a floor)
+  "today_cost_eur": 409.96,
+  "by_harness": [
+    { "harness": "claude-code", "cost_eur": 6963.44 },
+    { "harness": "codex",       "cost_eur": 1215.15 },
+    { "harness": "opencode",    "cost_eur": 8.73 }
   ]
 }
 ```
 
-Cost reads `0.0` until you fill real rates in
-[`assets/pricing.toml`](./assets/pricing.toml) (or `~/.config/axon/pricing.toml`) — the
-placeholders are intentionally zero so they can never masquerade as truth.
+Rates are USD (from each provider's docs) converted to EUR via `fx_to_display` in
+[`assets/pricing.toml`](./assets/pricing.toml) (override at `~/.config/axon/pricing.toml`).
+A model missing from the map is flagged **`unpriced`** (its cost is a floor) rather than a
+silent €0; local/Ollama models are free. OpenCode's own per-message cost is used directly.
 
 ## How it works
 

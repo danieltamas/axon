@@ -9,6 +9,7 @@
 //!
 //! See `DESIGN.md` for the full build spec.
 
+pub mod config;
 pub mod ingest;
 pub mod model;
 pub mod normalize;

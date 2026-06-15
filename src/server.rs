@@ -176,8 +176,19 @@ const INDEX_HTML: &str = r##"<!doctype html>
   .rtk .right{text-align:right;color:var(--dim);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
   .rtk .right b{display:block;color:var(--grn);font-size:22px;font-weight:700;letter-spacing:0;font-variant-numeric:tabular-nums;text-shadow:0 0 12px rgba(84,240,160,.3)}
   .harness{margin-bottom:24px}
-  .harness .hd{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:10px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:9px}
-  .harness .hd::before{content:"";width:5px;height:5px;background:var(--grn);box-shadow:0 0 6px var(--grn);transform:rotate(45deg)}
+  .harness .hd, .spend .hd{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:10px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:9px}
+  .harness .hd::before, .spend .hd::before{content:"";width:5px;height:5px;background:var(--grn);box-shadow:0 0 6px var(--grn);transform:rotate(45deg)}
+  .spend{margin-bottom:24px}
+  .srow{display:grid;grid-template-columns:84px 160px 1fr 46px;gap:14px;align-items:center;padding:5px 0}
+  .slab{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+  .sval{font-variant-numeric:tabular-nums}
+  .sval .d{color:var(--dim)}
+  .smeter{height:8px;background:#0e1a16;border:1px solid var(--line);position:relative;overflow:hidden}
+  .smeter i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--grn-dim),var(--grn-glow));box-shadow:0 0 10px var(--grn-dim)}
+  .smeter.near i{background:linear-gradient(90deg,#b8860b,var(--amber));box-shadow:0 0 10px var(--amber)}
+  .smeter.over i{background:linear-gradient(90deg,#a32638,#e4495f);box-shadow:0 0 10px #e4495f}
+  .smeter.empty{opacity:.4}
+  .spct{text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
   .hbar{height:14px;display:flex;border:1px solid var(--line);background:#0a0f0d;overflow:hidden}
   .hbar .seg{height:100%}
   .hleg{display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--dim)}
@@ -212,6 +223,7 @@ const INDEX_HTML: &str = r##"<!doctype html>
   <div class="strip" aria-hidden="true"><svg viewBox="0 0 1000 36" preserveAspectRatio="none"><path id="sig"></path></svg></div>
   <div id="warn"></div>
   <div class="gauges" id="gauges"></div>
+  <div class="spend" id="spend"></div>
   <div id="rtk"></div>
   <div class="harness" id="harness"></div>
   <h2>Agents</h2>
@@ -250,6 +262,19 @@ function rows(items,key,max){
   }).join('');
 }
 
+function meterRow(label, spent, cap){
+  if (cap){
+    const pct = 100 * spent / cap;
+    const cls = spent > cap ? 'over' : (pct >= 80 ? 'near' : '');
+    return `<div class="srow"><div class="slab">${label}</div>`+
+      `<div class="sval">${eur(spent)} <span class="d">/ ${eur(cap)}</span></div>`+
+      `<div class="smeter ${cls}"><i style="width:${Math.min(100,pct)}%"></i></div>`+
+      `<div class="spct">${pct.toFixed(0)}%</div></div>`;
+  }
+  return `<div class="srow"><div class="slab">${label}</div><div class="sval">${eur(spent)}</div>`+
+    `<div class="smeter empty"></div><div class="spct">—</div></div>`;
+}
+
 let first = true;
 function render(s){
   if (!first) document.body.classList.add('loaded'); // suppress entry animation on refresh
@@ -258,6 +283,10 @@ function render(s){
     gauge('Tokens in', cmp(s.tokens_in)) + gauge('Tokens out', cmp(s.tokens_out)) +
     gauge('Lines edited', grp(s.loc_added)) + gauge('Cost', eur(s.cost_eur), 'cost');
   [...$('gauges').children].forEach((el,i)=>{ el.style.animationDelay=(i*55)+'ms'; });
+
+  $('spend').innerHTML = `<div class="hd">Spend</div>` +
+    meterRow('Today', s.today_cost_eur, s.budget_day_eur) +
+    meterRow('This week', s.week_cost_eur, s.budget_week_eur);
 
   if (s.rtk){
     const r=s.rtk, pct=r.saved_pct.toFixed(1);

@@ -1,0 +1,8 @@
+# Axon config — copy to ~/.config/axon/config.toml and edit. All keys are optional;
+# Axon runs fine with no config file.
+
+# Soft budget caps in the display currency (EUR). The dashboard's Spend panel and the CLI
+# show today/this-week spend against these, turning amber at 80% and red when exceeded.
+# Omit a line for "no cap" (spend is still shown, just without a meter).
+budget_eur_per_day = 20.0
+budget_eur_per_week = 100.0

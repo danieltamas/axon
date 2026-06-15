@@ -60,6 +60,12 @@ pub struct Summary {
     pub by_harness: Vec<HarnessStat>,
     /// Optional RTK (token-saver) analytics; `None` if rtk is not installed.
     pub rtk: Option<RtkSavings>,
+    /// Spend in the current local day / week (display currency).
+    pub today_cost_eur: f64,
+    pub week_cost_eur: f64,
+    /// Optional soft budget caps from `config.toml`.
+    pub budget_day_eur: Option<f64>,
+    pub budget_week_eur: Option<f64>,
 }
 
 pub fn build_summary(events: &[Event]) -> Summary {
@@ -80,6 +86,10 @@ pub fn build_summary(events: &[Event]) -> Summary {
         by_agent: Vec::new(),
         by_harness: Vec::new(),
         rtk: None,
+        today_cost_eur: 0.0,
+        week_cost_eur: 0.0,
+        budget_day_eur: None,
+        budget_week_eur: None,
     };
 
     let mut sessions = std::collections::BTreeSet::new();
@@ -180,4 +190,13 @@ pub fn build_summary(events: &[Event]) -> Summary {
     });
 
     s
+}
+
+/// Sum the cost of events at or after `since_ms` — used for today / this-week spend.
+pub fn windowed_cost(events: &[Event], since_ms: i64) -> f64 {
+    events
+        .iter()
+        .filter(|e| e.ts >= since_ms)
+        .map(|e| e.cost_eur)
+        .sum()
 }
