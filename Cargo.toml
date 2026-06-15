@@ -1,0 +1,37 @@
+[package]
+name = "axon"
+version = "0.1.0"
+edition = "2021"
+description = "Local, harness-agnostic observability for AI coding agents — one binary, in your browser."
+license = "MIT"
+repository = "" # TODO
+
+# Versions are indicative — run `cargo update` and pin during M1.
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tower-http = { version = "0.6", features = ["fs", "compression-gzip"] }
+rust-embed = "8"
+notify = "6"
+rusqlite = { version = "0.31", features = ["bundled"] } # bundled SQLite → static musl-friendly
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+webbrowser = "1"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] } # ISO-8601 → epoch ms
+blake3 = "1"                                        # idempotent Event ids (hash of message.id etc.)
+
+# Optional OTEL export. HTTP+rustls ONLY (never gRPC — keeps static musl builds clean). Off by default.
+opentelemetry = { version = "0.24", optional = true }
+opentelemetry-otlp = { version = "0.17", optional = true, default-features = false, features = ["http-proto", "reqwest-rustls"] }
+
+[features]
+default = []
+otel = ["dep:opentelemetry", "dep:opentelemetry-otlp"]
+
+[profile.release]
+lto = true
+strip = true

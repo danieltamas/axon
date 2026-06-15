@@ -1,0 +1,20 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node (UI dev). NOTE: ui/dist IS committed (embedded into the binary via rust-embed)
+/ui/node_modules
+/ui/.vite
+
+# Local runtime artifacts
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Keep tracked: Cargo.lock (binary crate), ui/dist (embedded assets)

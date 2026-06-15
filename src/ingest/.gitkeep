@@ -1,0 +1,1 @@
+# Per-harness parsers land here at M1/M2: mod.rs, claude.rs, codex.rs, opencode.rs, loc.rs (DESIGN.md §9, §12).
