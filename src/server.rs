@@ -172,6 +172,15 @@ const INDEX_HTML: &str = r##"<!doctype html>
   .rtk .meter i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--grn-dim),var(--grn-glow));box-shadow:0 0 14px var(--grn-dim)}
   .rtk .right{text-align:right;color:var(--dim);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
   .rtk .right b{display:block;color:var(--grn);font-size:22px;font-weight:700;letter-spacing:0;font-variant-numeric:tabular-nums;text-shadow:0 0 12px rgba(84,240,160,.3)}
+  .harness{margin-bottom:24px}
+  .harness .hd{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:10px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:9px}
+  .harness .hd::before{content:"";width:5px;height:5px;background:var(--grn);box-shadow:0 0 6px var(--grn);transform:rotate(45deg)}
+  .hbar{height:14px;display:flex;border:1px solid var(--line);background:#0a0f0d;overflow:hidden}
+  .hbar .seg{height:100%}
+  .hleg{display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--dim)}
+  .hleg .it{display:flex;align-items:center;gap:7px}
+  .hleg .dot{width:8px;height:8px;border-radius:2px}
+  .hleg b{color:var(--txt);font-weight:600;font-variant-numeric:tabular-nums}
   .warn{border:1px solid #4a3a14;background:#15110a;color:var(--amber);padding:11px 16px;margin-bottom:22px;font-size:12px}
   .warn b{color:#ffd279}
   h2{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin:26px 0 10px}
@@ -201,6 +210,7 @@ const INDEX_HTML: &str = r##"<!doctype html>
   <div id="warn"></div>
   <div class="gauges" id="gauges"></div>
   <div id="rtk"></div>
+  <div class="harness" id="harness"></div>
   <h2>Agents</h2>
   <table><thead><tr><th>Agent</th><th class="n">Tokens out</th><th class="n">Cost</th><th>Signal</th></tr></thead><tbody id="agents"></tbody></table>
   <h2>Models</h2>
@@ -252,6 +262,16 @@ fetch('/api/summary').then(r=>r.json()).then(s=>{
       `<div class="sub">${pct}% reduction · ${grp(r.commands)} commands proxied · ${cmp(r.input_tokens)} → ${cmp(r.output_tokens)}</div>`+
       `<div class="meter"><i style="width:${pct}%"></i></div></div>`+
       `<div class="right">efficiency<b>${pct}%</b></div></div>`;
+  }
+
+  if (s.by_harness && s.by_harness.length){
+    const HCOL = {'claude-code':'#54f0a0','codex':'#4fd6e6','opencode':'#f2b53d'};
+    const pal = ['#54f0a0','#4fd6e6','#f2b53d','#b78bff','#8b93a7'];
+    const hcol = (n,i) => HCOL[n] || pal[i%pal.length];
+    const total = s.by_harness.reduce((a,h)=>a+h.cost_eur,0) || 1;
+    const segs = s.by_harness.map((h,i)=>`<div class="seg" title="${esc(h.harness)} ${eur(h.cost_eur)}" style="width:${Math.max(1,100*h.cost_eur/total)}%;background:${hcol(h.harness,i)}"></div>`).join('');
+    const leg = s.by_harness.map((h,i)=>`<span class="it"><span class="dot" style="background:${hcol(h.harness,i)}"></span>${esc(h.harness)} <b>${eur(h.cost_eur)}</b> · ${cmp(h.tokens_out)} out</span>`).join('');
+    $('harness').innerHTML = `<div class="hd">Harnesses</div><div class="hbar">${segs}</div><div class="hleg">${leg}</div>`;
   }
 
   if (s.unpriced_models && s.unpriced_models.length){

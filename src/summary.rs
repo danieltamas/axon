@@ -31,6 +31,15 @@ pub struct AgentStat {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct HarnessStat {
+    pub harness: String,
+    pub events: u64,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cost_eur: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Summary {
     pub events: u64,
     pub sessions: u64,
@@ -48,6 +57,7 @@ pub struct Summary {
     pub unattributed_token_pct: f64,
     pub by_model: Vec<ModelStat>,
     pub by_agent: Vec<AgentStat>,
+    pub by_harness: Vec<HarnessStat>,
     /// Optional RTK (token-saver) analytics; `None` if rtk is not installed.
     pub rtk: Option<RtkSavings>,
 }
@@ -68,12 +78,14 @@ pub fn build_summary(events: &[Event]) -> Summary {
         unattributed_token_pct: 0.0,
         by_model: Vec::new(),
         by_agent: Vec::new(),
+        by_harness: Vec::new(),
         rtk: None,
     };
 
     let mut sessions = std::collections::BTreeSet::new();
     let mut models: BTreeMap<String, ModelStat> = BTreeMap::new();
     let mut agents: BTreeMap<String, AgentStat> = BTreeMap::new();
+    let mut harnesses: BTreeMap<String, HarnessStat> = BTreeMap::new();
     let mut unattributed_out: u64 = 0;
 
     for e in events {
@@ -117,6 +129,20 @@ pub fn build_summary(events: &[Event]) -> Summary {
         a.tokens_in += e.tokens_in;
         a.tokens_out += e.tokens_out;
         a.cost_eur += e.cost_eur;
+
+        let h = harnesses
+            .entry(e.harness.as_str().to_string())
+            .or_insert_with(|| HarnessStat {
+                harness: e.harness.as_str().to_string(),
+                events: 0,
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_eur: 0.0,
+            });
+        h.events += 1;
+        h.tokens_in += e.tokens_in;
+        h.tokens_out += e.tokens_out;
+        h.cost_eur += e.cost_eur;
     }
 
     s.sessions = sessions.len() as u64;
@@ -145,6 +171,12 @@ pub fn build_summary(events: &[Event]) -> Summary {
             .total_cmp(&a.cost_eur)
             .then(b.tokens_out.cmp(&a.tokens_out))
             .then(a.agent.cmp(&b.agent))
+    });
+    s.by_harness = harnesses.into_values().collect();
+    s.by_harness.sort_by(|a, b| {
+        b.cost_eur
+            .total_cmp(&a.cost_eur)
+            .then(a.harness.cmp(&b.harness))
     });
 
     s

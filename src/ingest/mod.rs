@@ -4,7 +4,9 @@
 //! M1 implements Claude Code only ([`claude`]); Codex/OpenCode arrive in M2.
 
 pub mod claude;
+pub mod codex;
 pub mod loc;
+pub mod opencode;
 
 use std::path::Path;
 
@@ -34,6 +36,9 @@ pub struct RawTurn {
     pub loc_removed: u32,
     pub loc_failed: bool,
     pub skills: Vec<String>,
+    /// Cost in USD already computed by the source harness (OpenCode), if any. When present,
+    /// `normalize` uses it (× fx) instead of computing from `pricing.toml`.
+    pub reported_cost_usd: Option<f64>,
 }
 
 /// Walk `~/.claude/projects/<ENCODED_CWD>/` and parse every main thread plus its
@@ -63,6 +68,34 @@ pub fn scan_claude_root(projects_dir: &Path) -> Vec<RawTurn> {
         }
     }
     turns
+}
+
+/// Walk `~/.codex/sessions/**/` and parse every Codex session `.jsonl`.
+pub fn scan_codex_root(sessions_dir: &Path) -> Vec<RawTurn> {
+    let mut turns = Vec::new();
+    let mut stack = vec![sessions_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "jsonl") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex");
+                    turns.extend(codex::parse_session(&content, stem));
+                }
+            }
+        }
+    }
+    turns
+}
+
+/// Read all OpenCode assistant turns from its SQLite database.
+pub fn scan_opencode_db(db_path: &Path) -> Vec<RawTurn> {
+    opencode::parse_db(db_path)
 }
 
 fn scan_subagents(dir: &Path, turns: &mut Vec<RawTurn>) {

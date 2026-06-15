@@ -17,4 +17,8 @@
 .idea/
 .vscode/
 
+# Local dev / screenshot artifacts
+.playwright-mcp/
+axon-*.png
+
 # Keep tracked: Cargo.lock (binary crate), ui/dist (embedded assets)

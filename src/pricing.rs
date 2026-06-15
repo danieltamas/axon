@@ -71,6 +71,11 @@ impl Pricing {
             .expect("bundled assets/pricing.toml must parse")
     }
 
+    /// The USD→display-currency multiplier (1.0 if unset).
+    pub fn fx(&self) -> f64 {
+        self.fx_to_display.unwrap_or(1.0)
+    }
+
     /// A local/self-hosted model (Ollama, local Qwen): free, but **not** "unpriced".
     pub fn is_local(&self, model: &str) -> bool {
         self.local

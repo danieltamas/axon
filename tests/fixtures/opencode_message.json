@@ -1,0 +1,1 @@
+{"role":"assistant","agent":"build","mode":"build","modelID":"gpt-5.5","providerID":"openai","cost":0.0123,"tokens":{"total":900,"input":700,"output":150,"reasoning":50,"cache":{"read":40,"write":20}},"time":{"created":1781000000000,"completed":1781000005000},"path":{"cwd":"/repo","root":"/repo"},"finish":"stop"}

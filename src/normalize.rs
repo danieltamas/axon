@@ -22,14 +22,21 @@ pub fn to_event(turn: &RawTurn, pricing: &Pricing) -> anyhow::Result<Event> {
     let duration_ms = (last_ms > first_ms).then(|| (last_ms - first_ms) as u64);
 
     let model = canonicalize_model(&turn.model_raw);
-    let buckets = Buckets {
-        input: turn.tokens_in,
-        output: turn.tokens_out,
-        cache_read: turn.cache_read,
-        cache_write_5m: turn.cache_write_5m,
-        cache_write_1h: turn.cache_write_1h,
+    // Prefer a cost the source harness already computed (OpenCode); otherwise compute from
+    // the pricing table. A harness-reported cost is, by definition, priced.
+    let (cost_eur, unpriced) = match turn.reported_cost_usd {
+        Some(usd) => (usd * pricing.fx(), false),
+        None => pricing.cost(
+            &model,
+            &Buckets {
+                input: turn.tokens_in,
+                output: turn.tokens_out,
+                cache_read: turn.cache_read,
+                cache_write_5m: turn.cache_write_5m,
+                cache_write_1h: turn.cache_write_1h,
+            },
+        ),
     };
-    let (cost_eur, unpriced) = pricing.cost(&model, &buckets);
 
     Ok(Event {
         id: event_id(turn),

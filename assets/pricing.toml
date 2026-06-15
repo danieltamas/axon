@@ -52,11 +52,19 @@ cache_read = 1.0
 cache_write_5m = 12.5
 cache_write_1h = 20.0
 
-# Codex / OpenAI models (e.g. gpt-5.5) are intentionally NOT listed yet: real rates land in
-# M2 after the Codex log shape is verified. Until then they surface as `unpriced` (loud) —
-# never a silent €0. (A 0.0 entry would masquerade as "free", which is wrong for a paid model.)
-# OpenCode → Anthropic models reuse the Claude rates above; OpenCode → OpenAI is unpriced
-# until M2; OpenCode → Ollama is free via the prefixes below.
+# OpenAI (Codex). gpt-5.5: $5 input / $0.50 cached / $30 output per 1M (no cache-write fee).
+# Source: OpenAI API model docs (developers.openai.com/api/docs/models/gpt-5.5), Jun 2026.
+[models."gpt-5.5"]
+input = 5.0
+output = 30.0
+cache_read = 0.5
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+
+# Note: OpenCode records an exact per-message `cost` itself (verified), so Axon uses that
+# directly for OpenCode turns — its many gateway models (minimax, glm, kimi, big-pickle…)
+# have no researchable public rate, and OpenCode already computed them. Claude/Codex cost
+# is computed here from these rates. OpenCode → Ollama is free via the prefixes below.
 
 # Local/self-hosted models (Ollama, local Qwen via OpenCode): free, NOT "unpriced".
 # Any model id containing one of these => cost 0.0, flagged as "local".

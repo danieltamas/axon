@@ -80,7 +80,9 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
 /// Scan `~/.claude/projects`, normalize, persist to SQLite, and aggregate.
 fn scan_to_summary() -> anyhow::Result<Summary> {
     let pricing = load_pricing();
-    let turns = ingest::scan_claude_root(&claude_projects_dir());
+    let mut turns = ingest::scan_claude_root(&claude_projects_dir());
+    turns.extend(ingest::scan_codex_root(&codex_sessions_dir()));
+    turns.extend(ingest::scan_opencode_db(&opencode_db_path()));
 
     let mut events = Vec::with_capacity(turns.len());
     let mut skipped = 0usize;
@@ -141,6 +143,14 @@ fn print_cli_summary(s: &Summary, port: u16) {
             r.saved_pct,
             commafy(r.commands)
         );
+    }
+    if !s.by_harness.is_empty() {
+        let parts: Vec<String> = s
+            .by_harness
+            .iter()
+            .map(|h| format!("{} {}", h.harness, eur(h.cost_eur)))
+            .collect();
+        println!("  Harnesses     {}", parts.join(" · "));
     }
     if !top_agents.is_empty() {
         println!("  Top agents    {}", top_agents.join(", "));
@@ -217,6 +227,14 @@ fn data_dir() -> std::path::PathBuf {
 
 fn claude_projects_dir() -> std::path::PathBuf {
     home().join(".claude").join("projects")
+}
+
+fn codex_sessions_dir() -> std::path::PathBuf {
+    home().join(".codex").join("sessions")
+}
+
+fn opencode_db_path() -> std::path::PathBuf {
+    data_dir().join("opencode").join("opencode.db")
 }
 
 fn db_path() -> std::path::PathBuf {
