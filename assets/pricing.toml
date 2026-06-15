@@ -1,53 +1,64 @@
-# Axon pricing table — rates are per 1,000,000 tokens.
-# VERIFY every rate and set `priced_as_of` before trusting cost. Unknown models => "unpriced"
-# (cost is a FLOOR, surfaced loudly in the UI — never a silent zero). Local models => free.
-# Users can override this file at ~/.config/axon/pricing.toml. (DESIGN.md §8, Appendix B)
+# Axon pricing table — rates are per 1,000,000 tokens, entered in USD.
+# Cost is displayed in EUR via `fx_to_display` (DESIGN.md §8, Appendix B).
+# Users can override this file at ~/.config/axon/pricing.toml.
+#
+# Per-model rates from Anthropic's published pricing (input/output), with the
+# standard cache multipliers applied: cache_read = 0.10x input,
+# cache_write_5m = 1.25x input, cache_write_1h = 2.00x input.
+# Unknown models => "unpriced" (cost is a FLOOR, surfaced loudly, never a silent zero).
+# Local models => free.
 
 priced_as_of = "2026-06-15"  # shown in the UI; bump when you update rates
 display_currency = "EUR"
-# If the rates below are entered in USD, set this to convert for display:
-# fx_to_display = 0.92
+# Rates below are in USD; this converts them to the display currency (EUR).
+# NOTE: this is an approximate USD->EUR rate — confirm/update it for accurate cost.
+fx_to_display = 0.92
 
 # Per model: input, output, cache_read, cache_write_5m, cache_write_1h
-# (cache READ is far cheaper than cache WRITE — keep them separate; DESIGN.md §8).
-# TODO: fill real rates. 0.0 placeholders below are intentionally wrong so they can't masquerade as truth.
+# (cache READ is far cheaper than cache WRITE — kept separate; DESIGN.md §8).
 
 [models."claude-opus-4.8"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write_5m = 0.0
-cache_write_1h = 0.0
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write_5m = 6.25
+cache_write_1h = 10.0
+
+[models."claude-opus-4.7"]
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write_5m = 6.25
+cache_write_1h = 10.0
 
 [models."claude-sonnet-4.6"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write_5m = 0.0
-cache_write_1h = 0.0
+input = 3.0
+output = 15.0
+cache_read = 0.3
+cache_write_5m = 3.75
+cache_write_1h = 6.0
 
 [models."claude-haiku-4.5"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write_5m = 0.0
-cache_write_1h = 0.0
+input = 1.0
+output = 5.0
+cache_read = 0.1
+cache_write_5m = 1.25
+cache_write_1h = 2.0
 
 [models."claude-fable-5"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write_5m = 0.0
-cache_write_1h = 0.0
+input = 10.0
+output = 50.0
+cache_read = 1.0
+cache_write_5m = 12.5
+cache_write_1h = 20.0
 
-[models."gpt-5.5"]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write_5m = 0.0
-cache_write_1h = 0.0
+# Codex / OpenAI models (e.g. gpt-5.5) are intentionally NOT listed yet: real rates land in
+# M2 after the Codex log shape is verified. Until then they surface as `unpriced` (loud) —
+# never a silent €0. (A 0.0 entry would masquerade as "free", which is wrong for a paid model.)
+# OpenCode → Anthropic models reuse the Claude rates above; OpenCode → OpenAI is unpriced
+# until M2; OpenCode → Ollama is free via the prefixes below.
 
 # Local/self-hosted models (Ollama, local Qwen via OpenCode): free, NOT "unpriced".
-# Any model id beginning with one of these prefixes => cost 0.0, flagged as "local".
+# Any model id containing one of these => cost 0.0, flagged as "local".
 [local]
 free_prefixes = ["local:", "ollama", "gamerina-ollama"]

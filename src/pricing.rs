@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn known_model_with_zero_rates_is_priced_not_unpriced() {
+    fn known_model_is_priced() {
         let p = Pricing::bundled();
         let (cost, unpriced) = p.cost(
             "claude-sonnet-4.6",
@@ -118,11 +118,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(cost, 0.0);
+        // 850 * 15.0/1e6 (output) * 0.92 (fx) = 0.011730 EUR
         assert!(
-            !unpriced,
-            "a model present in the map is priced, even at 0.0 placeholder rates"
+            (cost - 850.0 * 15.0 / 1_000_000.0 * 0.92).abs() < 1e-9,
+            "got {cost}"
         );
+        assert!(!unpriced, "a model present in the map is priced");
     }
 
     #[test]

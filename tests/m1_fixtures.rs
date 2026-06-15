@@ -126,7 +126,11 @@ fn gate4_idempotent_upsert() {
 #[test]
 fn gate5_cost_priced_vs_unpriced() {
     let e = main_event();
-    assert_eq!(e.cost_eur, 0.0, "placeholder rates → 0.0");
+    assert!(
+        e.cost_eur > 0.0,
+        "opus-4.8 is priced → positive cost, never a silent €0 (got {})",
+        e.cost_eur
+    );
     assert!(
         !e.unpriced,
         "model present in the map is priced, never silently unpriced"
