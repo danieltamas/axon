@@ -1,8 +1,8 @@
 # Prebuilt Axon binaries
 
 Self-contained, single-file builds of Axon — the embedded dashboard, SQLite, and all parsers
-are baked in. No runtime dependencies, no toolchain, no Node. Just download, make executable,
-and run; bare `axon` scans your logs, opens the browser, and serves the live dashboard.
+are baked in. No runtime dependencies, no toolchain, no Node. Install one as the `axon` command
+(below) and bare `axon` scans your logs, opens the browser, and serves the live dashboard.
 
 | File | Platform | Notes |
 |---|---|---|
@@ -11,9 +11,14 @@ and run; bare `axon` scans your logs, opens the browser, and serves the live das
 | `axon-linux-arm64` | Linux aarch64 (glibc) | Graviton, Raspberry Pi, Asahi, ARM cloud |
 
 ```bash
-chmod +x axon-macos && ./axon-macos          # → http://127.0.0.1:7777
-./axon-macos --scan-only                      # headless JSON, no server
-./axon-macos --port 8080 --no-open            # custom port, don't open a browser
+# Install as the `axon` command (pick the file for your platform):
+sudo install -m 0755 axon-macos /usr/local/bin/axon   # no sudo? use ~/.local/bin/axon
+axon                                                   # → http://127.0.0.1:7777
+axon --scan-only                                       # headless JSON, no server
+axon --port 8080 --no-open                             # custom port, don't open a browser
+
+# Or run it in place without installing:
+chmod +x axon-macos && ./axon-macos
 ```
 
 Verify integrity against `SHA256SUMS`:

@@ -57,24 +57,30 @@ top — the gap nobody fills.
 ## Install
 
 Prebuilt, self-contained binaries live in [`bin/`](./bin/) — no toolchain needed, nothing to
-configure. Download one, make it executable, run it:
+configure. Each command below downloads one and installs it as the `axon` command on your
+`PATH`, so afterwards you just type **`axon`** anywhere and the dashboard starts.
 
 ```bash
 # macOS (universal — Apple Silicon + Intel)
-curl -fsSLO https://github.com/danieltamas/axon/raw/main/bin/axon-macos
-chmod +x axon-macos
-xattr -d com.apple.quarantine axon-macos 2>/dev/null   # unsigned: clear Gatekeeper quarantine
-./axon-macos                                            # scans your logs, opens the dashboard
+curl -fsSL https://github.com/danieltamas/axon/raw/main/bin/axon-macos -o /tmp/axon
+xattr -d com.apple.quarantine /tmp/axon 2>/dev/null   # unsigned: clear Gatekeeper quarantine
+sudo install -m 0755 /tmp/axon /usr/local/bin/axon
+axon                                                  # scans your logs, opens the dashboard
 
-# Linux (x86_64 — use axon-linux-arm64 on ARM: Graviton, Pi, Asahi)
-curl -fsSLO https://github.com/danieltamas/axon/raw/main/bin/axon-linux-x64
-chmod +x axon-linux-x64
-./axon-linux-x64
+# Linux x86_64 (use axon-linux-arm64 on ARM: Graviton, Pi, Asahi)
+curl -fsSL https://github.com/danieltamas/axon/raw/main/bin/axon-linux-x64 -o /tmp/axon
+sudo install -m 0755 /tmp/axon /usr/local/bin/axon
+axon
 ```
 
-Checksums: [`bin/SHA256SUMS`](./bin/SHA256SUMS). Or build from source (needs
-[Rust](https://rustup.rs)): `cargo build --release` → `target/release/axon`. The `cargo install`
-/ Homebrew / `curl | sh` paths come with the first tagged GitHub release.
+**No `sudo`?** Install into a user dir that's already on your `PATH` instead — e.g.
+`install -m 0755 /tmp/axon ~/.local/bin/axon`, or `~/.cargo/bin/axon` if you have Rust. (If the
+chosen dir isn't on your `PATH` yet, add it: `export PATH="$HOME/.local/bin:$PATH"`.)
+
+Checksums: [`bin/SHA256SUMS`](./bin/SHA256SUMS). Prefer to build it yourself? With
+[Rust](https://rustup.rs) installed, clone this repo and run `cargo install --path .` — that
+compiles and drops the `axon` command into `~/.cargo/bin`. The Homebrew / `curl | sh` one-liners
+arrive with the first tagged GitHub release.
 
 ## Usage
 
