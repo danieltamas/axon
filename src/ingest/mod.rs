@@ -3,6 +3,7 @@
 //!
 //! M1 implements Claude Code only ([`claude`]); Codex/OpenCode arrive in M2.
 
+pub mod ccflare;
 pub mod claude;
 pub mod codex;
 pub mod loc;
@@ -96,6 +97,12 @@ pub fn scan_codex_root(sessions_dir: &Path) -> Vec<RawTurn> {
 /// Read all OpenCode assistant turns from its SQLite database.
 pub fn scan_opencode_db(db_path: &Path) -> Vec<RawTurn> {
     opencode::parse_db(db_path)
+}
+
+/// Read all completion requests from a ccflare-family proxy DB (better-ccflare / ccflare).
+/// Each priced request becomes one turn; non-completion rows (token refresh, health) are skipped.
+pub fn scan_ccflare_db(db_path: &Path) -> Vec<RawTurn> {
+    ccflare::parse_db(db_path)
 }
 
 fn scan_subagents(dir: &Path, turns: &mut Vec<RawTurn>) {

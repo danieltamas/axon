@@ -106,7 +106,9 @@ fn spawn_refresher(state: Arc<server::AppState>) {
         let mut watcher = watcher.ok();
         if let Some(w) = watcher.as_mut() {
             use notify::{RecursiveMode, Watcher};
-            for path in [claude_projects_dir(), codex_sessions_dir(), opencode_dir()] {
+            let mut roots = vec![claude_projects_dir(), codex_sessions_dir(), opencode_dir()];
+            roots.extend(ccflare_watch_dirs());
+            for path in roots {
                 let _ = w.watch(&path, RecursiveMode::Recursive);
             }
         }
@@ -136,6 +138,11 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     let mut turns = ingest::scan_claude_root(&claude_projects_dir());
     turns.extend(ingest::scan_codex_root(&codex_sessions_dir()));
     turns.extend(ingest::scan_opencode_db(&opencode_db_path()));
+    for db in ccflare_db_paths() {
+        if db.exists() {
+            turns.extend(ingest::scan_ccflare_db(&db));
+        }
+    }
 
     let mut events = Vec::with_capacity(turns.len());
     let mut skipped = 0usize;
@@ -347,6 +354,41 @@ fn opencode_dir() -> std::path::PathBuf {
 
 fn opencode_db_path() -> std::path::PathBuf {
     opencode_dir().join("opencode.db")
+}
+
+/// Candidate ccflare-family proxy DBs, in priority order: explicit env overrides first, then
+/// the better-ccflare and ccflare defaults. Each existing one is scanned; missing ones are
+/// skipped. Duplicates (same canonical path) are de-duped so a request is never counted twice.
+fn ccflare_db_paths() -> Vec<std::path::PathBuf> {
+    let mut raw: Vec<std::path::PathBuf> = Vec::new();
+    for var in ["BETTER_CCFLARE_DB_PATH", "CCFLARE_DB_PATH"] {
+        if let Some(p) = std::env::var_os(var) {
+            raw.push(p.into());
+        }
+    }
+    raw.push(
+        config_dir()
+            .join("better-ccflare")
+            .join("better-ccflare.db"),
+    );
+    raw.push(config_dir().join("ccflare").join("ccflare.db"));
+    raw.push(data_dir().join("ccflare").join("ccflare.db"));
+
+    let mut seen = std::collections::HashSet::new();
+    raw.into_iter()
+        .filter(|p| {
+            let key = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+            seen.insert(key)
+        })
+        .collect()
+}
+
+/// Parent dirs of the ccflare candidate DBs, for the live file-watch.
+fn ccflare_watch_dirs() -> Vec<std::path::PathBuf> {
+    ccflare_db_paths()
+        .iter()
+        .filter_map(|p| p.parent().map(|d| d.to_path_buf()))
+        .collect()
 }
 
 fn db_path() -> std::path::PathBuf {

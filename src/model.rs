@@ -10,6 +10,8 @@ pub enum Harness {
     ClaudeCode,
     Codex,
     OpenCode,
+    /// A ccflare-family proxy (better-ccflare / ccflare) — its `requests` table, not a harness log.
+    Ccflare,
 }
 
 impl Harness {
@@ -19,6 +21,7 @@ impl Harness {
             Harness::ClaudeCode => "claude-code",
             Harness::Codex => "codex",
             Harness::OpenCode => "opencode",
+            Harness::Ccflare => "ccflare",
         }
     }
 
@@ -28,6 +31,7 @@ impl Harness {
             "claude-code" => Some(Harness::ClaudeCode),
             "codex" => Some(Harness::Codex),
             "opencode" => Some(Harness::OpenCode),
+            "ccflare" => Some(Harness::Ccflare),
             _ => None,
         }
     }
@@ -122,7 +126,12 @@ mod tests {
 
     #[test]
     fn harness_str_roundtrip() {
-        for h in [Harness::ClaudeCode, Harness::Codex, Harness::OpenCode] {
+        for h in [
+            Harness::ClaudeCode,
+            Harness::Codex,
+            Harness::OpenCode,
+            Harness::Ccflare,
+        ] {
             assert_eq!(Harness::from_tag(h.as_str()), Some(h));
         }
     }
