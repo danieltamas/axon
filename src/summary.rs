@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::model::Event;
+use crate::model::{Event, PricingKind};
 use crate::rtk::RtkSavings;
 
 #[derive(Debug, Clone, Serialize)]
@@ -17,6 +17,8 @@ pub struct ModelStat {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub cost_eur: f64,
+    pub cost_credits: Option<f64>,
+    pub pricing_kind: String,
     pub unpriced: bool,
 }
 
@@ -49,6 +51,8 @@ pub struct RecentEvent {
     pub model: String,
     pub tokens_out: u64,
     pub cost_eur: f64,
+    pub cost_credits: Option<f64>,
+    pub pricing_kind: String,
     pub duration_ms: Option<u64>,
 }
 
@@ -68,6 +72,8 @@ pub fn recent_events<'a>(
             model: e.model.clone(),
             tokens_out: e.tokens_out,
             cost_eur: e.cost_eur,
+            cost_credits: e.cost_credits,
+            pricing_kind: e.pricing_kind.as_str().to_string(),
             duration_ms: e.duration_ms,
         })
         .collect()
@@ -85,8 +91,11 @@ pub struct Summary {
     pub loc_added: u64,
     pub loc_removed: u64,
     pub cost_eur: f64,
+    pub total_credits: f64,
     /// Canonical ids of models missing from the pricing map (their cost is a floor).
     pub unpriced_models: Vec<String>,
+    pub credit_priced_models: Vec<String>,
+    pub preview_priced_models: Vec<String>,
     /// Honesty gauge (§15.3): % of output tokens attributed to `unknown-sub`/`unknown`.
     pub unattributed_token_pct: f64,
     pub by_model: Vec<ModelStat>,
@@ -119,7 +128,10 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         loc_added: 0,
         loc_removed: 0,
         cost_eur: 0.0,
+        total_credits: 0.0,
         unpriced_models: Vec::new(),
+        credit_priced_models: Vec::new(),
+        preview_priced_models: Vec::new(),
         unattributed_token_pct: 0.0,
         by_model: Vec::new(),
         by_agent: Vec::new(),
@@ -138,6 +150,8 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
     let mut models: BTreeMap<String, ModelStat> = BTreeMap::new();
     let mut agents: BTreeMap<String, AgentStat> = BTreeMap::new();
     let mut harnesses: BTreeMap<String, HarnessStat> = BTreeMap::new();
+    let mut credit_models = std::collections::BTreeSet::new();
+    let mut preview_models = std::collections::BTreeSet::new();
     let mut unattributed_out: u64 = 0;
 
     for e in events {
@@ -150,6 +164,7 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         s.loc_added += e.loc_added as u64;
         s.loc_removed += e.loc_removed as u64;
         s.cost_eur += e.cost_eur;
+        s.total_credits += e.cost_credits.unwrap_or(0.0);
         sessions.insert(e.session_id.clone());
 
         if matches!(e.agent.as_str(), "unknown-sub" | "unknown") {
@@ -162,13 +177,26 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
             tokens_in: 0,
             tokens_out: 0,
             cost_eur: 0.0,
+            cost_credits: None,
+            pricing_kind: e.pricing_kind.as_str().to_string(),
             unpriced: e.unpriced,
         });
         m.events += 1;
         m.tokens_in += e.tokens_in;
         m.tokens_out += e.tokens_out;
         m.cost_eur += e.cost_eur;
+        m.cost_credits = Some(m.cost_credits.unwrap_or(0.0) + e.cost_credits.unwrap_or(0.0))
+            .filter(|v| *v > 0.0);
+        if m.pricing_kind != e.pricing_kind.as_str() {
+            m.pricing_kind = "mixed".to_string();
+        }
         m.unpriced |= e.unpriced;
+        if e.pricing_kind == PricingKind::ChatgptIncluded {
+            credit_models.insert(e.model.clone());
+        }
+        if e.pricing_kind == PricingKind::ChatgptPreview {
+            preview_models.insert(e.model.clone());
+        }
 
         let a = agents.entry(e.agent.clone()).or_insert_with(|| AgentStat {
             agent: e.agent.clone(),
@@ -204,6 +232,8 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         .filter(|m| m.unpriced)
         .map(|m| m.model.clone())
         .collect();
+    s.credit_priced_models = credit_models.into_iter().collect();
+    s.preview_priced_models = preview_models.into_iter().collect();
     s.unattributed_token_pct = if s.tokens_out == 0 {
         0.0
     } else {
@@ -215,6 +245,11 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
     s.by_model.sort_by(|a, b| {
         b.cost_eur
             .total_cmp(&a.cost_eur)
+            .then(
+                b.cost_credits
+                    .unwrap_or(0.0)
+                    .total_cmp(&a.cost_credits.unwrap_or(0.0)),
+            )
             .then(b.tokens_out.cmp(&a.tokens_out))
             .then(a.model.cmp(&b.model))
     });

@@ -267,6 +267,19 @@ fn print_cli_summary(s: &Summary, port: u16) {
             s.unpriced_models.join(", ")
         );
     }
+    if !s.credit_priced_models.is_empty() {
+        println!(
+            "  Credits       {}  ({:.2} ChatGPT credits, included-plan estimate)",
+            s.credit_priced_models.join(", "),
+            s.total_credits
+        );
+    }
+    if !s.preview_priced_models.is_empty() {
+        println!(
+            "  Preview       {}  (separate research-preview limit, no exact monetary rate)",
+            s.preview_priced_models.join(", ")
+        );
+    }
     println!("  Dashboard →   http://127.0.0.1:{port}");
 }
 

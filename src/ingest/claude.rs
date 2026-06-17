@@ -193,6 +193,7 @@ fn build_turn(
         loc_removed: loc.removed,
         loc_failed: loc.failed,
         skills: loc.skills,
+        chatgpt_plan_type: None,
         reported_cost_usd: None,
     })
 }

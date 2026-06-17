@@ -14,6 +14,42 @@ pub enum Harness {
     Ccflare,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PricingKind {
+    ApiMoney,
+    ChatgptIncluded,
+    ChatgptPreview,
+    ReportedCost,
+    LocalFree,
+    Unknown,
+}
+
+impl PricingKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PricingKind::ApiMoney => "api-money",
+            PricingKind::ChatgptIncluded => "chatgpt-included",
+            PricingKind::ChatgptPreview => "chatgpt-preview",
+            PricingKind::ReportedCost => "reported-cost",
+            PricingKind::LocalFree => "local-free",
+            PricingKind::Unknown => "unknown",
+        }
+    }
+
+    pub fn from_tag(s: &str) -> Option<Self> {
+        match s {
+            "api-money" => Some(PricingKind::ApiMoney),
+            "chatgpt-included" => Some(PricingKind::ChatgptIncluded),
+            "chatgpt-preview" => Some(PricingKind::ChatgptPreview),
+            "reported-cost" => Some(PricingKind::ReportedCost),
+            "local-free" => Some(PricingKind::LocalFree),
+            "unknown" => Some(PricingKind::Unknown),
+            _ => None,
+        }
+    }
+}
+
 impl Harness {
     /// Stable string form (used as the SQLite column value and the id hash prefix).
     pub fn as_str(&self) -> &'static str {
@@ -71,6 +107,9 @@ pub struct Event {
     pub skills: Vec<String>,
     /// Computed at ingest from `pricing.toml`; 0.0 for local models.
     pub cost_eur: f64,
+    /// ChatGPT-plan credit estimate when the run is included/credit-priced rather than billed in EUR.
+    pub cost_credits: Option<f64>,
+    pub pricing_kind: PricingKind,
     /// Model id missing from the pricing map → cost is a floor, surface loudly.
     pub unpriced: bool,
 }
@@ -133,6 +172,20 @@ mod tests {
             Harness::Ccflare,
         ] {
             assert_eq!(Harness::from_tag(h.as_str()), Some(h));
+        }
+    }
+
+    #[test]
+    fn pricing_kind_roundtrip() {
+        for k in [
+            PricingKind::ApiMoney,
+            PricingKind::ChatgptIncluded,
+            PricingKind::ChatgptPreview,
+            PricingKind::ReportedCost,
+            PricingKind::LocalFree,
+            PricingKind::Unknown,
+        ] {
+            assert_eq!(PricingKind::from_tag(k.as_str()), Some(k));
         }
     }
 }

@@ -37,6 +37,7 @@ pub struct RawTurn {
     pub loc_removed: u32,
     pub loc_failed: bool,
     pub skills: Vec<String>,
+    pub chatgpt_plan_type: Option<String>,
     /// Cost in USD already computed by the source harness (OpenCode), if any. When present,
     /// `normalize` uses it (× fx) instead of computing from `pricing.toml`.
     pub reported_cost_usd: Option<f64>,

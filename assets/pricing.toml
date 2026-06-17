@@ -69,6 +69,13 @@ cache_read = 0.5
 cache_write_5m = 0.0
 cache_write_1h = 0.0
 
+[models."gpt-5.4"]
+input = 2.5
+output = 15.0
+cache_read = 0.25
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+
 # Note: OpenCode records an exact per-message `cost` itself (verified), so Axon uses that
 # directly for OpenCode turns — its many gateway models (minimax, glm, kimi, big-pickle…)
 # have no researchable public rate, and OpenCode already computed them. Claude/Codex cost

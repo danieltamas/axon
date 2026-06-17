@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::Context;
 use rusqlite::{params, Connection};
 
-use crate::model::{Event, Harness};
+use crate::model::{Event, Harness, PricingKind};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS events (
@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS events (
     loc_failed      INTEGER NOT NULL,
     skills          TEXT NOT NULL,
     cost_eur        REAL NOT NULL,
+    cost_credits    REAL,
+    pricing_kind    TEXT NOT NULL DEFAULT 'unknown',
     unpriced        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
@@ -59,6 +61,7 @@ impl Store {
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )?;
         conn.execute_batch(SCHEMA)?;
+        migrate_schema(&conn)?;
         if path != ":memory:" {
             set_mode(Path::new(path), 0o600);
         }
@@ -91,7 +94,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, ts, harness, project, agent, is_subagent, model, session_id, \
              tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h, duration_ms, \
-             loc_added, loc_removed, loc_failed, skills, cost_eur, unpriced \
+             loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced \
              FROM events ORDER BY id",
         )?;
         let rows = stmt.query_map([], row_to_event)?;
@@ -104,8 +107,8 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
     conn.execute(
         "INSERT INTO events (id, ts, harness, project, agent, is_subagent, model, session_id, \
             tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h, duration_ms, \
-            loc_added, loc_removed, loc_failed, skills, cost_eur, unpriced) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20) \
+            loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22) \
          ON CONFLICT(id) DO UPDATE SET \
             ts=excluded.ts, harness=excluded.harness, project=excluded.project, \
             agent=excluded.agent, is_subagent=excluded.is_subagent, model=excluded.model, \
@@ -114,7 +117,9 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
             cache_write_5m=excluded.cache_write_5m, cache_write_1h=excluded.cache_write_1h, \
             duration_ms=excluded.duration_ms, loc_added=excluded.loc_added, \
             loc_removed=excluded.loc_removed, loc_failed=excluded.loc_failed, \
-            skills=excluded.skills, cost_eur=excluded.cost_eur, unpriced=excluded.unpriced",
+            skills=excluded.skills, cost_eur=excluded.cost_eur, \
+            cost_credits=excluded.cost_credits, pricing_kind=excluded.pricing_kind, \
+            unpriced=excluded.unpriced",
         params![
             e.id,
             e.ts,
@@ -135,6 +140,8 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
             e.loc_failed as i64,
             skills,
             e.cost_eur,
+            e.cost_credits,
+            e.pricing_kind.as_str(),
             e.unpriced as i64,
         ],
     )?;
@@ -144,6 +151,7 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
 fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
     let harness_str: String = r.get(2)?;
     let skills_json: String = r.get(17)?;
+    let pricing_kind: String = r.get(20)?;
     Ok(Event {
         id: r.get(0)?,
         ts: r.get(1)?,
@@ -164,8 +172,35 @@ fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
         loc_failed: r.get::<_, i64>(16)? != 0,
         skills: serde_json::from_str(&skills_json).unwrap_or_default(),
         cost_eur: r.get(18)?,
-        unpriced: r.get::<_, i64>(19)? != 0,
+        cost_credits: r.get(19)?,
+        pricing_kind: PricingKind::from_tag(&pricing_kind).unwrap_or(PricingKind::Unknown),
+        unpriced: r.get::<_, i64>(21)? != 0,
     })
+}
+
+fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
+    if !has_column(conn, "events", "cost_credits")? {
+        conn.execute("ALTER TABLE events ADD COLUMN cost_credits REAL", [])?;
+    }
+    if !has_column(conn, "events", "pricing_kind")? {
+        conn.execute(
+            "ALTER TABLE events ADD COLUMN pricing_kind TEXT NOT NULL DEFAULT 'unknown'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
+    let pragma = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&pragma)?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(unix)]

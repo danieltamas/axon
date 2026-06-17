@@ -117,6 +117,7 @@ pub fn turn_from_data(id: &str, session_id: &str, fallback_ms: i64, d: &Value) -
         loc_removed: 0,
         loc_failed: false,
         skills: Vec::new(),
+        chatgpt_plan_type: None,
         // OpenCode computes an exact cost (USD); trust it over any rate table.
         reported_cost_usd: d.get("cost").and_then(Value::as_f64),
     })
