@@ -53,6 +53,11 @@ pub struct Pricing {
     local: LocalSection,
 }
 
+/// Claude Code's sentinel model id for locally-synthesized assistant messages (e.g. the
+/// `<synthetic>` compaction/summary turns) that never hit the API. It is not a billable
+/// model and not an *unknown* one, so it must be free — never flagged `unpriced`.
+pub const SYNTHETIC_MODEL: &str = "<synthetic>";
+
 impl Pricing {
     pub fn from_toml_str(s: &str) -> anyhow::Result<Self> {
         toml::from_str(s).context("parse pricing.toml")
@@ -87,7 +92,8 @@ impl Pricing {
     /// Compute `(cost, unpriced)` for a canonical model id and its token buckets.
     /// The returned cost is already in the display currency (via `fx_to_display`).
     pub fn cost(&self, model: &str, b: &Buckets) -> (f64, bool) {
-        if self.is_local(model) {
+        // `<synthetic>` and local/self-hosted models are free, NOT "unpriced".
+        if model == SYNTHETIC_MODEL || self.is_local(model) {
             return (0.0, false);
         }
         let Some(r) = self.models.get(model) else {
@@ -181,5 +187,37 @@ cache_write_1h = 0.0
         );
         assert_eq!(cost, 0.0);
         assert!(!unpriced);
+    }
+
+    #[test]
+    fn synthetic_is_free_not_unpriced() {
+        let p = Pricing::bundled();
+        let (cost, unpriced) = p.cost(
+            "<synthetic>",
+            &Buckets {
+                output: 123,
+                ..Default::default()
+            },
+        );
+        assert_eq!(cost, 0.0);
+        assert!(
+            !unpriced,
+            "<synthetic> is a local sentinel, not an unknown model"
+        );
+    }
+
+    #[test]
+    fn opus_4_6_is_priced() {
+        let p = Pricing::bundled();
+        assert!(p.models.contains_key("claude-opus-4.6"));
+        let (cost, unpriced) = p.cost(
+            "claude-opus-4.6",
+            &Buckets {
+                output: 1000,
+                ..Default::default()
+            },
+        );
+        assert!(!unpriced, "claude-opus-4.6 must be in the pricing map");
+        assert!(cost > 0.0);
     }
 }
