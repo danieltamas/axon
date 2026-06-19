@@ -11,6 +11,25 @@ use crate::ingest::RawTurn;
 use crate::model::{canonicalize_model, Event, PricingKind};
 use crate::pricing::{Buckets, Pricing};
 
+fn is_chatgpt_subscriber_plan(plan_type: Option<&str>) -> bool {
+    matches!(
+        plan_type,
+        Some(
+            "free"
+                | "go"
+                | "plus"
+                | "pro"
+                | "prolite"
+                | "team"
+                | "business"
+                | "enterprise"
+                | "edu"
+                | "health"
+                | "gov"
+        )
+    )
+}
+
 /// Convert a parsed turn into a normalized, costed [`Event`].
 ///
 /// Returns `Err` if the timestamp is not RFC3339 (e.g. a numeric epoch the source should
@@ -29,18 +48,21 @@ pub fn to_event(turn: &RawTurn, pricing: &Pricing) -> anyhow::Result<Event> {
         cache_write_5m: turn.cache_write_5m,
         cache_write_1h: turn.cache_write_1h,
     };
+    let chatgpt_plan = is_chatgpt_subscriber_plan(turn.chatgpt_plan_type.as_deref());
     // Prefer a cost the source harness already computed (OpenCode/Kilo); otherwise compute
     // from the pricing table or classify special ChatGPT-plan Codex cases.
     let (cost_eur, cost_credits, pricing_kind, unpriced) = match turn.reported_cost_usd {
         Some(usd) => (usd * pricing.fx(), None, PricingKind::ReportedCost, false),
         None if pricing.is_local(&model) => (0.0, None, PricingKind::LocalFree, false),
-        None if turn.chatgpt_plan_type.is_some() && model == "gpt-5.4" => (
+        // Only known ChatGPT plan ids qualify for included-plan pricing. Missing or unknown
+        // plan types fall back to money pricing so Axon never silently books paid usage as €0.
+        None if chatgpt_plan && model == "gpt-5.4" => (
             0.0,
             pricing.chatgpt_credits(&model, &buckets),
             PricingKind::ChatgptIncluded,
             false,
         ),
-        None if turn.chatgpt_plan_type.is_some() && model == "gpt-5.3-codex-spark" => {
+        None if chatgpt_plan && model == "gpt-5.3-codex-spark" => {
             (0.0, None, PricingKind::ChatgptPreview, false)
         }
         None => {

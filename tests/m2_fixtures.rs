@@ -47,13 +47,7 @@ fn codex_cumulative_delta_priced() {
 
 #[test]
 fn codex_chatgpt_gpt_5_4_uses_credits_not_unpriced() {
-    let jsonl = [
-        r#"{"timestamp":"2026-06-03T09:00:00.000Z","type":"session_meta","payload":{"id":"sess-54","cwd":"/abs/repo"}}"#,
-        r#"{"timestamp":"2026-06-03T09:00:01.000Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"gpt-5.4"}}"#,
-        r#"{"timestamp":"2026-06-03T09:00:06.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":500}},"rate_limits":{"plan_type":"prolite"}}}"#,
-    ]
-    .join("\n");
-    let turns = codex::parse_session(&jsonl, "fallback");
+    let turns = codex::parse_session(&fixture("codex_gpt54_chatgpt.jsonl"), "fallback");
     let e = normalize::to_event(&turns[0], &Pricing::bundled()).unwrap();
     assert_eq!(e.pricing_kind, PricingKind::ChatgptIncluded);
     assert_eq!(e.cost_eur, 0.0);
@@ -81,13 +75,17 @@ fn codex_chatgpt_spark_is_preview_not_unpriced() {
 
 #[test]
 fn codex_api_gpt_5_4_uses_api_money() {
-    let jsonl = [
-        r#"{"timestamp":"2026-06-03T09:00:00.000Z","type":"session_meta","payload":{"id":"sess-54-api","cwd":"/abs/repo"}}"#,
-        r#"{"timestamp":"2026-06-03T09:00:01.000Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"gpt-5.4"}}"#,
-        r#"{"timestamp":"2026-06-03T09:00:06.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":500}}}}"#,
-    ]
-    .join("\n");
-    let turns = codex::parse_session(&jsonl, "fallback");
+    let turns = codex::parse_session(&fixture("codex_gpt54_api.jsonl"), "fallback");
+    let e = normalize::to_event(&turns[0], &Pricing::bundled()).unwrap();
+    assert_eq!(e.pricing_kind, PricingKind::ApiMoney);
+    assert!(e.cost_eur > 0.0);
+    assert_eq!(e.cost_credits, None);
+    assert!(!e.unpriced);
+}
+
+#[test]
+fn codex_unknown_plan_type_gpt_5_4_falls_back_to_api_money() {
+    let turns = codex::parse_session(&fixture("codex_gpt54_unknown_plan.jsonl"), "fallback");
     let e = normalize::to_event(&turns[0], &Pricing::bundled()).unwrap();
     assert_eq!(e.pricing_kind, PricingKind::ApiMoney);
     assert!(e.cost_eur > 0.0);

@@ -83,7 +83,7 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
       <span style="font-size:14px;">&#9888;</span> unpriced models &mdash; cost is a floor, not exact: <span id="unpricedList" style="color:#f5b13d; font-weight:600;"></span>
     </div>
     <div id="creditsNote" style="display:none; align-items:center; gap:10px; padding:12px 18px; border:1px solid rgba(var(--axr,52,211,153),0.26); border-radius:11px; background:rgba(var(--axr,52,211,153),0.06); font-family:var(--mono); font-size:13px; color:#aee3cb; margin:-10px 0 24px;">
-      <span style="font-size:14px;">&#9671;</span> included-plan credit usage: <span id="creditsList" style="color:#eafff4; font-weight:600;"></span> <span id="creditsTotal" style="color:var(--ax2,#6ee7b7);"></span>
+      <span style="font-size:14px;">&#9671;</span> included-plan credit estimate: <span id="creditsList" style="color:#eafff4; font-weight:600;"></span> <span id="creditsTotal" style="color:var(--ax2,#6ee7b7);"></span>
     </div>
     <div id="previewNote" style="display:none; align-items:center; gap:10px; padding:12px 18px; border:1px solid rgba(126,189,255,0.26); border-radius:11px; background:rgba(126,189,255,0.06); font-family:var(--mono); font-size:13px; color:#b8d7ff; margin:-10px 0 24px;">
       <span style="font-size:14px;">&#9671;</span> preview-limited models: <span id="previewList" style="color:#eafff4; font-weight:600;"></span> <span style="color:#8cb7ee;">separate research-preview limit; no exact monetary rate published.</span>
@@ -269,7 +269,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const fmtInt = n => Math.round(n).toLocaleString('en-US');
 const fmtCompact = n => { n = Math.round(n); if (n >= 1e9) return (n/1e9).toFixed(1)+'B'; if (n >= 1e6) return (n/1e6).toFixed(1)+'M'; if (n >= 1e3) return (n/1e3).toFixed(1)+'K'; return ''+n; };
 const fmtEur = n => '€' + Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-const fmtCredits = n => Number(n).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:2}) + ' cr';
+const fmtCredits = n => Number(n).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:2}) + ' cr est.';
 const pctFmt = v => v.toFixed(1) + '%';
 const fmtDur = ms => { if(ms==null) return '—'; if(ms<1000) return Math.round(ms)+'ms'; const s=ms/1000; if(s<60) return (s<10?s.toFixed(1):Math.round(s))+'s'; const m=Math.floor(s/60); return m+'m'+Math.round(s-m*60)+'s'; };
 function costLabel(eur, credits, kind){

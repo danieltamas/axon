@@ -269,7 +269,7 @@ fn print_cli_summary(s: &Summary, port: u16) {
     }
     if !s.credit_priced_models.is_empty() {
         println!(
-            "  Credits       {}  ({:.2} ChatGPT credits, included-plan estimate)",
+            "  Credits       {}  ({:.2} ChatGPT credits est., included-plan estimate)",
             s.credit_priced_models.join(", "),
             s.total_credits
         );

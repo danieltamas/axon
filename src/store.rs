@@ -188,6 +188,11 @@ fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
             [],
         )?;
     }
+    conn.execute(
+        "UPDATE events SET pricing_kind = 'api-money' \
+         WHERE pricing_kind = 'unknown' AND unpriced = 0 AND cost_eur > 0",
+        [],
+    )?;
     Ok(())
 }
 
