@@ -61,13 +61,26 @@ cache_write_5m = 12.5
 cache_write_1h = 20.0
 
 # OpenAI (Codex). gpt-5.5: $5 input / $0.50 cached / $30 output per 1M (no cache-write fee).
-# Source: OpenAI API model docs (developers.openai.com/api/docs/models/gpt-5.5), Jun 2026.
+# Source: OpenAI API pricing / model docs, Jun 2026.
 [models."gpt-5.5"]
 input = 5.0
 output = 30.0
 cache_read = 0.5
 cache_write_5m = 0.0
 cache_write_1h = 0.0
+
+# OpenAI (Codex). gpt-5.4 API: $2.50 input / $0.25 cached / $15 output per 1M.
+# ChatGPT included-plan estimate: 62.50 input / 6.250 cached / 375 output credits per 1M.
+# Sources: OpenAI API pricing + OpenAI Help Center Codex rate card, Jun 2026.
+[models."gpt-5.4"]
+input = 2.5
+output = 15.0
+cache_read = 0.25
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+chatgpt_credit_input = 62.5
+chatgpt_credit_output = 375.0
+chatgpt_credit_cache_read = 6.25
 
 # Note: OpenCode records an exact per-message `cost` itself (verified), so Axon uses that
 # directly for OpenCode turns — its many gateway models (minimax, glm, kimi, big-pickle…)

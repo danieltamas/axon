@@ -8,8 +8,27 @@ use anyhow::{anyhow, Context};
 use chrono::DateTime;
 
 use crate::ingest::RawTurn;
-use crate::model::{canonicalize_model, Event};
+use crate::model::{canonicalize_model, Event, PricingKind};
 use crate::pricing::{Buckets, Pricing};
+
+fn is_chatgpt_subscriber_plan(plan_type: Option<&str>) -> bool {
+    matches!(
+        plan_type,
+        Some(
+            "free"
+                | "go"
+                | "plus"
+                | "pro"
+                | "prolite"
+                | "team"
+                | "business"
+                | "enterprise"
+                | "edu"
+                | "health"
+                | "gov"
+        )
+    )
+}
 
 /// Convert a parsed turn into a normalized, costed [`Event`].
 ///
@@ -22,20 +41,39 @@ pub fn to_event(turn: &RawTurn, pricing: &Pricing) -> anyhow::Result<Event> {
     let duration_ms = (last_ms > first_ms).then(|| (last_ms - first_ms) as u64);
 
     let model = canonicalize_model(&turn.model_raw);
-    // Prefer a cost the source harness already computed (OpenCode); otherwise compute from
-    // the pricing table. A harness-reported cost is, by definition, priced.
-    let (cost_eur, unpriced) = match turn.reported_cost_usd {
-        Some(usd) => (usd * pricing.fx(), false),
-        None => pricing.cost(
-            &model,
-            &Buckets {
-                input: turn.tokens_in,
-                output: turn.tokens_out,
-                cache_read: turn.cache_read,
-                cache_write_5m: turn.cache_write_5m,
-                cache_write_1h: turn.cache_write_1h,
-            },
+    let buckets = Buckets {
+        input: turn.tokens_in,
+        output: turn.tokens_out,
+        cache_read: turn.cache_read,
+        cache_write_5m: turn.cache_write_5m,
+        cache_write_1h: turn.cache_write_1h,
+    };
+    let chatgpt_plan = is_chatgpt_subscriber_plan(turn.chatgpt_plan_type.as_deref());
+    // Prefer a cost the source harness already computed (OpenCode/Kilo); otherwise compute
+    // from the pricing table or classify special ChatGPT-plan Codex cases.
+    let (cost_eur, cost_credits, pricing_kind, unpriced) = match turn.reported_cost_usd {
+        Some(usd) => (usd * pricing.fx(), None, PricingKind::ReportedCost, false),
+        None if pricing.is_local(&model) => (0.0, None, PricingKind::LocalFree, false),
+        // Only known ChatGPT plan ids qualify for included-plan pricing. Missing or unknown
+        // plan types fall back to money pricing so Axon never silently books paid usage as €0.
+        None if chatgpt_plan && model == "gpt-5.4" => (
+            0.0,
+            pricing.chatgpt_credits(&model, &buckets),
+            PricingKind::ChatgptIncluded,
+            false,
         ),
+        None if chatgpt_plan && model == "gpt-5.3-codex-spark" => {
+            (0.0, None, PricingKind::ChatgptPreview, false)
+        }
+        None => {
+            let (cost_eur, unpriced) = pricing.cost(&model, &buckets);
+            let kind = if unpriced {
+                PricingKind::Unknown
+            } else {
+                PricingKind::ApiMoney
+            };
+            (cost_eur, None, kind, unpriced)
+        }
     };
 
     Ok(Event {
@@ -58,6 +96,8 @@ pub fn to_event(turn: &RawTurn, pricing: &Pricing) -> anyhow::Result<Event> {
         loc_failed: turn.loc_failed,
         skills: turn.skills.clone(),
         cost_eur,
+        cost_credits,
+        pricing_kind,
         unpriced,
     })
 }

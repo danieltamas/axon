@@ -27,6 +27,7 @@ struct Cum {
 struct TurnAcc {
     turn_id: String,
     model: String,
+    chatgpt_plan_type: Option<String>,
     first_ts: String,
     last_ts: String,
 }
@@ -41,6 +42,7 @@ pub fn parse_session(content: &str, fallback_session: &str) -> Vec<RawTurn> {
     let mut prev = Cum::default(); // cumulative at the previous turn boundary
     let mut cur: Option<TurnAcc> = None;
     let mut loc: HashMap<String, (u32, u32, bool)> = HashMap::new();
+    let mut chatgpt_plan_type: Option<String> = None;
     let mut out: Vec<RawTurn> = Vec::new();
 
     for line in content.lines() {
@@ -86,6 +88,7 @@ pub fn parse_session(content: &str, fallback_session: &str) -> Vec<RawTurn> {
                         .and_then(Value::as_str)
                         .unwrap_or("codex")
                         .to_string(),
+                    chatgpt_plan_type: chatgpt_plan_type.clone(),
                     first_ts: ts.to_string(),
                     last_ts: ts.to_string(),
                 });
@@ -94,7 +97,15 @@ pub fn parse_session(content: &str, fallback_session: &str) -> Vec<RawTurn> {
                 Some("token_count") => {
                     if let Some(c) = cumulative(payload) {
                         latest = c;
+                        chatgpt_plan_type = payload
+                            .get("rate_limits")
+                            .and_then(|r| r.get("plan_type"))
+                            .and_then(Value::as_str)
+                            .map(|s| s.to_string());
                         if let Some(t) = cur.as_mut() {
+                            if chatgpt_plan_type.is_some() {
+                                t.chatgpt_plan_type = chatgpt_plan_type.clone();
+                            }
                             t.last_ts = ts.to_string();
                         }
                     }
@@ -208,6 +219,7 @@ fn emit(
         loc_removed: lr,
         loc_failed: lf,
         skills: Vec::new(),
+        chatgpt_plan_type: t.chatgpt_plan_type.clone(),
         reported_cost_usd: None,
     })
 }
@@ -222,7 +234,7 @@ mod tests {
         let jsonl = [
             r#"{"timestamp":"2026-06-03T09:00:00.000Z","type":"session_meta","payload":{"id":"sess-X","cwd":"/r"}}"#,
             r#"{"timestamp":"2026-06-03T09:00:01.000Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}"#,
-            r#"{"timestamp":"2026-06-03T09:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":8000,"cached_input_tokens":1000,"output_tokens":2000}}}}"#,
+            r#"{"timestamp":"2026-06-03T09:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":8000,"cached_input_tokens":1000,"output_tokens":2000}},"rate_limits":{"plan_type":"prolite"}}}"#,
             r#"{"timestamp":"2026-06-03T09:01:00.000Z","type":"turn_context","payload":{"turn_id":"t2","model":"gpt-5.5"}}"#,
             r#"{"timestamp":"2026-06-03T09:01:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":24000,"cached_input_tokens":3000,"output_tokens":6000}}}}"#,
         ]
@@ -238,12 +250,14 @@ mod tests {
         assert_eq!(turns[0].tokens_in, 7000);
         assert_eq!(turns[0].cache_read, 1000);
         assert_eq!(turns[0].tokens_out, 2000);
+        assert_eq!(turns[0].chatgpt_plan_type.as_deref(), Some("prolite"));
 
         // Turn 2: delta input 16000 (cached +2000) → in 14000, cache_read 2000, out 4000.
         assert_eq!(turns[1].message_id, "t2");
         assert_eq!(turns[1].tokens_in, 14000);
         assert_eq!(turns[1].cache_read, 2000);
         assert_eq!(turns[1].tokens_out, 4000);
+        assert_eq!(turns[1].chatgpt_plan_type.as_deref(), Some("prolite"));
     }
 
     #[test]

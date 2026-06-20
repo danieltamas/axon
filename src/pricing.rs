@@ -29,6 +29,19 @@ pub struct ModelRates {
     pub cache_read: f64,
     pub cache_write_5m: f64,
     pub cache_write_1h: f64,
+    #[serde(default)]
+    pub chatgpt_credit_input: Option<f64>,
+    #[serde(default)]
+    pub chatgpt_credit_output: Option<f64>,
+    #[serde(default)]
+    pub chatgpt_credit_cache_read: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CreditRates {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -106,6 +119,23 @@ impl Pricing {
             + per_m(b.cache_write_5m, r.cache_write_5m)
             + per_m(b.cache_write_1h, r.cache_write_1h);
         (raw * self.fx_to_display.unwrap_or(1.0), false)
+    }
+
+    pub fn chatgpt_credit_rates(&self, model: &str) -> Option<CreditRates> {
+        let r = self.models.get(model)?;
+        Some(CreditRates {
+            input: r.chatgpt_credit_input?,
+            cache_read: r.chatgpt_credit_cache_read?,
+            output: r.chatgpt_credit_output?,
+        })
+    }
+
+    pub fn chatgpt_credits(&self, model: &str, b: &Buckets) -> Option<f64> {
+        let r = self.chatgpt_credit_rates(model)?;
+        let per_m = |tokens: u64, rate: f64| (tokens as f64) * rate / 1_000_000.0;
+        Some(
+            per_m(b.input, r.input) + per_m(b.output, r.output) + per_m(b.cache_read, r.cache_read),
+        )
     }
 }
 
@@ -219,5 +249,25 @@ cache_write_1h = 0.0
         );
         assert!(!unpriced, "claude-opus-4.6 must be in the pricing map");
         assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn chatgpt_credits_for_gpt_5_4() {
+        let p = Pricing::bundled();
+        let credits = p
+            .chatgpt_credits(
+                "gpt-5.4",
+                &Buckets {
+                    input: 1_000_000,
+                    cache_read: 1_000_000,
+                    output: 1_000_000,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            (credits - (62.5 + 6.25 + 375.0)).abs() < 1e-9,
+            "got {credits}"
+        );
     }
 }

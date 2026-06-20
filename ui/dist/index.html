@@ -82,6 +82,12 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
     <div id="unpriced" style="display:none; align-items:center; gap:10px; padding:12px 18px; border:1px solid rgba(245,177,61,0.4); border-radius:11px; background:rgba(245,177,61,0.06); font-family:var(--mono); font-size:13px; color:#f0c074; margin:14px 0 24px;">
       <span style="font-size:14px;">&#9888;</span> unpriced models &mdash; cost is a floor, not exact: <span id="unpricedList" style="color:#f5b13d; font-weight:600;"></span>
     </div>
+    <div id="creditsNote" style="display:none; align-items:center; gap:10px; padding:12px 18px; border:1px solid rgba(var(--axr,52,211,153),0.26); border-radius:11px; background:rgba(var(--axr,52,211,153),0.06); font-family:var(--mono); font-size:13px; color:#aee3cb; margin:-10px 0 24px;">
+      <span style="font-size:14px;">&#9671;</span> included-plan credit estimate: <span id="creditsList" style="color:#eafff4; font-weight:600;"></span> <span id="creditsTotal" style="color:var(--ax2,#6ee7b7);"></span>
+    </div>
+    <div id="previewNote" style="display:none; align-items:center; gap:10px; padding:12px 18px; border:1px solid rgba(126,189,255,0.26); border-radius:11px; background:rgba(126,189,255,0.06); font-family:var(--mono); font-size:13px; color:#b8d7ff; margin:-10px 0 24px;">
+      <span style="font-size:14px;">&#9671;</span> preview-limited models: <span id="previewList" style="color:#eafff4; font-weight:600;"></span> <span style="color:#8cb7ee;">separate research-preview limit; no exact monetary rate published.</span>
+    </div>
 
     <div style="position:relative; height:600px; border:1px solid rgba(var(--axr,52,211,153),0.15); border-radius:18px; overflow:hidden; background:radial-gradient(760px 480px at 50% 48%, rgba(15,32,24,0.55), rgba(5,9,8,0.92)); margin:14px 0 26px;">
       <canvas id="brain" style="position:absolute; inset:0; width:100%; height:100%; display:block;"></canvas>
@@ -118,7 +124,7 @@ a:hover{color:var(--ax2,#6ee7b7) !important;}
         <div id="detailName" style="font-family:var(--mono); font-weight:600; font-size:17px; color:#eafff4; margin:6px 0 14px; word-break:break-all;"></div>
         <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; color:#8aa99a; margin-bottom:8px;"><span>tokens out</span><span id="detailTokens" style="color:#cfe3d8;"></span></div>
         <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; color:#8aa99a; margin-bottom:8px;"><span>cost</span><span id="detailCost" style="color:var(--ax2,#6ee7b7);"></span></div>
-        <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; color:#8aa99a; margin-bottom:10px;"><span>of total spend</span><span id="detailPct" style="color:#cfe3d8;"></span></div>
+        <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; color:#8aa99a; margin-bottom:10px;"><span id="detailPctLabel">of total spend</span><span id="detailPct" style="color:#cfe3d8;"></span></div>
         <div style="height:4px; border-radius:3px; background:rgba(var(--axr,52,211,153),0.1); overflow:hidden;"><div id="detailBar" style="height:100%; width:0%; border-radius:3px; background:linear-gradient(90deg,#1f9f78,var(--ax2,#6ee7b7)); box-shadow:0 0 12px rgba(var(--axr,52,211,153),0.7);"></div></div>
       </div>
     </div>
@@ -263,8 +269,21 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const fmtInt = n => Math.round(n).toLocaleString('en-US');
 const fmtCompact = n => { n = Math.round(n); if (n >= 1e9) return (n/1e9).toFixed(1)+'B'; if (n >= 1e6) return (n/1e6).toFixed(1)+'M'; if (n >= 1e3) return (n/1e3).toFixed(1)+'K'; return ''+n; };
 const fmtEur = n => '€' + Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtCredits = n => Number(n).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:2}) + ' cr est.';
 const pctFmt = v => v.toFixed(1) + '%';
 const fmtDur = ms => { if(ms==null) return '—'; if(ms<1000) return Math.round(ms)+'ms'; const s=ms/1000; if(s<60) return (s<10?s.toFixed(1):Math.round(s))+'s'; const m=Math.floor(s/60); return m+'m'+Math.round(s-m*60)+'s'; };
+function costLabel(eur, credits, kind){
+  const hasEur = Number(eur || 0) > 0;
+  const hasCredits = Number(credits || 0) > 0;
+  if (kind === 'chatgpt-preview') return 'preview';
+  if (kind === 'chatgpt-included') return hasCredits ? fmtCredits(credits) : 'included';
+  if (kind === 'mixed') {
+    if (hasEur && hasCredits) return fmtEur(eur) + ' + ' + fmtCredits(credits);
+    if (hasCredits) return fmtCredits(credits);
+  }
+  if (hasCredits && !hasEur) return fmtCredits(credits);
+  return fmtEur(eur || 0);
+}
 // Smooth number tweening: each registered element eases toward its target every frame.
 // New elements start at 0 (count-up intro); thereafter they glide between values.
 const tweens = new Map();
@@ -310,7 +329,7 @@ const AX = {
     const maxM = Math.max.apply(null, M.map(m=>m[2]||1)) || 1, maxA = Math.max.apply(null, A.map(x=>x[2]||1)) || 1;
     const nodes = [];
     nodes.push({ id:0, kind:'core', fullName:'AXON core', label:'AXON', p:[0,0,0], r:17, lit:1, flash:0, tokens:fmtCompact(this.data?this.data.tokens_out:0), costNum:this.total, children:[] });
-    M.forEach((m,i)=>{ const d=this.fib(M.length,i); nodes.push({ id:nodes.length, kind:'model', fullName:m[0], label:m[0].replace('claude-',''), p:[d[0]*R1,d[1]*R1,d[2]*R1], r:7+9*Math.sqrt((m[2]||1)/maxM), lit:1, flash:0, tokens:fmtCompact(m[1]), costNum:m[2], children:[] }); });
+    M.forEach((m,i)=>{ const d=this.fib(M.length,i); nodes.push({ id:nodes.length, kind:'model', fullName:m[0], label:m[0].replace('claude-',''), p:[d[0]*R1,d[1]*R1,d[2]*R1], r:7+9*Math.sqrt((m[2]||1)/maxM), lit:1, flash:0, tokens:fmtCompact(m[1]), costNum:m[2], costText:m[4], costKind:m[7], costCredits:m[6], children:[] }); });
     A.forEach((g,i)=>{ const d=this.fib(A.length,i); const pos=[d[0]*R2,d[1]*R2,d[2]*R2]; let best=1,bd=1e9;
       for(let k=1;k<=M.length;k++){ const n=nodes[k]; const dd=Math.hypot(n.p[0]-pos[0],n.p[1]-pos[1],n.p[2]-pos[2]); if(dd<bd){bd=dd;best=k;} }
       const id=nodes.length; nodes.push({ id, kind:'agent', fullName:g[0], label:g[0], p:pos, r:3.2+5.4*Math.sqrt((g[2]||1)/maxA), lit:1, flash:0, tokens:fmtCompact(g[1]), costNum:g[2], parent:best }); nodes[best].children.push(id); });
@@ -336,7 +355,7 @@ const AX = {
   rot(p){ const cy=Math.cos(this.yaw+this.yawOff), sy=Math.sin(this.yaw+this.yawOff), cx=Math.cos(this.pitch), sx=Math.sin(this.pitch); let x=p[0],y=p[1],z=p[2]; let x1=x*cy+z*sy, z1=-x*sy+z*cy; let y1=y*cx-z1*sx, z2=y*sx+z1*cx; const sc=this.f/(this.f+z2); return { sx:this.cx+x1*sc*this.xs, sy:this.cy+y1*sc, sc, z:z2 }; },
   focusLabel(name){ if(!this.nodes) return; const n=this.nodes.find(x=>x.fullName===name); if(n){ this.pinned=false; this.focusId=n.id; this.syncDetail(); } },
   unfocus(){ if(!this.pinned){ this.focusId=null; this.syncDetail(); } },
-  syncDetail(){ const id=this.focusId; const el=$('detail'); if(id==null||!this.nodes){ el.style.display='none'; return; } const n=this.nodes[id]; el.style.display='block'; $('detailRole').textContent=n.kind; $('detailName').textContent=n.fullName; $('detailTokens').textContent=n.tokens; $('detailCost').textContent=fmtEur(n.costNum); const pct=this.total?(n.costNum/this.total*100):0; $('detailPct').textContent=pct.toFixed(1)+'%'; $('detailBar').style.width=Math.min(100,pct)+'%'; },
+  syncDetail(){ const id=this.focusId; const el=$('detail'); if(id==null||!this.nodes){ el.style.display='none'; return; } const n=this.nodes[id]; el.style.display='block'; $('detailRole').textContent=n.kind; $('detailName').textContent=n.fullName; $('detailTokens').textContent=n.tokens; $('detailCost').textContent=n.costText || fmtEur(n.costNum); const label=$('detailPctLabel'); if(n.costKind==='chatgpt-preview'){ label.textContent='billing mode'; $('detailPct').textContent='preview limit'; $('detailBar').style.width='100%'; } else if(n.costKind==='chatgpt-included'){ label.textContent='billing mode'; $('detailPct').textContent='plan included'; $('detailBar').style.width='100%'; } else { label.textContent=n.costKind==='mixed' && Number(n.costCredits||0)>0 ? 'of api spend' : 'of total spend'; const pct=this.total?(n.costNum/this.total*100):0; $('detailPct').textContent=pct.toFixed(1)+'%'; $('detailBar').style.width=Math.min(100,pct)+'%'; } },
 
   drawWave(){
     const c = this.wave; if (!c) return;
@@ -401,7 +420,7 @@ const AX = {
     d.innerHTML='<span style="color:#46564e;">'+t+'</span>'
       +'<span style="display:flex; align-items:center; gap:7px; min-width:0;"><span style="width:6px; height:6px; border-radius:50%; background:'+col+'; box-shadow:0 0 7px '+col+'; flex:0 0 auto;"></span><span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#cfe3d8;">'+esc(e.agent)+' <span style="color:#5d7268;">&middot; '+model+'</span></span></span>'
       +'<span style="color:var(--ax2,#6ee7b7); text-align:right;">+'+fmtCompact(e.tokens_out)+'</span>'
-      +'<span style="color:#9fb8ab; text-align:right;">'+fmtEur(e.cost_eur)+'</span>'
+      +'<span style="color:#9fb8ab; text-align:right;">'+costLabel(e.cost_eur, e.cost_credits, e.pricing_kind)+'</span>'
       +'<span style="color:#7c8b80; text-align:right;">'+fmtDur(e.duration_ms)+'</span>';
     return d; },
   // Render newest-first; on each poll prepend only turns we haven't shown (no full-table flash).
@@ -422,7 +441,7 @@ const AX = {
     el.querySelectorAll('.axrow').forEach(row=>map.set(row.getAttribute('data-name'), {inn:row.querySelector('.cIn'), tok:row.querySelector('.cTok'), cost:row.querySelector('.cCost'), fill:row.querySelector('.cFill'), node:row.querySelector('.cNode')}));
     return map;
   },
-  updateRows(map, rows, max){ rows.forEach(r=>{ const e=map.get(r[0]); if(!e) return; tnum(e.inn, r[3]||0, fmtCompact); tnum(e.tok, r[1], fmtCompact); tnum(e.cost, r[2], fmtEur); const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1)+'%'; e.fill.style.width=pct; e.node.style.left=pct; }); },
+  updateRows(map, rows, max){ rows.forEach(r=>{ const e=map.get(r[0]); if(!e) return; tnum(e.inn, r[3]||0, fmtCompact); tnum(e.tok, r[1], fmtCompact); e.cost.textContent = r[4] || fmtEur(r[2]); const pct=(Math.max(0.04, Math.pow((r[2]||0)/max,0.4))*100).toFixed(1)+'%'; e.fill.style.width=pct; e.node.style.left=pct; }); },
 
   updateBudget(s){
     const rows = [['DAILY', s.today_cost_eur, s.budget_day_eur],['WEEKLY', s.week_cost_eur, s.budget_week_eur],['MONTHLY', s.month_cost_eur, s.budget_month_eur]];
@@ -474,6 +493,8 @@ const AX = {
     else this.gate('rtkhide','1',()=>{ $('rtkPanel').style.display='none'; $('brainEff').textContent='n/a'; });
 
     this.gate('unpriced', (s.unpriced_models||[]).join('|'), ()=>{ if(s.unpriced_models && s.unpriced_models.length){ $('unpriced').style.display='flex'; $('unpricedList').textContent=s.unpriced_models.join(', '); } else $('unpriced').style.display='none'; });
+    this.gate('creditsNote', (s.credit_priced_models||[]).join('|')+'|'+Math.round((s.total_credits||0)*100), ()=>{ if(s.credit_priced_models && s.credit_priced_models.length){ $('creditsNote').style.display='flex'; $('creditsList').textContent=s.credit_priced_models.join(', '); $('creditsTotal').textContent='(' + fmtCredits(s.total_credits || 0) + ')'; } else $('creditsNote').style.display='none'; });
+    this.gate('previewNote', (s.preview_priced_models||[]).join('|'), ()=>{ if(s.preview_priced_models && s.preview_priced_models.length){ $('previewNote').style.display='flex'; $('previewList').textContent=s.preview_priced_models.join(', '); } else $('previewNote').style.display='none'; });
 
     $('brainOut').textContent = fmtCompact(s.tokens_out)+' out · '+fmtInt(s.sessions)+' sessions';
 
@@ -504,7 +525,10 @@ const AX = {
     const structuralSame = this.sameSig(s);
     this.data = s;
     this.agentsData = (s.by_agent||[]).map(a=>[a.agent, a.tokens_out, a.cost_eur, a.tokens_in]);
-    this.modelsData = (s.by_model||[]).map(m=>[m.model, m.tokens_out, m.cost_eur, m.tokens_in]);
+    this.modelsData = (s.by_model||[]).map(m=>{
+      const weight = Math.max(Number(m.cost_eur || 0), Number(m.cost_credits || 0), m.pricing_kind === 'chatgpt-preview' ? 1 : 0);
+      return [m.model, m.tokens_out, weight, m.tokens_in, costLabel(m.cost_eur, m.cost_credits, m.pricing_kind), m.cost_eur, m.cost_credits, m.pricing_kind];
+    });
     this.total = s.cost_eur;
     if (!this.started){
       this.brain=$('brain'); this.wave=$('wave'); this.bindBrain();
@@ -513,7 +537,7 @@ const AX = {
     } else if (!structuralSame){ this.layout(); } else { this.refreshNodes(); }
     this.setData(); // sets tween targets + in-place DOM updates
   },
-  refreshNodes(){ if(!this.nodes) return; const maxM=Math.max(1,...this.modelsData.map(m=>m[2]||0)), maxA=Math.max(1,...this.agentsData.map(a=>a[2]||0)); const byName={}; this.modelsData.forEach(m=>byName[m[0]]=[m,maxM,'model']); this.agentsData.forEach(a=>byName[a[0]]=[a,maxA,'agent']); this.nodes.forEach(n=>{ const e=byName[n.fullName]; if(e){ const newCost=e[0][2]||0; const prev=(n.prevCost==null?newCost:n.prevCost); if(newCost-prev>1e-9) this.bumpActivity(n,1); n.prevCost=newCost; n.tokens=fmtCompact(e[0][1]); n.costNum=newCost; n.r=(e[2]==='model'?7+9*Math.sqrt((newCost||1)/e[1]):3.2+5.4*Math.sqrt((newCost||1)/e[1])); } }); },
+  refreshNodes(){ if(!this.nodes) return; const maxM=Math.max(1,...this.modelsData.map(m=>m[2]||0)), maxA=Math.max(1,...this.agentsData.map(a=>a[2]||0)); const byName={}; this.modelsData.forEach(m=>byName[m[0]]=[m,maxM,'model']); this.agentsData.forEach(a=>byName[a[0]]=[a,maxA,'agent']); this.nodes.forEach(n=>{ const e=byName[n.fullName]; if(e){ const newCost=e[0][2]||0; const prev=(n.prevCost==null?newCost:n.prevCost); if(newCost-prev>1e-9) this.bumpActivity(n,1); n.prevCost=newCost; n.tokens=fmtCompact(e[0][1]); n.costNum=newCost; if(e[2]==='model'){ n.costText=e[0][4]; n.costCredits=e[0][6]; n.costKind=e[0][7]; } n.r=(e[2]==='model'?7+9*Math.sqrt((newCost||1)/e[1]):3.2+5.4*Math.sqrt((newCost||1)/e[1])); } }); },
 
   bindBrain(){ const c=this.brain; if(!c) return;
     c.addEventListener('mousemove', e=>{ const r=c.getBoundingClientRect(); const x=e.clientX-r.left, y=e.clientY-r.top; this.mouse={x,y,on:true}; if(this.drag!=null && (Math.abs(x-this._downX)>3||Math.abs(y-this._downY)>3)) this._dragMoved=true; });
