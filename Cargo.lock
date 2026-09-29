@@ -175,11 +175,15 @@ dependencies = [
 name = "axon-bus"
 version = "0.2.1"
 dependencies = [
+ "anyhow",
  "assert_cmd",
  "axon-core",
+ "blake3",
+ "clap",
  "rusqlite",
  "serde_json",
  "tempfile",
+ "toml_edit",
 ]
 
 [[package]]

@@ -11,6 +11,14 @@ authors.workspace = true
 
 [dependencies]
 axon-core.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+clap = { version = "4", features = ["derive"] }
+rusqlite.workspace = true
+serde_json.workspace = true
+# Edits the owner's Codex config.toml in place, keeping their comments and layout;
+# already in the tree as a dependency of `toml`.
+toml_edit = "0.22"
 
 [dev-dependencies]
 assert_cmd = "2"
