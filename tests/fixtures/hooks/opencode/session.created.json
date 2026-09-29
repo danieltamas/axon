@@ -1,0 +1,47 @@
+{
+  "id": "evt_0ec818346001lEtlDgVqiF6X5K",
+  "type": "session.created",
+  "properties": {
+    "sessionID": "ses_f137e7cbbffe9LW55g4PgBCML1",
+    "info": {
+      "id": "ses_f137e7cbbffe9LW55g4PgBCML1",
+      "slug": "quiet-comet",
+      "version": "1.18.31",
+      "projectID": "global",
+      "directory": "/tmp/axon-fixture/opencode",
+      "path": "/tmp/axon-fixture/opencode",
+      "title": "New session - 2026-09-29T09:31:45.861Z",
+      "permission": [
+        {
+          "permission": "question",
+          "pattern": "*",
+          "action": "deny"
+        },
+        {
+          "permission": "plan_enter",
+          "pattern": "*",
+          "action": "deny"
+        },
+        {
+          "permission": "plan_exit",
+          "pattern": "*",
+          "action": "deny"
+        }
+      ],
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "time": {
+        "created": 1790674305861,
+        "updated": 1790674305861
+      }
+    }
+  }
+}

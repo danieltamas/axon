@@ -1,0 +1,19 @@
+{
+  "session_id": "b776dac1-7b5a-4569-b533-7dd615546d52",
+  "transcript_path": "/Users/user/.claude/projects/-tmp-axon-fixture-claude/b776dac1-7b5a-4569-b533-7dd615546d52.jsonl",
+  "cwd": "/tmp/axon-fixture/claude",
+  "prompt_id": "56cb26c7-3aad-4911-a323-8dc44f88010d",
+  "permission_mode": "bypassPermissions",
+  "agent_id": "a03c769ab1865a366",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo child-tool",
+    "description": "Echo child-tool"
+  },
+  "tool_use_id": "toolu_01Cef999W1G8z1XXDcRfg1qU"
+}

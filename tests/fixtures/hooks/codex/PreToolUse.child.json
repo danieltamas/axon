@@ -1,0 +1,16 @@
+{
+  "session_id": "01a0ec7f-c7d6-74b1-a2e0-80218a9702aa",
+  "turn_id": "01a0ec80-0b53-7521-a9f9-3f0607e00569",
+  "agent_id": "01a0ec80-0893-72c2-aeff-5700a8d91ada",
+  "agent_type": "default",
+  "transcript_path": "/Users/user/.codex/sessions/2026/09/29/rollout-2026-09-29T12-30-09-01a0ec80-0893-72c2-aeff-5700a8d91ada.jsonl",
+  "cwd": "/tmp/axon-fixture/codex",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-astra",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo child-tool"
+  },
+  "tool_use_id": "exec-603ec147-3787-4879-81e3-028eeff5befb"
+}

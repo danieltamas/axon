@@ -1,0 +1,21 @@
+{
+  "hook_event_name": "post_tool_call",
+  "tool_name": "terminal",
+  "tool_input": {
+    "command": "echo parent-tool"
+  },
+  "session_id": "20260929_124401_2b08f1",
+  "cwd": "/tmp/axon-fixture/hermes",
+  "extra": {
+    "result": "{\"output\": \"parent-tool\", \"exit_code\": 0, \"error\": null}",
+    "task_id": "28521200-9da7-44a0-8397-e82d8ebf2dd6",
+    "tool_call_id": "call_ak9lbd1b",
+    "turn_id": "20260929_124401_2b08f1:28521200-9da7-44a0-8397-e82d8ebf2dd6:365b49c4",
+    "api_request_id": "20260929_124401_2b08f1:28521200-9da7-44a0-8397-e82d8ebf2dd6:365b49c4:api:1",
+    "duration_ms": 5430,
+    "status": "ok",
+    "error_type": null,
+    "error_message": null,
+    "telemetry_schema_version": "hermes.observer.v1"
+  }
+}

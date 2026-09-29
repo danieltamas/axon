@@ -1,0 +1,26 @@
+{
+  "session_id": "b776dac1-7b5a-4569-b533-7dd615546d52",
+  "transcript_path": "/Users/user/.claude/projects/-tmp-axon-fixture-claude/b776dac1-7b5a-4569-b533-7dd615546d52.jsonl",
+  "cwd": "/tmp/axon-fixture/claude",
+  "prompt_id": "56cb26c7-3aad-4911-a323-8dc44f88010d",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "fixture child",
+    "prompt": "Run the shell command `echo child-tool` with Bash, then reply done.",
+    "subagent_type": "general-purpose"
+  },
+  "tool_response": {
+    "isAsync": true,
+    "status": "async_launched",
+    "agentId": "a03c769ab1865a366",
+    "description": "fixture child",
+    "resolvedModel": "claude-sonnet-5-5",
+    "prompt": "Run the shell command `echo child-tool` with Bash, then reply done.",
+    "outputFile": "/tmp/axon-fixture/output",
+    "canReadOutputFile": true
+  },
+  "tool_use_id": "toolu_01CUY2gxnY9s7GM9ZnTRfwyS",
+  "duration_ms": 10
+}

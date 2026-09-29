@@ -184,7 +184,7 @@ Nothing else without a written reason in the PR.
 `agent-bus route "<task>" [--role R] [--budget B]` answers `{harness, model, effort, reason}`. `spawn --auto` uses the answer.
 
 1. **Rules decide.** `routes.toml` maps role and tags to a lane, in the same shape as agent-os `ROUTING.md`. Every decision is logged with its reason, and the same input always gives the same output.
-2. **Budget clamps the decision.** If the remaining tree budget cannot cover the lane's typical cost (the median from the `usage` history for that role), `route` steps down one lane and says so.
+2. **Budget clamps the decision.** If the remaining tree budget cannot cover the lane's typical cost (the median from the `usage` history for that **role × model × effort**, never role alone: a model launch such as Sonnet 5.5, same per-token price as Sonnet 5 but fewer tokens per task, would otherwise leave the old model's history skewing the estimate), `route` steps down one lane and says so.
 3. **Advisors only suggest.** With `advisor = "jev"`, Jev (typed probabilities, about 1K tokens per call) scores the spawn with the questions it already asks: does it need the caller's context, is it independent breadth, is it a review leg. With `advisor = "openrouter-auto"`, a task already in an OpenRouter lane (OpenCode) passes `openrouter/auto` as its model, and OpenRouter's router picks per request. Advisor output is logged next to the rule's answer as a shadow. It never overrides a rule until the backtest (§8) shows it agrees with the human labels better than the rule does.
 
 ## 5. Virtual agent (the agent-level equivalent of OpenRouter Fusion)
@@ -214,8 +214,13 @@ OpenRouter Fusion runs a panel of models and a judge that synthesises their answ
 The dashboard is served by `agent-bus serve` and embedded in the binary. It needs no Node and has no build step.
 
 **Views:**
-1. **Live tree.** Every harness, agent and subagent, with harness glyph, model, role, mission, repo/worktree, status (active pulses, idle rests, orphaned gets a warning mark), memory, tokens, cost, and a budget ring.
-2. **Chatter.** Messages as edges animated along their routes, and a thread timeline beside the tree. Selecting a thread shows its route, delivery and ack times, and its refs.
+1. **Live tree**, always grouped **repo → harness → root agent → subagents**:
+   - **Repo** is the main repository of the agent's `cwd`: the parent of `git rev-parse --git-common-dir`. A worktree therefore groups under its main repo and is labelled with its branch. An agent outside any repo goes under "no repo".
+   - **Harness** lists only the harnesses with an agent in that repo.
+   - **Root agents** are orchestrators and standalone sessions. Their subagents nest by `parent_id` and never by repo: a child working in another repo stays under its parent and carries a repo badge, so a tree is never split across groups.
+   - A virtual agent (§5) is one node with its panel and judge nested under it. A Codex child nested deeper than one level without `AXON_BUS_PARENT` attaches to its session root and is marked "depth unknown" (§9, M0 result).
+   - Each node shows harness glyph, model, role, mission, worktree/branch, status (active pulses, idle rests, orphaned gets a warning mark), memory, tokens, cost, and a budget ring.
+2. **Chatter.** Messages as edges animated along their routes on the same repo → harness → agent tree, so a root ↔ root `link` between repos visibly crosses groups. A thread timeline sits beside the tree. Selecting a thread shows its route, delivery and ack times, and its refs.
 3. **Cost.** Per task tree: real vs notional spend, burn rate, budget remaining, and the cost split by harness and model.
 4. **Human node.** Send `stop`, `redirect` or an answer. Each is logged like any other message.
 5. **Live narrative (per agent).** Selecting an agent opens a stream of *what it is saying and thinking*, not what it is executing:
@@ -225,6 +230,7 @@ The dashboard is served by `agent-bus serve` and embedded in the binary. It need
      - Codex: reasoning is `encrypted_content`, plus 0–3 plaintext `summary` items.
      - A block with no readable text renders as a quiet "reasoning — not recorded by <harness>" row with its token count. There is no attempt to decrypt or reconstruct it; that content belongs to the provider.
      - When a harness records more (OpenCode reasoning parts, Hermes), the same row shows it.
+   - **Progress notes.** Current Claude models return the text between tool calls as progress-update `thinking` blocks. These are empty unless the harness asks for `display: "updates"`, and Sonnet 5.5's `between_tools` mode produces them too. Render them as a distinct "progress" row, never as reasoning.
    - **Tool noise collapsed.** Bash, Read, Grep, Glob and similar calls collapse into one chip per run ("7 reads · 3 commands · 2 edits"), which expands on click. Edits and writes show their paths. Failures stay visible.
    - **Privacy.**
      - Content capture is **opt-in** (`serve --content`, or `[content] enabled = true`). Without it, the stream shows the structure only: turn, token counts, tool chips.
@@ -267,8 +273,30 @@ The dashboard is served by `agent-bus serve` and embedded in the binary. It need
 | M2 | messages, routing, links and grants, ask/reply, the stop gate | a non-edge send exits 3 and prints the route; replaying the captured Claude `PreToolUse(SendMessage)` fixture for a non-edge target returns `permissionDecision: "deny"` with the route in `permissionDecisionReason`, and an edge target returns no decision; `ask` returns within 1 s of `reply`; a timeout returns the default; a stop denies the next tool call on each harness's reply format; 401-character bodies are rejected |
 | M3 | Hermes ingest in `axon-core`; per-tree budgets that join Axon's existing usage rows to bus agents by `session_id`; memory via `sysinfo` | the cost backtest is within 1%; a 50K-token tree is stopped at the next tool call after crossing it; the stale-usage and unreadable-database branches behave as in §6 |
 | M4 | `route`, `spawn`, virtual agent, advisors (shadow) | the same input gives the same route; the budget clamp steps down a lane; a virtual node appears as one agent with a panel and a judge; the routing backtest report is produced |
-| M5 | `serve` and the dashboard | a narrative fixture per harness renders assistant text, recorded reasoning summaries, the "not recorded" row for empty or encrypted blocks, and collapsed tool chips; with `--content` off, no text leaves the tailer; the security tests pass (403s); a new register reaches the page in < 1 s; the 200-agent replay holds 60 fps (Performance trace); shotbox contact sheet light/dark × desktop/phone approved by the human |
+| M5 | `serve` and the dashboard | a replay with two repos (one with a worktree), two harnesses, and a Claude orchestrator with subagents gives an `/api/snapshot` tree grouped repo → harness → root → children, where the worktree agent sits under its main repo and a child working in the other repo stays under its parent; a narrative fixture per harness renders assistant text, recorded reasoning summaries, the "not recorded" row for empty or encrypted blocks, and collapsed tool chips; with `--content` off, no text leaves the tailer; the security tests pass (403s); a new register reaches the page in < 1 s; the 200-agent replay holds 60 fps (Performance trace); shotbox contact sheet light/dark × desktop/phone approved by the human |
 | M6 | release: cargo-dist installers (sh, PowerShell), a Homebrew tap, `cargo install`; agent-os integration | a fresh VM per OS runs install → `agent-bus doctor` green; in agent-os, `link.sh` calls `agent-bus install`, the claim half of `repo-sync` is removed (its `wt-gc`/`wt-census` stay), and CANON's "Repo sync" section points to agent-bus |
+
+**M0 result, 2026-09-29: does SubagentStart identify the parent?** Checked against real payloads in `tests/fixtures/hooks/`.
+
+| harness | parent linkage in the hook payload | verdict |
+|---|---|---|
+| Claude Code 2.1.284 | `SubagentStart` = parent `session_id` + new `agent_id`; every child tool call carries both; root calls have no `agent_id`. The `Agent` call's `PostToolUse.tool_response.agentId` equals the child `agent_id`, linking spawn call → child exactly. No `parent_agent_id`. | **yes**, parent = session root |
+| Codex 0.153.4 | same shape (`session_id` + `agent_id`, plus `turn_id`). `spawn_agent`'s response is only `{"task_name":"/root/child_tool"}`, so the link is the next `SubagentStart` in the session, and the task path encodes depth. No `parent_agent_id`. | **yes** at depth 1; nested children resolve only to the session root |
+| Hermes `c2ca3f01a` | `subagent_start` has `parent_subagent_id`, `parent_turn_id`, `child_session_id` and `child_subagent_id`; the child runs under its own `session_id`. | **yes**, explicit |
+| OpenCode 1.18.31 | child sessions carry `parentID` (session schema); not observed live, because the local model never ran the `task` subagent | pending live check |
+
+Consequences:
+- `AGENT_BUS_PARENT` is needed only for Codex subagents nested deeper than one level, and for harness-less spawns (`spawn --virtual`).
+- **Claude `SessionStart` does not fire under `claude -p`.** The registry must register an agent on its first hook event of any kind, keyed by `session_id`.
+- The Superset `codex` wrapper passes `--dangerously-bypass-hook-trust`, so Codex's hook-trust review is off on this machine. `axon-bus doctor` should report it.
+
+## 9b. Model launches are data changes, never code changes
+
+- **Adding a model** touches three files and no code: `pricing.toml` (rates and cache rates), the canonical model-id map, and `routes.toml` (lanes).
+- **An unknown model id** shows as *unpriced* (Axon's existing banner) and never as $0. Budgets on a tree with unpriced usage fall back to token ceilings.
+- **Checked 2026-09-29, Sonnet 5.5:**
+  - `claude-sonnet-5-5` costs $2 / $10 per MTok with cache reads at $0.20. The cache-write rate still needs checking against the pricing page.
+  - Axon's `pricing.toml` has no Claude 5.x entries at all.
 
 ## 10. Quality criteria
 

@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "on_session_start",
+  "tool_name": null,
+  "tool_input": null,
+  "session_id": "20260929_124401_2b08f1",
+  "cwd": "/tmp/axon-fixture/hermes",
+  "extra": {
+    "model": "gemma4:26b",
+    "platform": "cli",
+    "telemetry_schema_version": "hermes.observer.v1"
+  }
+}

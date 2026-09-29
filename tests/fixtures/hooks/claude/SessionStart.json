@@ -1,0 +1,9 @@
+{
+  "session_id": "dbef413e-27e7-4a02-83da-fbdd1d3b61df",
+  "transcript_path": "/Users/user/.claude/projects/-tmp-axon-fixture-claude/dbef413e-27e7-4a02-83da-fbdd1d3b61df.jsonl",
+  "cwd": "/tmp/axon-fixture/claude",
+  "scratchpad_dir": "/tmp/axon-fixture/scratchpad",
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-haiku-4-5-20251001"
+}

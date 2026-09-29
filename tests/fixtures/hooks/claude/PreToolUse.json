@@ -1,0 +1,14 @@
+{
+  "session_id": "b776dac1-7b5a-4569-b533-7dd615546d52",
+  "transcript_path": "/Users/user/.claude/projects/-tmp-axon-fixture-claude/b776dac1-7b5a-4569-b533-7dd615546d52.jsonl",
+  "cwd": "/tmp/axon-fixture/claude",
+  "prompt_id": "56cb26c7-3aad-4911-a323-8dc44f88010d",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo parent-tool",
+    "description": "Run echo parent-tool"
+  },
+  "tool_use_id": "toolu_01K8LNG11ip111L5RftVnj2x"
+}

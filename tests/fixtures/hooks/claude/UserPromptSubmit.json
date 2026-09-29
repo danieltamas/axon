@@ -1,0 +1,9 @@
+{
+  "session_id": "b776dac1-7b5a-4569-b533-7dd615546d52",
+  "transcript_path": "/Users/user/.claude/projects/-tmp-axon-fixture-claude/b776dac1-7b5a-4569-b533-7dd615546d52.jsonl",
+  "cwd": "/tmp/axon-fixture/claude",
+  "prompt_id": "56cb26c7-3aad-4911-a323-8dc44f88010d",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly two things. 1) Run the shell command `echo parent-tool` with Bash. 2) Use the Agent tool (subagent_type \"general-purpose\", description \"fixture child\") with the prompt \"Run the shell command `echo child-tool` with Bash, then reply done.\" Then reply \"ok\"."
+}

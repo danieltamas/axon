@@ -1,0 +1,10 @@
+{
+  "session_id": "01a0ec7f-c7d6-74b1-a2e0-80218a9702aa",
+  "turn_id": "01a0ec7f-c93a-7043-962d-7d7dd6b0c91d",
+  "transcript_path": "/Users/user/.codex/sessions/2026/09/29/rollout-2026-09-29T12-29-52-01a0ec7f-c7d6-74b1-a2e0-80218a9702aa.jsonl",
+  "cwd": "/tmp/axon-fixture/codex",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-astra",
+  "permission_mode": "default",
+  "prompt": "Do exactly two things. 1) Run the shell command `echo parent-tool`. 2) Spawn one sub-agent whose only task is to run the shell command `echo child-tool` and report back. Then reply ok."
+}
