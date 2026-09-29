@@ -203,7 +203,7 @@ OpenRouter Fusion runs a panel of models and a judge that synthesises their answ
 - Every total is reported two ways: real money (API or OpenRouter billing) and a notional figure (subscription harnesses, priced at API rates).
 - At **80%**, a `sync` goes to the root and the node turns amber on the dashboard. At **100%**, a `stop` goes to the whole subtree, and the gate denies the next tool call of each agent in it.
 - **Fail closed:**
-  - Usage data older than 120 s on an active tree with a budget → the gate warns once, then denies once the tree reaches 90% of its last known total.
+  - Usage data older than 120 s on an active tree with a budget → the gate warns once, then denies once the tree's last known total reaches 90% of its budget. The 10% margin covers spend the bus cannot see while the usage data is stale.
   - An unreadable database while the doorbell shows a stop → deny.
   - An unreadable database with no doorbell → allow, because an unrelated session must never be bricked.
   - The acceptance tests cover every one of these branches.
