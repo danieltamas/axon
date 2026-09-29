@@ -12,6 +12,12 @@ authors.workspace = true
 [dependencies]
 axon-core.workspace = true
 
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
+rusqlite.workspace = true
+serde_json.workspace = true
+
 # Not released until it has commands (BUS-PLAN §9, M6).
 [package.metadata.dist]
 dist = false
