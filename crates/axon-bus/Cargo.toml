@@ -1,0 +1,17 @@
+[package]
+name = "axon-bus"
+description = "Axon's control plane: registry, routed messages and budgets for coding agents across harnesses."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+axon-core.workspace = true
+
+# Not released until it has commands (BUS-PLAN §9, M6).
+[package.metadata.dist]
+dist = false

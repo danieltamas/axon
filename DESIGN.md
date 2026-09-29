@@ -209,12 +209,13 @@ Rust: axum·tokio·rust-embed·notify·rusqlite(bundled)·serde·clap·webbrowse
 ## 12. Repo layout
 ```
 axon/
-├── Cargo.toml
-├── src/{main,server,store,watch,pricing,model,normalize}.rs
-│   └── ingest/{mod,claude,codex,opencode,loc}.rs   + export/otel.rs
+├── Cargo.toml           # workspace root + the `axon` package
+├── src/{main,lib,server,summary,config,rtk}.rs
+├── crates/axon-core/    # shared with axon-bus: {model,normalize,store,pricing}.rs + ingest/{mod,claude,codex,opencode,ccflare,loc}.rs
+│   └── assets/pricing.toml  # bundled defaults + priced_as_of date
+├── crates/axon-bus/     # control plane (docs/BUS-PLAN.md)
 ├── ui/                  # Vue+TresJS (Vite)
 │   └── dist/            # BUILT + COMMITTED → rust-embed input (no Node at cargo build)
-├── assets/pricing.toml  # bundled defaults + priced_as_of date
 ├── tests/fixtures/{claude_main.jsonl, claude_subagent.jsonl, claude_subagent.meta.json, codex.jsonl, opencode.log}  # see Appendix A
 └── DESIGN.md            # this file
 ```

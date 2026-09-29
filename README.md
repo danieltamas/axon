@@ -118,7 +118,7 @@ per-model, per-agent, and per-harness breakdowns:
 ```
 
 Rates are USD (from each provider's docs) converted to EUR via `fx_to_display` in
-[`assets/pricing.toml`](./assets/pricing.toml) (override at `~/.config/axon/pricing.toml`).
+[`crates/axon-core/assets/pricing.toml`](./crates/axon-core/assets/pricing.toml) (override at `~/.config/axon/pricing.toml`).
 A model missing from the map is flagged **`unpriced`** (its cost is a floor) rather than a
 silent €0; local/Ollama models are free. OpenCode's own per-message cost is used directly.
 

@@ -137,8 +137,8 @@ name = "axon"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "axon-core",
  "axum",
- "blake3",
  "chrono",
  "clap",
  "notify",
@@ -154,6 +154,26 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webbrowser",
+]
+
+[[package]]
+name = "axon-bus"
+version = "0.2.1"
+dependencies = [
+ "axon-core",
+]
+
+[[package]]
+name = "axon-core"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

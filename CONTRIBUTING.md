@@ -42,7 +42,7 @@ reference implementation):
 3. **Add the parser** as `src/ingest/<harness>.rs`, returning `Vec<RawTurn>`. Wire discovery
    into `src/ingest/mod.rs` and add the variant to `Harness` in `src/model.rs`.
 4. **Map model ids** to canonical form in `canonicalize_model` (and add rates to
-   `assets/pricing.toml` — leave unknown models to surface as `unpriced`, never a silent €0).
+   `crates/axon-core/assets/pricing.toml` — leave unknown models to surface as `unpriced`, never a silent €0).
 5. **Add gate tests** in `tests/` asserting collapse/attribution/cost against your fixture.
 
 ## Coding conventions
