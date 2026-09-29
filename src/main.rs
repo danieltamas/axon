@@ -405,5 +405,5 @@ fn ccflare_watch_dirs() -> Vec<std::path::PathBuf> {
 }
 
 fn db_path() -> std::path::PathBuf {
-    data_dir().join("axon").join("axon.db")
+    axon_core::store::default_path()
 }

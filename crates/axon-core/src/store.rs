@@ -4,7 +4,7 @@
 //! M1 uses a single connection. The mpsc single-writer / reader-pool contract and the
 //! `files(path, inode, offset, size)` tail-resume table arrive with the live pipeline (M4).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rusqlite::{params, Connection};
@@ -12,7 +12,7 @@ use rusqlite::{params, Connection};
 use crate::model::{Event, Harness, PricingKind};
 
 const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS events (
+CREATE TABLE IF NOT EXISTS usage_events (
     id              TEXT PRIMARY KEY,
     ts              INTEGER NOT NULL,
     harness         TEXT NOT NULL,
@@ -36,9 +36,20 @@ CREATE TABLE IF NOT EXISTS events (
     pricing_kind    TEXT NOT NULL DEFAULT 'unknown',
     unpriced        INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
-CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent);
+CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_events_agent ON usage_events(agent);
 ";
+
+/// The database shared by `axon` and `axon-bus`: `$XDG_DATA_HOME/axon/axon.db`.
+pub fn default_path() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
+        })
+        .join("axon")
+        .join("axon.db")
+}
 
 pub struct Store {
     conn: Connection,
@@ -60,6 +71,7 @@ impl Store {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )?;
+        rename_legacy_events(&conn)?;
         conn.execute_batch(SCHEMA)?;
         migrate_schema(&conn)?;
         if path != ":memory:" {
@@ -86,7 +98,7 @@ impl Store {
     pub fn count(&self) -> anyhow::Result<i64> {
         Ok(self
             .conn
-            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?)
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |r| r.get(0))?)
     }
 
     /// Read every event back (ordered by id for deterministic comparison).
@@ -95,7 +107,7 @@ impl Store {
             "SELECT id, ts, harness, project, agent, is_subagent, model, session_id, \
              tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h, duration_ms, \
              loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced \
-             FROM events ORDER BY id",
+             FROM usage_events ORDER BY id",
         )?;
         let rows = stmt.query_map([], row_to_event)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -105,7 +117,7 @@ impl Store {
 fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
     let skills = serde_json::to_string(&e.skills)?;
     conn.execute(
-        "INSERT INTO events (id, ts, harness, project, agent, is_subagent, model, session_id, \
+        "INSERT INTO usage_events (id, ts, harness, project, agent, is_subagent, model, session_id, \
             tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h, duration_ms, \
             loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22) \
@@ -178,18 +190,31 @@ fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
     })
 }
 
-fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
-    if !has_column(conn, "events", "cost_credits")? {
-        conn.execute("ALTER TABLE events ADD COLUMN cost_credits REAL", [])?;
+/// Axon <= 0.2.1 kept usage rows in `events`; axon-bus now owns `events` as its append-only
+/// audit log in the same file (BUS-PLAN §2), so the usage rows move, untouched, to `usage_events`.
+fn rename_legacy_events(conn: &Connection) -> anyhow::Result<()> {
+    if has_column(conn, "events", "harness")? && !has_column(conn, "usage_events", "id")? {
+        conn.execute_batch(
+            "ALTER TABLE events RENAME TO usage_events;
+             DROP INDEX IF EXISTS idx_events_ts;
+             DROP INDEX IF EXISTS idx_events_agent;",
+        )?;
     }
-    if !has_column(conn, "events", "pricing_kind")? {
+    Ok(())
+}
+
+fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
+    if !has_column(conn, "usage_events", "cost_credits")? {
+        conn.execute("ALTER TABLE usage_events ADD COLUMN cost_credits REAL", [])?;
+    }
+    if !has_column(conn, "usage_events", "pricing_kind")? {
         conn.execute(
-            "ALTER TABLE events ADD COLUMN pricing_kind TEXT NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE usage_events ADD COLUMN pricing_kind TEXT NOT NULL DEFAULT 'unknown'",
             [],
         )?;
     }
     conn.execute(
-        "UPDATE events SET pricing_kind = 'api-money' \
+        "UPDATE usage_events SET pricing_kind = 'api-money' \
          WHERE pricing_kind = 'unknown' AND unpriced = 0 AND cost_eur > 0",
         [],
     )?;
