@@ -325,8 +325,19 @@ fn pristine(harness: Harness, exe: &str, layout: &Layout) -> anyhow::Result<Opti
     Ok(current)
 }
 
+/// The binary hooks run: `axon-bus`, whose first argument is the verb. Run as `axon bus`,
+/// that is the `axon-bus` beside `axon`; `axon hook …` is not a command, so without that
+/// sibling nothing is wired rather than every tool call failing its hook.
 pub(crate) fn current_exe() -> anyhow::Result<String> {
-    let exe = std::env::current_exe().context("locate the axon-bus binary")?;
+    let mut exe = std::env::current_exe().context("locate the axon-bus binary")?;
+    if exe.file_stem().is_some_and(|stem| stem != "axon-bus") {
+        exe.set_file_name(format!("axon-bus{}", std::env::consts::EXE_SUFFIX));
+        anyhow::ensure!(
+            exe.is_file(),
+            "hooks run the axon-bus binary, and there is none at {}; build or install it beside axon",
+            exe.display()
+        );
+    }
     exe.to_str()
         .map(str::to_owned)
         .context("the axon-bus binary path is not UTF-8")
@@ -403,8 +414,17 @@ pub fn doctor(db: &Path) -> anyhow::Result<bool> {
     let mut healthy = true;
     for harness in detected() {
         let layout = layout(harness);
-        let marker = command(&exe, harness, "");
-        let config = read_optional(&layout.config)?.unwrap_or_default();
+        // OpenCode's config only names the plugin shim; the shim names the binary.
+        let (marker, config) = match &layout.plugin {
+            Some(plugin) => (
+                plugin_source(&exe),
+                read_optional(plugin)?.unwrap_or_default(),
+            ),
+            None => (
+                command(&exe, harness, ""),
+                read_optional(&layout.config)?.unwrap_or_default(),
+            ),
+        };
         let (state, detail) = if config.contains(marker.trim_end()) {
             ("ok", "hooks point at this binary")
         } else if config.contains("axon-bus") {
