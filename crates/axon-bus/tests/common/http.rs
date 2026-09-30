@@ -31,6 +31,8 @@ impl Server {
         ];
         if content {
             args.push("--content");
+        } else {
+            args.push("--no-content");
         }
         let mut process = bus.spawn(&args);
         let deadline = Instant::now() + bus.remaining().min(Duration::from_millis(1500));

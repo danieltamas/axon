@@ -1,6 +1,7 @@
 //! Contract decisions
-//! - `serve --port 0 --ready-file PATH [--content]` binds an ephemeral loopback port and
+//! - `serve --port 0 --ready-file PATH [--no-content]` binds an ephemeral loopback port and
 //!   atomically writes {url,token} after readiness; token changes on every boot.
+//!   Content capture is on by default; --no-content is structure-only (--content is accepted).
 //! - POST /api/msg accepts {from_id,to_id,kind,body}, requires X-Axon-Token plus exact
 //!   Origin=url, and returns 201 JSON {id,thread}. Denied requests must not insert messages.
 //! - Snapshot: {repos:[{repo:MAIN_PATH|null,name,harnesses:[{harness,roots:[NODE]}]}]}.
@@ -417,7 +418,7 @@ fn hermes_narrative_has_text_reasoning_not_recorded_and_collapsed_tools() {
     assert_narrative("hermes");
 }
 
-// BUS-PLAN §7 Privacy: without --content, text never leaves the tailer for snapshot or storage.
+// BUS-PLAN §7 Privacy: with --no-content, text never leaves the tailer for snapshot or storage.
 #[test]
 fn content_off_keeps_structure_but_neither_exposes_nor_stores_assistant_text() {
     let (bus, server) = server(false);
