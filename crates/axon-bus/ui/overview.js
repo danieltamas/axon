@@ -1,8 +1,9 @@
-// The projects overview: one row per project answering what the operator glances for —
-// what is being worked on, how many sessions are working, what it uses, and what needs
-// them. Rows keep a stable alphabetical order; selecting one opens the project.
+// The projects overview: headline figures, then the projects with work in progress (or
+// something waiting on the operator) above the quiet ones. Each row answers what is being
+// worked on, by which harnesses, at what cost; selecting one opens the project.
 
-import { bytes, el, glyph, setText, since, tokens, money, walk } from "./dom.js";
+import { doingNow } from "./board.js";
+import { bytes, el, glyph, setText, since, stats, tokens, money, walk } from "./dom.js";
 
 const RECENT_MS = 15 * 60 * 1000;
 
@@ -71,11 +72,21 @@ function group(attention) {
 
 export function createOverview(container, onOpen) {
   const rows = new Map();
-  const summary = el("p", "summary");
-  const list = el("div", "projects");
-  const head = el("div", "p-cols");
-  head.setAttribute("aria-hidden", "true");
-  for (const name of ["Project", "Current work", "Sessions", "Usage", "Needs you"]) head.append(el("span", null, name));
+  const figures = el("div", "ov-figures");
+  const working = group("Working now");
+  const quiet = group("Quiet");
+  quiet.section.classList.add("quiet");
+
+  function group(title) {
+    const section = el("section", "p-group");
+    const head = el("h2", "p-group-head");
+    const name = el("span", null, title);
+    const count = el("span", "p-count");
+    head.append(name, count);
+    const list = el("div", "projects");
+    section.append(head, list);
+    return { section, count, list };
+  }
 
   function row(key) {
     let entry = rows.get(key);
@@ -86,22 +97,12 @@ export function createOverview(container, onOpen) {
     const who = el("span", "p-who");
     const name = el("span", "p-name");
     const path = el("span", "p-path");
-    const kinds = el("span", "p-kinds");
-    const where = el("span", "p-where");
-    where.append(path, kinds);
-    who.append(name, where);
+    who.append(name, path);
     const work = el("span", "p-work");
-    const sessions = el("span", "p-sessions");
-    const working = el("b");
-    const total = el("small");
-    sessions.append(working, total);
+    const kinds = el("span", "p-kinds");
     const usage = el("span", "p-usage");
-    const usageTop = el("span");
-    const usageSub = el("small");
-    usage.append(usageTop, usageSub);
-    const needs = el("span", "p-needs");
-    button.append(who, work, sessions, usage, needs);
-    entry = { button, name, path, kinds, work, working, total, usageTop, usageSub, needs, keys: {} };
+    button.append(who, work, kinds, usage);
+    entry = { button, name, path, kinds, work, usage, keys: {} };
     rows.set(key, entry);
     return entry;
   }
@@ -124,74 +125,97 @@ export function createOverview(container, onOpen) {
         ...[...s.harnesses].map(([harness, h]) => {
           const kind = el("span", "p-kind");
           kind.title = `${harness}: ${h.working} of ${h.total} working`;
-          kind.append(glyph(harness), el("span", null, String(h.total)));
+          kind.dataset.working = String(h.working > 0);
+          kind.append(glyph(harness), el("span", null, h.working ? `${h.working}/${h.total}` : String(h.total)));
           return kind;
         }),
       ),
     );
     const lines = workLines(s, now);
-    once(entry, "work", JSON.stringify(lines), () => entry.work.replaceChildren(...lines.map(([cls, text]) => el("span", cls, text))));
-    setText(entry.working, s.facts.working ? `${s.facts.working} working` : "idle");
-    setText(entry.total, `${s.facts.sessions} open`);
-    setText(entry.usageTop, `${tokens(s.facts.tokens)} tok`);
-    setText(entry.usageSub, [s.facts.cost ? money(s.facts.cost) : null, s.facts.rss ? bytes(s.facts.rss) : null].filter(Boolean).join(" · "));
-    once(entry, "needs", JSON.stringify(s.attention), () => {
-      if (!s.attention.length) {
-        entry.needs.replaceChildren(el("span", "p-none", "—"));
-        return;
-      }
-      const first = s.attention[0];
-      const total = s.attention.reduce((n, a) => n + a.count, 0);
-      entry.needs.replaceChildren(el("b", `n-${first.level}`, String(total)), el("span", null, first.text));
-    });
+    once(entry, "work", JSON.stringify(lines), () =>
+      entry.work.replaceChildren(
+        ...lines.map(([cls, text, count]) => {
+          const line = el("span", cls);
+          if (count) line.append(el("b", null, String(count)));
+          line.append(el("span", null, text));
+          return line;
+        }),
+      ),
+    );
+    setText(entry.usage, [s.facts.tokens ? `${tokens(s.facts.tokens)} tok` : null, s.facts.cost ? money(s.facts.cost) : null].filter(Boolean).join(" · "));
+  }
+
+  function place(target, entries) {
+    setText(target.count, String(entries.length));
+    target.section.hidden = !entries.length;
+    const current = [...target.list.children];
+    if (current.length !== entries.length || current.some((node, i) => node !== entries[i])) target.list.replaceChildren(...entries);
   }
 
   return {
     render(snapshot, now) {
-      // A fixed order: rows never move as sessions start and stop, so a project stays
-      // where the operator last saw it. "no repo" (no path) goes last.
+      // Alphabetical inside each group, so a project stays where the operator last saw
+      // it until it starts or stops working. "no repo" (no path) goes last.
       const repos = (snapshot.repos || []).slice().sort((a, b) => !a.repo - !b.repo || a.name.localeCompare(b.name) || projectKey(a).localeCompare(projectKey(b)));
       const seen = new Set();
-      let sessions = 0;
-      let busy = 0;
-      let rss = 0;
-      let needs = 0;
-      const order = repos.map((repo) => {
+      const busyRows = [];
+      const quietRows = [];
+      const total = { sessions: 0, working: 0, rss: 0, needs: 0, cost: 0 };
+      for (const repo of repos) {
         const key = projectKey(repo);
         seen.add(key);
         const s = summarize(repo, snapshot.messages || [], now);
-        sessions += s.facts.sessions;
-        busy += s.facts.working;
-        rss += s.facts.rss;
-        needs += s.attention.length ? 1 : 0;
+        total.sessions += s.facts.sessions;
+        total.working += s.facts.working;
+        total.rss += s.facts.rss;
+        total.cost += s.facts.cost;
+        total.needs += s.attention.length ? 1 : 0;
         const entry = row(key);
         update(entry, repo, s, now);
-        return entry.button;
-      });
-      for (const key of rows.keys()) if (!seen.has(key)) rows.delete(key);
-      if (!summary.isConnected) container.replaceChildren(summary, head, list);
-      setText(
-        summary,
-        repos.length
-          ? [`${repos.length} ${repos.length === 1 ? "project" : "projects"}`, `${sessions} sessions open`, `${busy} working now`, rss ? `${bytes(rss)} memory` : null, needs ? `${needs} need you` : null].filter(Boolean).join("  ·  ")
-          : "",
-      );
-      if (!repos.length) {
-        list.replaceChildren(empty());
-        return;
+        (s.facts.working || s.attention.length ? busyRows : quietRows).push(entry.button);
       }
-      const current = [...list.children];
-      if (current.length !== order.length || current.some((node, i) => node !== order[i])) list.replaceChildren(...order);
+      for (const key of rows.keys()) if (!seen.has(key)) rows.delete(key);
+      if (!figures.isConnected) container.replaceChildren(figures, working.section, quiet.section);
+      const key = JSON.stringify([repos.length, total]);
+      if (figures.dataset.key !== key) {
+        figures.dataset.key = key;
+        figures.replaceChildren(
+          ...(repos.length
+            ? [
+                stats([
+                  ["Sessions working", `${total.working} of ${total.sessions}`, total.working ? "signal" : null],
+                  ["Projects", String(repos.length)],
+                  ["Session spend", total.cost ? money(total.cost) : null],
+                  ["Memory", total.rss ? bytes(total.rss) : null],
+                  ["Need you", total.needs ? String(total.needs) : null, "warn"],
+                ]),
+              ]
+            : [empty()]),
+        );
+      }
+      place(working, busyRows);
+      place(quiet, quietRows);
     },
   };
 }
 
-// What the project is doing: the working roots' missions, or for sessions seen only from
-// their process, their model and last turn; a quiet project says when it last worked.
+// What the project is doing: what needs the operator first, then one line per working
+// session (its mission, else what it last did); a quiet project says when it last worked.
 function workLines(s, now) {
-  if (!s.work.length) return [["p-quiet", s.facts.last ? `Quiet · last turn ${since(s.facts.last, now)}` : "Quiet"]];
-  const lines = s.work.slice(0, 2).map((node) => ["p-line", node.mission || [node.model, node.last_ts ? `turn ${since(node.last_ts, now)}` : null].filter(Boolean).join(" · ") || node.id]);
-  if (s.work.length > 2) lines.push(["p-more", `and ${s.work.length - 2} more`]);
+  const lines = [];
+  if (s.attention.length) {
+    const first = s.attention[0];
+    lines.push([`p-need n-${first.level}`, first.text, s.attention.reduce((n, a) => n + a.count, 0)]);
+  }
+  if (!s.work.length) {
+    lines.push(["p-quiet", s.facts.last ? `Last turn ${since(s.facts.last, now)}` : "No turns recorded"]);
+    return lines;
+  }
+  for (const node of s.work.slice(0, 2)) {
+    const said = doingNow(node.narrative || []);
+    lines.push(["p-line", node.mission || (said ? said.text : node.model || "Working")]);
+  }
+  if (s.work.length > 2) lines.push(["p-more", `and ${s.work.length - 2} more working`]);
   return lines;
 }
 

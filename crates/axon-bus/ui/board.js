@@ -16,10 +16,13 @@ export function createBoard(container, scroller, onSelect) {
   const sums = new Map();
   let shape = "";
 
-  function card(node) {
+  // A session is a card; a subagent is one aligned row beside it. The same agent keeps
+  // its element across snapshots unless its place in the tree changes kind.
+  function card(node, depth) {
+    const kind = depth === 0 ? "root" : "sub";
     let entry = cards.get(node.id);
-    if (entry) return entry;
-    const button = el("button", "node");
+    if (entry && entry.kind === kind) return entry;
+    const button = el("button", `node ${kind}`);
     button.type = "button";
     button.dataset.id = node.id;
     button.addEventListener("click", () => onSelect(node.id));
@@ -27,55 +30,70 @@ export function createBoard(container, scroller, onSelect) {
     const who = el("span", "who");
     const role = el("span", "role");
     const id = el("span", "id");
-    const status = el("span", "state-word");
     who.append(role, id);
+    const status = el("span", "state-word");
     const mission = el("span", "mission");
-    const doing = el("span", "doing");
-    const doingLabel = el("b");
-    const doingText = el("span");
-    doing.append(doingLabel, doingText);
-    const spark = el("span", "spark");
     const model = el("span", "model");
     const metrics = el("span", "metrics");
     const notes = el("span", "notes");
-    button.append(ring, who, status, mission, doing, spark, model, metrics, notes);
-    entry = { button, ring, role, id, status, mission, doing, doingLabel, doingText, spark, model, metrics, notes };
+    entry = { kind, button, ring, role, id, status, mission, model, metrics, notes };
+    if (kind === "root") {
+      const head = el("span", "n-head");
+      head.append(ring, who, status);
+      const doing = el("span", "doing");
+      const doingLabel = el("b");
+      const doingText = el("span");
+      doing.append(doingLabel, doingText);
+      const spark = el("span", "spark");
+      const foot = el("span", "n-foot");
+      foot.append(model, metrics, notes);
+      button.append(head, mission, doing, spark, foot);
+      Object.assign(entry, { doing, doingLabel, doingText, spark });
+    } else {
+      who.append(mission);
+      button.append(ring, who, model, metrics, status);
+    }
     cards.set(node.id, entry);
     return entry;
   }
 
-  function update(entry, node, depth, selected, now) {
+  function update(entry, node, selected, now) {
     const b = entry.button;
     if (b.dataset.status !== node.status) b.dataset.status = node.status;
-    b.dataset.depth = depth;
     b.classList.toggle("observed", Boolean(node.observed));
     b.setAttribute("aria-pressed", String(selected === node.id));
     b.setAttribute("aria-label", `${node.role || "agent"} ${node.id}, ${STATUS[node.status] || node.status}`);
     setRing(entry.ring, node.budget);
     setText(entry.role, roleLabel(node));
-    setText(entry.id, node.observed ? `pid ${node.pid || node.id.split("-").pop()}` : node.id);
+    setText(entry.id, node.observed ? `pid ${node.pid || node.id.split("-").pop()}` : shortId(node.id));
+    entry.id.title = node.id;
     setText(entry.status, STATUS[node.status] || node.status);
+    setText(entry.model, node.model || (node.observed ? "no turns yet" : ""));
+    if (entry.kind === "sub") {
+      setText(entry.mission, node.mission || "");
+      setText(entry.metrics, costLine(node));
+      return;
+    }
     // An observed session has no mission; when it last worked is the next best thing.
     setText(entry.mission, node.mission || (node.observed && node.last_ts ? `Last turn ${since(node.last_ts, now)}` : ""));
-    const latest = depth === 0 ? doingNow(node.narrative || []) : null;
+    const latest = doingNow(node.narrative || []);
     entry.doing.hidden = !latest;
     setText(entry.doingLabel, latest ? (node.status === "active" ? "Now" : latest.verb) : "");
     setText(entry.doingText, latest ? latest.text : "");
-    const hours = depth === 0 && node.activity ? node.activity.hours : null;
+    const hours = node.activity ? node.activity.hours : null;
     const key = hours ? hours.join() : "";
     if (entry.spark.dataset.key !== key) {
       entry.spark.dataset.key = key;
       entry.spark.replaceChildren(...(hours ? [activityChart(hours, null, true)] : []));
     }
-    setText(entry.model, node.model || (node.observed ? "no turns ingested yet" : ""));
-    setText(entry.metrics, metricsLine(node));
-    setText(entry.notes, notesLine(node, depth));
+    setText(entry.metrics, [costLine(node), node.rss ? bytes(node.rss) : null].filter(Boolean).join(" · "));
+    setText(entry.notes, notesLine(node));
   }
 
   // A subagent and, nested under it, its own subagents.
   function branch(node) {
     const box = el("div", "branch");
-    box.append(card(node).button);
+    box.append(card(node, 1).button);
     if (node.children && node.children.length) {
       const kids = el("div", "kids");
       kids.append(...node.children.map(branch));
@@ -89,7 +107,8 @@ export function createBoard(container, scroller, onSelect) {
     const subs = el("div", "subs");
     subs.append(...(root.children || []).map(branch));
     box.classList.toggle("solo", !subs.childElementCount);
-    box.append(card(root).button, subs);
+    box.append(card(root, 0).button);
+    if (subs.childElementCount) box.append(subs);
     return box;
   }
 
@@ -104,8 +123,13 @@ export function createBoard(container, scroller, onSelect) {
       const sum = el("span", "sum");
       sums.set(lane.harness, sum);
       head.append(name, sum);
+      // Sessions with subagents take a row each; the rest tile beneath them.
       const roots = el("div", "roots");
-      roots.append(...lane.roots.map(family));
+      const boxes = lane.roots.map(family);
+      const solos = el("div", "solos");
+      solos.append(...boxes.filter((b) => b.classList.contains("solo")));
+      roots.append(...boxes.filter((b) => !b.classList.contains("solo")));
+      if (solos.childElementCount) roots.append(solos);
       section.append(head, roots);
       return section;
     });
@@ -130,10 +154,10 @@ export function createBoard(container, scroller, onSelect) {
         if (depth === 0) count += 1;
         if (depth === 0 && node.status === "active") active += 1;
         cost += node.cost_usd || 0;
-        update(card(node), node, depth, selected, now);
+        update(card(node, depth), node, selected, now);
       });
       const sum = sums.get(lane.harness);
-      if (sum) setText(sum, `${active} of ${count} working${cost ? ` · ${money(cost)}` : ""}`);
+      if (sum) setText(sum, [`${active} of ${count} working`, cost ? money(cost) : null].filter(Boolean).join(", "));
     }
     for (const id of cards.keys()) if (!seen.has(id)) cards.delete(id);
   }
@@ -199,9 +223,20 @@ export function doingNow(rows) {
   return null;
 }
 
-function notesLine(node, depth) {
+// Tokens and price, the two figures every agent row carries.
+function costLine(node) {
+  const price = node.unpriced ? (node.tokens ? "unpriced" : null) : node.cost_usd ? money(node.cost_usd) : null;
+  return [`${tokens(node.tokens)} tok`, price].filter(Boolean).join(" · ");
+}
+
+// A session UUID is noise at a glance; its first block tells sessions apart.
+function shortId(id) {
+  return /^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(id) ? id.slice(0, 8) : id;
+}
+
+function notesLine(node) {
   const notes = [];
-  if (depth === 0 && node.branch && node.branch !== "main" && node.branch !== "master") notes.push(`on ${node.branch}`);
+  if (node.branch && node.branch !== "main" && node.branch !== "master") notes.push(`on ${node.branch}`);
   if (node.repo_badge) notes.push(`working in ${node.repo_badge.split("/").pop()}`);
   return notes.join(" · ");
 }

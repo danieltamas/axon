@@ -56,6 +56,19 @@ export function setRing(box, budget) {
   used.style.setProperty("stroke-dasharray", `${(fraction * 100).toFixed(1)} 100`);
 }
 
+// A row of headline figures, label over value; `tone` colours the value ("signal",
+// "warn"). A missing value drops its figure rather than showing a placeholder.
+export function stats(items) {
+  const list = el("dl", "stats");
+  for (const [label, value, tone] of items) {
+    if (value === null || value === undefined || value === "") continue;
+    const item = el("div", tone ? `stat ${tone}` : "stat");
+    item.append(el("dt", null, label), el("dd", null, value));
+    list.append(item);
+  }
+  return list;
+}
+
 // Update text only when it changed, so an unchanged row costs no layout.
 export function setText(node, text) {
   const value = text === undefined || text === null ? "" : String(text);

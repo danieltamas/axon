@@ -7,7 +7,7 @@ import { activityChart, sumHours } from "./activity.js";
 import { createArcs } from "./arcs.js";
 import { createBoard } from "./board.js";
 import { createContext } from "./context.js";
-import { agents, bytes, el, money, setCurrency, setText, tokens } from "./dom.js";
+import { agents, bytes, el, money, setCurrency, setText, stats, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
 import { createUsage } from "./usage.js";
 
@@ -107,27 +107,22 @@ function renderProjectHead(repo, s) {
     head.replaceChildren();
     return;
   }
-  const title = el("h1", null, repo.name);
-  title.title = repo.repo || "";
   const f = s.facts;
-  const totals = el(
-    "p",
-    "totals",
-    [
-      `${f.sessions} ${f.sessions === 1 ? "session" : "sessions"}`,
-      `${f.working} working`,
-      f.agents > f.sessions ? `${f.agents - f.sessions} subagents` : null,
-      `${tokens(f.tokens)} tokens`,
-      f.cost ? money(f.cost) : null,
-      f.unpriced ? `${f.unpriced} unpriced` : null,
-      f.rss ? bytes(f.rss) : null,
-    ]
-      .filter(Boolean)
-      .join("  ·  "),
+  const who = el("div", "ph-who");
+  const title = el("h1", null, repo.name);
+  who.append(title, el("p", "ph-path", repo.repo || "outside any repository"));
+  who.append(
+    stats([
+      ["Sessions working", `${f.working} of ${f.sessions}`, f.working ? "signal" : null],
+      ["Subagents", f.agents > f.sessions ? String(f.agents - f.sessions) : null],
+      ["Tokens", tokens(f.tokens)],
+      [f.unpriced ? "Spend, partly unpriced" : "Spend", f.cost ? money(f.cost) : null],
+      ["Memory", f.rss ? bytes(f.rss) : null],
+    ]),
   );
-  head.replaceChildren(title, totals);
+  head.replaceChildren(who);
   // Only observed sessions carry Axon's hourly record; a bus-only project has none.
-  if (roots.some((r) => r.activity)) head.append(activityChart(hours, "turns per hour, all sessions"));
+  if (roots.some((r) => r.activity)) head.append(activityChart(hours, "turns per hour"));
   if (!s.attention.length) return;
   const list = el("ul", "needs");
   for (const a of s.attention) {
