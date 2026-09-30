@@ -168,6 +168,9 @@ pub fn route(conn: &Connection, from: &str, to: &str) -> anyhow::Result<Option<V
 
 /// The refusal text for a non-edge send, naming the route to relay through.
 pub fn refusal(conn: &Connection, from: &str, to: &str) -> anyhow::Result<String> {
+    if from == to {
+        return Ok(format!("{from} cannot message itself"));
+    }
     Ok(match route(conn, from, to)? {
         Some(path) => format!(
             "{from} has no edge to {to}; relay along the route {} (send to {} and ask it to forward)",

@@ -3,6 +3,8 @@
 //!
 //! Each config is rewritten from its pristine copy — the `<file>.axon-bus.bak` backup once
 //! one exists — so installing again produces the same bytes. Uninstall puts the backup back.
+//! A config the user edited after install is wired or unwired in place instead, so those
+//! edits are never rolled back.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -185,12 +187,90 @@ fn wire(
             if !text.is_empty() && !text.ends_with('\n') {
                 text.push('\n');
             }
-            text.push_str("# axon-bus hooks; `axon-bus uninstall` removes them\nhooks:\n");
-            for event in HERMES_EVENTS {
-                let cmd = command(exe, harness, event).replace('\'', "''");
-                text.push_str(&format!("  {event}:\n    - command: '{cmd}'\n"));
-            }
+            text.push_str(&hermes_block(exe));
             Ok(text)
+        }
+    }
+}
+
+const HERMES_MARKER: &str = "# axon-bus hooks; `axon-bus uninstall` removes them\n";
+
+fn hermes_block(exe: &str) -> String {
+    let mut block = format!("{HERMES_MARKER}hooks:\n");
+    for event in HERMES_EVENTS {
+        let cmd = command(exe, Harness::Hermes, event).replace('\'', "''");
+        block.push_str(&format!("  {event}:\n    - command: '{cmd}'\n"));
+    }
+    block
+}
+
+/// `current` without the bus hooks, keeping every edit the user made after install.
+/// Lists and tables the bus created are dropped once they are empty again.
+fn unwire(harness: Harness, current: &str, exe: &str, layout: &Layout) -> anyhow::Result<String> {
+    match harness {
+        Harness::Claude => {
+            let mut settings: Value = serde_json::from_str(current)?;
+            if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
+                for event in CLAUDE_EVENTS {
+                    let cmd = command(exe, harness, event);
+                    let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
+                        continue;
+                    };
+                    let before = entries.len();
+                    entries.retain(|e| !e.to_string().contains(&cmd));
+                    if entries.is_empty() && before > 0 {
+                        hooks.remove(event);
+                    }
+                }
+                if hooks.is_empty() {
+                    settings.as_object_mut().map(|s| s.remove("hooks"));
+                }
+            }
+            Ok(serde_json::to_string_pretty(&settings)? + "\n")
+        }
+        Harness::Codex => {
+            let mut doc: toml_edit::DocumentMut = current.parse()?;
+            if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut()) {
+                for event in CODEX_EVENTS {
+                    let cmd = command(exe, harness, event);
+                    let Some(entries) = hooks.get_mut(event).and_then(|e| e.as_array_mut()) else {
+                        continue;
+                    };
+                    let before = entries.len();
+                    entries.retain(|e| {
+                        e.as_inline_table()
+                            .and_then(|t| t.get("command"))
+                            .and_then(|c| c.as_str())
+                            != Some(cmd.as_str())
+                    });
+                    if entries.is_empty() && before > 0 {
+                        hooks.remove(event);
+                    }
+                }
+                if hooks.is_empty() {
+                    doc.remove("hooks");
+                }
+            }
+            Ok(doc.to_string())
+        }
+        Harness::Opencode => {
+            let mut config: Value = serde_json::from_str(current)?;
+            let plugin = layout.plugin.as_ref().expect("opencode has a plugin shim");
+            let url = json!(format!("file://{}", plugin.display()));
+            if let Some(plugins) = config.get_mut("plugin").and_then(Value::as_array_mut) {
+                plugins.retain(|p| *p != url);
+                if plugins.is_empty() {
+                    config.as_object_mut().map(|c| c.remove("plugin"));
+                }
+            }
+            Ok(serde_json::to_string_pretty(&config)? + "\n")
+        }
+        Harness::Hermes => {
+            let block = hermes_block(exe);
+            if !current.contains(&block) {
+                bail!("config.yaml: the axon-bus hooks block was edited; remove it by hand");
+            }
+            Ok(current.replacen(&block, "", 1))
         }
     }
 }
@@ -265,15 +345,43 @@ fn current_exe() -> anyhow::Result<String> {
         .context("the axon-bus binary path is not UTF-8")
 }
 
+/// Whether the live config differs from what install wrote over the backup `original`.
+fn edited_since_install(
+    harness: Harness,
+    current: Option<&str>,
+    original: &str,
+    exe: &str,
+    layout: &Layout,
+) -> anyhow::Result<bool> {
+    Ok(current.is_some_and(|c| wire(harness, Some(original), exe, layout).map_or(true, |w| w != c)))
+}
+
 pub fn install(harness: Harness) -> anyhow::Result<()> {
     let exe = current_exe()?;
     let layout = layout(harness);
-    let original = pristine(harness, &exe, &layout)?;
-    let wired = wire(harness, original.as_deref(), &exe, &layout)
-        .with_context(|| format!("wire {}", layout.config.display()))?;
-    if let Some(original) = &original {
-        write_if_changed(&backup_path(&layout.config), original)?;
-    }
+    let current = read_optional(&layout.config)?;
+    let backup = read_optional(&backup_path(&layout.config))?;
+    let wired = match (&backup, &current) {
+        // Edited after install: wire the live file so those edits survive.
+        (Some(original), Some(live))
+            if edited_since_install(harness, Some(live), original, &exe, &layout)? =>
+        {
+            if harness == Harness::Hermes && live.contains(HERMES_MARKER) {
+                live.clone()
+            } else {
+                wire(harness, Some(live), &exe, &layout)
+                    .with_context(|| format!("wire {}", layout.config.display()))?
+            }
+        }
+        _ => {
+            let original = pristine(harness, &exe, &layout)?;
+            if let Some(original) = &original {
+                write_if_changed(&backup_path(&layout.config), original)?;
+            }
+            wire(harness, original.as_deref(), &exe, &layout)
+                .with_context(|| format!("wire {}", layout.config.display()))?
+        }
+    };
     write_if_changed(&layout.config, &wired)?;
     if let Some(plugin) = &layout.plugin {
         write_if_changed(plugin, &plugin_source(&exe))?;
@@ -288,14 +396,15 @@ pub fn uninstall(harness: Harness) -> anyhow::Result<()> {
     let backup = backup_path(&layout.config);
     let current = read_optional(&layout.config)?;
     if let Some(original) = read_optional(&backup)? {
-        if current.is_some() && current != Some(wire(harness, Some(&original), &exe, &layout)?) {
-            eprintln!(
-                "{}: {} changed after install; restoring the pre-install backup",
-                harness.as_str(),
-                layout.config.display()
-            );
+        match current.as_deref() {
+            // Edited after install: take out only the bus hooks, keep the edits.
+            Some(live) if edited_since_install(harness, Some(live), &original, &exe, &layout)? => {
+                let unwired = unwire(harness, live, &exe, &layout)
+                    .with_context(|| format!("unwire {}", layout.config.display()))?;
+                fs::write(&layout.config, unwired)?;
+            }
+            _ => fs::write(&layout.config, original)?,
         }
-        fs::write(&layout.config, original)?;
         fs::remove_file(&backup)?;
     } else if current.is_some() && current == Some(wire(harness, None, &exe, &layout)?) {
         fs::remove_file(&layout.config)?;

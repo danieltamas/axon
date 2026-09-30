@@ -106,6 +106,37 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     advisor_json TEXT
 );
 
+-- What agents say and think (BUS-PLAN §7), one row per block. `text` and `tool_detail`
+-- stay NULL unless content capture is on; rows expire after 7 days (transcript::RETENTION_MS).
+CREATE TABLE IF NOT EXISTS narrative (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT NOT NULL REFERENCES agents(id),
+    ts          INTEGER NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('assistant','reasoning','progress','tool')),
+    source      TEXT NOT NULL,
+    text        TEXT,
+    recorded    INTEGER,
+    tokens      INTEGER,
+    tool_name   TEXT,
+    tool_detail TEXT,
+    failed      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_narrative_agent ON narrative(agent_id, id);
+
+-- How far each agent's transcript has been read, whether or not that part held usage.
+CREATE TABLE IF NOT EXISTS ingest_cursors (
+    agent_id    TEXT NOT NULL REFERENCES agents(id),
+    path        TEXT NOT NULL,
+    byte_offset INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, path)
+);
+
+-- Machine-wide switches; `content_capture` ('1'/'0') is set by the last `serve` boot.
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts           INTEGER NOT NULL,
@@ -247,7 +278,9 @@ fn row_hash(
 
 /// Walk the chain; fail naming the first event whose content no longer matches the
 /// hash its successor recorded. Returns the number of events checked.
-pub fn verify(conn: &Connection) -> anyhow::Result<u64> {
+/// The number of events checked and the chain head's hash. Record the head elsewhere to
+/// detect a truncated tail, which a chain cannot reveal by itself.
+pub fn verify(conn: &Connection) -> anyhow::Result<(u64, String)> {
     let mut stmt = conn.prepare(
         "SELECT seq,ts,actor,verb,subject,payload_hash,prev_hash FROM events ORDER BY seq",
     )?;
@@ -279,7 +312,7 @@ pub fn verify(conn: &Connection) -> anyhow::Result<u64> {
         previous_seq = Some(seq);
         checked += 1;
     }
-    Ok(checked)
+    Ok((checked, expected))
 }
 
 #[cfg(test)]
@@ -298,7 +331,7 @@ mod tests {
         for actor in ["a", "b", "c"] {
             append_event(&conn, actor, "register", actor, "{}").unwrap();
         }
-        assert_eq!(verify(&conn).unwrap(), 3);
+        assert_eq!(verify(&conn).unwrap().0, 3);
         assert!(conn.execute("UPDATE events SET actor='x'", []).is_err());
         assert!(conn.execute("DELETE FROM events", []).is_err());
     }

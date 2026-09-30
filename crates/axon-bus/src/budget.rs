@@ -44,13 +44,14 @@ pub fn parse_tokens(text: &str) -> anyhow::Result<i64> {
 }
 
 /// Set (or replace) the ceiling on `scope`: the whole tree when it is a root, else the
-/// agent alone. Replacing it re-arms the gate and lifts the bus's budget stops.
+/// agent alone. Replacing it re-arms the gate and lifts this budget's stops. Returns the
+/// members whose doorbells to silence once the transaction commits.
 pub fn set(
     conn: &Connection,
     scope: &str,
     tokens_max: Option<i64>,
     usd_max: Option<f64>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<String>> {
     let parent: Option<String> = conn
         .query_row("SELECT parent_id FROM agents WHERE id=?1", [scope], |r| {
             r.get(0)
@@ -67,11 +68,13 @@ pub fn set(
          usd_max=excluded.usd_max, state='ok', stale_warned_at=NULL",
         params![scope, kind, tokens_max, usd_max],
     )?;
-    for member in members(conn, scope, kind)? {
-        msg::clear_bus_stops(conn, &member)?;
+    let members = members(conn, scope, kind)?;
+    for member in &members {
+        msg::clear_bus_stops(conn, scope, member)?;
     }
     let payload = json!({"kind": kind, "tokens_max": tokens_max, "usd_max": usd_max});
-    append_event(conn, scope, "budget", scope, &payload.to_string())
+    append_event(conn, scope, "budget", scope, &payload.to_string())?;
+    Ok(members)
 }
 
 fn load(conn: &Connection, scope: &str) -> rusqlite::Result<Option<Budget>> {
@@ -103,7 +106,8 @@ fn members(conn: &Connection, scope: &str, kind: &str) -> rusqlite::Result<Vec<S
 }
 
 /// Usage over the scope's members, priced per model from axon-core's bundled USD rates.
-fn totals(conn: &Connection, budget_scope: &str, kind: &str) -> anyhow::Result<Totals> {
+/// With `priced` false the cost is left unknown, sparing the hook path the rate table.
+fn totals(conn: &Connection, budget_scope: &str, kind: &str, priced: bool) -> anyhow::Result<Totals> {
     let member_filter = if kind == "agent" {
         "u.agent_id=?1"
     } else {
@@ -116,11 +120,14 @@ fn totals(conn: &Connection, budget_scope: &str, kind: &str) -> anyhow::Result<T
          FROM usage u WHERE {member_filter} GROUP BY u.model"
     ))?;
     // Budgets are in USD, so the display-currency FX is not applied.
-    let mut pricing = Pricing::bundled();
-    pricing.fx_to_display = None;
+    let pricing = priced.then(|| {
+        let mut pricing = Pricing::bundled();
+        pricing.fx_to_display = None;
+        pricing
+    });
     let mut totals = Totals {
         tokens: 0,
-        cost_usd: Some(0.0),
+        cost_usd: priced.then_some(0.0),
         newest_ts: None,
     };
     let mut rows = stmt.query([budget_scope])?;
@@ -143,11 +150,13 @@ fn totals(conn: &Connection, budget_scope: &str, kind: &str) -> anyhow::Result<T
         let (reported_rows, all_rows): (i64, i64) = (r.get(7)?, r.get(8)?);
         let row_cost = if reported_rows == all_rows {
             Some(reported)
-        } else {
+        } else if let Some(pricing) = &pricing {
             // Rows without a reported cost are priced from their buckets; a model without
             // rates makes the whole total unknown. Mixed groups are not expected per model.
             let (cost, unpriced) = pricing.cost(&canonicalize_model(&model), &buckets);
             (!unpriced).then_some(cost)
+        } else {
+            None
         };
         totals.cost_usd = totals.cost_usd.zip(row_cost).map(|(a, b)| a + b);
         totals.newest_ts = totals.newest_ts.max(r.get(9)?);
@@ -157,14 +166,14 @@ fn totals(conn: &Connection, budget_scope: &str, kind: &str) -> anyhow::Result<T
 
 /// What one agent's usage cost in USD; None when it has no usage or any of it is unpriced.
 pub fn agent_cost(conn: &Connection, agent: &str) -> anyhow::Result<Option<f64>> {
-    let totals = totals(conn, agent, "agent")?;
+    let totals = totals(conn, agent, "agent", true)?;
     Ok(totals.cost_usd.filter(|_| totals.tokens > 0))
 }
 
 /// `budget show`: the scope's ceiling, totals and state.
 pub fn show(conn: &Connection, scope: &str) -> anyhow::Result<Value> {
     let budget = load(conn, scope)?.with_context(|| format!("{scope} has no budget"))?;
-    let totals = totals(conn, scope, &budget.kind)?;
+    let totals = totals(conn, scope, &budget.kind, true)?;
     Ok(json!({
         "scope_id": budget.scope_id,
         "kind": budget.kind,
@@ -210,7 +219,7 @@ pub fn check(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
 
 fn check_scope(conn: &Connection, budget: &Budget, root: &str) -> anyhow::Result<Option<String>> {
     let scope = budget.scope_id.as_str();
-    let totals = totals(conn, scope, &budget.kind)?;
+    let totals = totals(conn, scope, &budget.kind, budget.usd_max.is_some())?;
     let used = used(budget, &totals);
     let spent = format!(
         "{} tokens{} of {}",
@@ -221,27 +230,24 @@ fn check_scope(conn: &Connection, budget: &Budget, root: &str) -> anyhow::Result
             .unwrap_or_default(),
         ceiling(budget)
     );
+    let exhausted = format!("Budget of {scope} is exhausted: {spent}. Stop now.");
     if budget.state == "stopped" {
+        return Ok(Some(exhausted));
+    }
+    // Unknown is not free: a USD-only ceiling over unpriced usage cannot be enforced.
+    if budget.tokens_max.is_none() && totals.cost_usd.is_none() && totals.tokens > 0 {
         return Ok(Some(format!(
-            "Budget of {scope} is exhausted: {spent}. Stop now."
+            "Budget of {scope} is USD-only, but usage from an unpriced model makes its cost \
+             unknown ({} tokens); add a token ceiling with `axon-bus budget set {scope} <N>tok`.",
+            totals.tokens
         )));
     }
     if used >= 1.0 {
-        set_state(conn, scope, "stopped")?;
-        let body = format!("budget of {scope} reached: {spent}");
-        for member in members(conn, scope, &budget.kind)? {
-            msg::from_bus(conn, scope, &member, "stop", &body)?;
+        // The denial stands even if recording the stop fails (§2: this gate fails closed).
+        if let Err(err) = stop_members(conn, budget, &totals, &spent) {
+            eprintln!("axon-bus: budget of {scope} reached, but recording its stop failed: {err:#}");
         }
-        append_event(
-            conn,
-            msg::BUS,
-            "budget_stop",
-            scope,
-            &json!({"tokens": totals.tokens}).to_string(),
-        )?;
-        return Ok(Some(format!(
-            "Budget of {scope} is exhausted: {spent}. Stop now."
-        )));
+        return Ok(Some(exhausted));
     }
     if used >= 0.8 && budget.state == "ok" {
         set_state(conn, scope, "warned")?;
@@ -295,6 +301,16 @@ fn check_scope(conn: &Connection, budget: &Budget, root: &str) -> anyhow::Result
         )));
     }
     Ok(None)
+}
+
+fn stop_members(conn: &Connection, budget: &Budget, totals: &Totals, spent: &str) -> anyhow::Result<()> {
+    let scope = budget.scope_id.as_str();
+    set_state(conn, scope, "stopped")?;
+    let body = format!("budget of {scope} reached: {spent}");
+    for member in members(conn, scope, &budget.kind)? {
+        msg::from_bus(conn, scope, &member, "stop", &body)?;
+    }
+    append_event(conn, msg::BUS, "budget_stop", scope, &json!({"tokens": totals.tokens}).to_string())
 }
 
 fn ceiling(budget: &Budget) -> String {

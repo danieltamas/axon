@@ -12,8 +12,12 @@ mod hook;
 mod install;
 mod msg;
 mod registry;
+mod replay;
 mod route;
+mod serve;
+mod snapshot;
 mod store;
+mod transcript;
 mod usage;
 mod virtual_agent;
 
@@ -264,8 +268,9 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
         Command::Audit { db: other, .. } => {
             let path = other.unwrap_or(db);
             let conn = store::open(&path)?;
-            let checked = store::verify(&conn)?;
+            let (checked, head) = store::verify(&conn)?;
             println!("audit verified: {checked} events in {}", path.display());
+            println!("head {head}");
         }
         Command::Install { harnesses } => {
             let targets = if harnesses.is_empty() {
@@ -290,8 +295,12 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
         Command::Budget(BudgetCommand::Set { scope, tokens, usd }) => {
             let mut conn = hub(&db)?;
             let tx = store::write_tx(&mut conn)?;
-            budget::set(&tx, &scope, tokens, usd).map_err(|e| Invalid(format!("{e:#}")))?;
+            let members =
+                budget::set(&tx, &scope, tokens, usd).map_err(|e| Invalid(format!("{e:#}")))?;
             tx.commit()?;
+            for member in members {
+                msg::silence_doorbell(&conn, &member)?;
+            }
         }
         Command::Budget(BudgetCommand::Show { scope, json }) => {
             let status = budget::show(&hub(&db)?, &scope)?;
@@ -301,6 +310,12 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
                 println!("{status:#}");
             }
         }
+        Command::Serve {
+            port,
+            ready_file,
+            content,
+        } => serve::run(&db, port, ready_file.as_deref(), content)?,
+        Command::Replay { file, speed } => replay::run(&db, &file, speed)?,
         Command::Doctor => {
             if !install::doctor(&db)? {
                 return Ok(ExitCode::FAILURE);

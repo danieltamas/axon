@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="axon-token" content="{{token}}">
+<title>Axon Bus</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.2 11 16.8 6M7.2 13l9.6 5"/></svg>
+    <span>Axon Bus</span>
+  </div>
+  <div class="counts" id="counts"></div>
+  <div class="link" id="link" data-state="connecting">connecting</div>
+</header>
+<main class="layout">
+  <section class="tree" id="tree" aria-label="Agents by repository"></section>
+  <aside class="detail" id="detail" aria-live="polite">
+    <p class="empty">Select an agent to follow what it says and thinks.</p>
+  </aside>
+</main>
+</body>
+</html>

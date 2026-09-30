@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::{budget, route, virtual_agent};
+use crate::{budget, replay, route, virtual_agent};
 
 #[derive(Parser)]
 #[command(
@@ -198,6 +198,24 @@ pub enum Command {
     },
     /// Report which harnesses are wired and whether the hub exists.
     Doctor,
+    /// Serve the dashboard on 127.0.0.1.
+    Serve {
+        /// 0 picks a free port.
+        #[arg(long, default_value_t = 7433)]
+        port: u16,
+        /// Write {url, token} here once the server accepts connections.
+        #[arg(long)]
+        ready_file: Option<PathBuf>,
+        /// Capture what agents say and think (opt-in; redacted, kept 7 days).
+        #[arg(long)]
+        content: bool,
+    },
+    /// Replay a JSONL corpus of transcript records into the registry and narrative.
+    Replay {
+        file: PathBuf,
+        #[arg(long, default_value = "1x", value_parser = replay::parse_speed)]
+        speed: f64,
+    },
     /// Token and USD ceilings on a tree (set on its root) or on one agent.
     #[command(subcommand)]
     Budget(BudgetCommand),

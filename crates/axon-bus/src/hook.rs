@@ -212,35 +212,70 @@ fn apply(
     change: Change,
     payload: &Value,
 ) -> anyhow::Result<Option<Value>> {
-    let Some(actor) = actor_of(&change) else {
+    if change == Change::Ignored {
         return Ok(None);
-    };
+    }
     let mut conn = store::open(db)?;
     let tx = store::write_tx(&mut conn)?;
-    match change {
-        Change::SessionStart(node) => upsert(&tx, harness, &node, Status::Idle)?,
-        Change::Active(node) => {
-            // A late tool event from a finished subagent must not reopen it.
-            if status_of(&tx, node.id)?.as_deref() == Some("closed") {
-                registry::touch(&tx, node.id)?;
-            } else {
-                upsert(&tx, harness, &node, Status::Active)?;
+    let resolve = |id: &str| -> rusqlite::Result<String> {
+        Ok(registered_as(&tx, harness, id)?.unwrap_or_else(|| id.to_owned()))
+    };
+    let closing = matches!(change, Change::Closed(_));
+    let (actor, acked) = match change {
+        Change::Ignored => return Ok(None),
+        Change::Idle(id) | Change::Closed(id) => {
+            let id = resolve(id)?;
+            let status = if closing { Status::Closed } else { Status::Idle };
+            registry::set_status(&tx, &id, status)?;
+            msg::ack_stops(&tx, &id)?;
+            (id, true)
+        }
+        Change::SessionStart(ref node) | Change::Active(ref node) | Change::ChildStart(ref node) => {
+            let id = resolve(node.id)?;
+            let parent = node.parent_id.map(resolve).transpose()?;
+            let node = Node {
+                id: &id,
+                parent_id: parent.as_deref(),
+                ..*node
+            };
+            match change {
+                Change::SessionStart(_) => upsert(&tx, harness, &node, Status::Idle)?,
+                // A late tool event from a finished subagent must not reopen it.
+                Change::Active(_) if status_of(&tx, &id)?.as_deref() == Some("closed") => {
+                    registry::touch(&tx, &id)?
+                }
+                _ => upsert(&tx, harness, &node, Status::Active)?,
             }
+            (id, false)
         }
-        Change::ChildStart(node) => upsert(&tx, harness, &node, Status::Active)?,
-        Change::Idle(id) => {
-            registry::set_status(&tx, id, Status::Idle)?;
-            msg::ack_stops(&tx, id)?;
+    };
+    let reply = gate::verdict(&tx, harness, event, &actor, payload)?;
+    if let Err(err) = tx.commit() {
+        // A denial stands even when the transaction that computed it cannot commit.
+        if reply.is_some() && gate::is_pre_tool(harness, event) {
+            eprintln!("axon-bus: hook {harness} {event} denied; its changes did not commit: {err}");
+            return Ok(reply);
         }
-        Change::Closed(id) => {
-            registry::set_status(&tx, id, Status::Closed)?;
-            msg::ack_stops(&tx, id)?;
-        }
-        Change::Ignored => {}
+        return Err(err.into());
     }
-    let reply = gate::verdict(&tx, harness, event, actor, payload)?;
-    tx.commit()?;
+    if acked {
+        if let Err(err) = msg::silence_doorbell(&conn, &actor) {
+            eprintln!("axon-bus: doorbell for {actor} not cleared: {err:#}");
+        }
+    }
     Ok(reply)
+}
+
+/// The id a root was registered under (`register --id orch --session S`), for hooks that
+/// name only its session. None when `id` is itself an agent or no root has that session.
+fn registered_as(conn: &Connection, harness: &str, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT id FROM agents WHERE session_id=?1 AND harness=?2 AND parent_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM agents WHERE id=?1) ORDER BY started_at LIMIT 1",
+        [id, harness],
+        |r| r.get(0),
+    )
+    .optional()
 }
 
 /// Register `node`, first registering its session root when this is the first hook seen

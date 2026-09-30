@@ -44,10 +44,14 @@ pub fn verdict(
     payload: &Value,
 ) -> anyhow::Result<Option<Value>> {
     if is_pre_tool(harness, event) {
-        if let Some(reason) = msg::pending_stop(conn, actor)? {
-            return Ok(Some(deny(harness, reason)));
-        }
-        if let Some(reason) = budget::check(conn, actor)? {
+        // The stop and budget gate fails closed on its own errors (§2); nothing else does.
+        let stopped = msg::pending_stop(conn, actor)
+            .and_then(|stop| match stop {
+                Some(reason) => Ok(Some(reason)),
+                None => budget::check(conn, actor),
+            })
+            .unwrap_or_else(|err| Some(format!("axon-bus could not check stops and budgets: {err:#}")));
+        if let Some(reason) = stopped {
             return Ok(Some(deny(harness, reason)));
         }
         if let Some(to) = native_target(harness, payload) {
@@ -65,11 +69,16 @@ pub fn verdict(
                 msg::log_native(conn, actor, to)?;
             }
             if harness == "claude" && event == "PostToolUse" {
-                record_claude_usage(conn, actor, payload)?;
+                record_claude_usage(conn, actor, payload);
             }
             Ok(msg::deliver(conn, actor)?.map(|text| {
                 json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
             }))
+        }
+        // A turn's last reply comes after its last tool call, so it is counted here.
+        ("claude", "Stop" | "SubagentStop") => {
+            record_claude_usage(conn, actor, payload);
+            Ok(None)
         }
         ("hermes", "pre_llm_call") => {
             Ok(msg::deliver(conn, actor)?.map(|text| json!({"context": text})))
@@ -78,16 +87,22 @@ pub fn verdict(
     }
 }
 
-/// After a Claude tool call: keep the model a spawn resolved for its child (raw, so an
-/// unknown model stays unpriced), then ingest the actor's new transcript turns.
-fn record_claude_usage(conn: &Connection, actor: &str, payload: &Value) -> anyhow::Result<()> {
+/// After a Claude tool call or turn: keep the model a spawn resolved for its child (raw,
+/// so an unknown model stays unpriced), then ingest the actor's new transcript turns.
+/// Failures are reported, never allowed to undo the hook's registry change or delivery.
+fn record_claude_usage(conn: &Connection, actor: &str, payload: &Value) {
     let spawned = &payload["tool_response"];
-    if let (Some(child), Some(model)) = (spawned["agentId"].as_str(), spawned["resolvedModel"].as_str()) {
-        conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
+    let recorded = (|| -> anyhow::Result<()> {
+        if let (Some(child), Some(model)) = (spawned["agentId"].as_str(), spawned["resolvedModel"].as_str()) {
+            conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
+        }
+        if let Some(transcript) = payload["transcript_path"].as_str() {
+            let child = payload["agent_id"].as_str();
+            usage::ingest_claude(conn, actor, child, std::path::Path::new(transcript))?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = recorded {
+        eprintln!("axon-bus: usage for {actor} not recorded: {err:#}");
     }
-    if let Some(transcript) = payload["transcript_path"].as_str() {
-        let child = payload["agent_id"].as_str();
-        usage::ingest_claude(conn, actor, child, std::path::Path::new(transcript))?;
-    }
-    Ok(())
 }

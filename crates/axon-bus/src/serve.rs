@@ -1,0 +1,271 @@
+//! `serve` (BUS-PLAN §7): the dashboard and its API on 127.0.0.1. A reader of the same
+//! database plus a message sender; killing it loses nothing.
+//!
+//! Security: the Host header must name this loopback server (DNS rebinding), every POST
+//! needs the per-boot token and this exact Origin, and the CSP allows self only.
+
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::Context;
+use axum::extract::{Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde_json::json;
+use tokio::sync::watch;
+
+use crate::{msg, snapshot, store, transcript};
+
+const INDEX_HTML: &str = include_str!("../ui/index.html");
+const APP_JS: &str = include_str!("../ui/app.js");
+const STYLE_CSS: &str = include_str!("../ui/style.css");
+
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+                   connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/// How often the database is checked for changes to stream (§9 M5: a register reaches the
+/// page in under 1 s).
+const POLL: Duration = Duration::from_millis(100);
+
+/// Narrative past retention is deleted at boot and then hourly.
+const EXPIRE_EVERY: Duration = Duration::from_secs(3600);
+
+struct App {
+    db: PathBuf,
+    port: u16,
+    origin: String,
+    token: String,
+    snapshots: watch::Receiver<Arc<String>>,
+}
+
+pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> anyhow::Result<()> {
+    let conn = store::open(db).context("no hub; run `axon-bus init`")?;
+    conn.execute(
+        "INSERT INTO settings (key,value) VALUES ('content_capture',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [if content { "1" } else { "0" }],
+    )?;
+    drop(conn);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(serve(db.to_owned(), port, ready_file))
+}
+
+async fn serve(db: PathBuf, port: u16, ready_file: Option<&Path>) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
+    let address: SocketAddr = listener.local_addr()?;
+    let origin = format!("http://{address}");
+    let token = boot_token()?;
+    let app = Arc::new(App {
+        db: db.clone(),
+        port: address.port(),
+        origin: origin.clone(),
+        token: token.clone(),
+        snapshots: watch_database(db)?,
+    });
+    let router = Router::new()
+        .route("/", get(index))
+        .route("/app.js", get(|| async { asset("text/javascript", APP_JS) }))
+        .route("/style.css", get(|| async { asset("text/css", STYLE_CSS) }))
+        .route("/api/snapshot", get(snapshot_json))
+        .route("/api/stream", get(stream))
+        .route("/api/msg", post(send))
+        .layer(middleware::from_fn_with_state(app.clone(), guard))
+        .with_state(app);
+    match ready_file {
+        Some(path) => write_ready(path, &origin, &token)?,
+        None => eprintln!("axon-bus: dashboard at {origin}"),
+    }
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
+/// 256 bits from the OS, new on every boot, so a token never outlives its server.
+fn boot_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// `{url, token}`, written whole (temp file + rename) and readable by the owner only.
+fn write_ready(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
+    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&temp, json!({"url": url, "token": token}).to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&temp, path)?;
+    Ok(())
+}
+
+/// One thread watches `PRAGMA data_version` and publishes a new snapshot when another
+/// connection changed the database.
+fn watch_database(db: PathBuf) -> anyhow::Result<watch::Receiver<Arc<String>>> {
+    let conn = store::open(&db)?;
+    let mut cache = HashMap::new();
+    let first = snapshot::build(&conn, &mut cache)?.to_string();
+    let (sender, receiver) = watch::channel(Arc::new(first));
+    std::thread::spawn(move || {
+        let mut seen: Option<i64> = None;
+        let mut expired_at: Option<Instant> = None;
+        loop {
+            if expired_at.map_or(true, |at| at.elapsed() >= EXPIRE_EVERY) {
+                if let Err(err) = transcript::expire(&conn) {
+                    eprintln!("axon-bus: narrative expiry failed: {err}");
+                }
+                expired_at = Some(Instant::now());
+            }
+            std::thread::sleep(POLL);
+            let version = conn.query_row("PRAGMA data_version", [], |r| r.get(0)).ok();
+            if version == seen {
+                continue;
+            }
+            seen = version;
+            match snapshot::build(&conn, &mut cache) {
+                Ok(tree) => {
+                    let tree = tree.to_string();
+                    sender.send_if_modified(|current| {
+                        let changed = **current != tree;
+                        if changed {
+                            *current = Arc::new(tree);
+                        }
+                        changed
+                    });
+                }
+                Err(err) => eprintln!("axon-bus: snapshot failed: {err:#}"),
+            }
+        }
+    });
+    Ok(receiver)
+}
+
+fn loopback_host(headers: &HeaderMap, port: u16) -> bool {
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    host.is_some_and(|h| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}"))
+}
+
+/// Compared in constant time, so response timing does not reveal the token.
+fn same_secret(given: &[u8], expected: &[u8]) -> bool {
+    given.len() == expected.len()
+        && given.iter().zip(expected).fold(0u8, |diff, (a, b)| diff | (a ^ b)) == 0
+}
+
+async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let headers = request.headers();
+    let mut allowed = loopback_host(headers, app.port);
+    if request.method() != Method::GET {
+        let origin = headers.get(header::ORIGIN).map(HeaderValue::as_bytes);
+        let token = headers.get("x-axon-token").map(HeaderValue::as_bytes);
+        let localhost = format!("http://localhost:{}", app.port);
+        allowed &= (origin == Some(app.origin.as_bytes()) || origin == Some(localhost.as_bytes()))
+            && token.is_some_and(|t| same_secret(t, app.token.as_bytes()));
+    }
+    let mut response = if allowed {
+        next.run(request).await
+    } else {
+        StatusCode::FORBIDDEN.into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response
+}
+
+fn asset(content_type: &'static str, body: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, content_type)], body).into_response()
+}
+
+/// The page carries the token in a meta tag; the Host check keeps other sites from reading it.
+async fn index(State(app): State<Arc<App>>) -> Response {
+    let page = INDEX_HTML.replace("{{token}}", &app.token);
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response()
+}
+
+async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
+    let db = app.db.clone();
+    let built = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let conn = store::open(&db)?;
+        Ok(snapshot::build(&conn, &mut HashMap::new())?.to_string())
+    })
+    .await;
+    match built {
+        Ok(Ok(tree)) => ([(header::CONTENT_TYPE, "application/json")], tree).into_response(),
+        Ok(Err(err)) => failure(StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")),
+        Err(err) => failure(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+async fn stream(
+    State(app): State<Arc<App>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let updates = futures_util::stream::unfold((app.snapshots.clone(), true), |(mut rx, first)| async move {
+        if !first {
+            rx.changed().await.ok()?;
+        }
+        let tree = rx.borrow_and_update().clone();
+        Some((Ok(Event::default().event("snapshot").data(tree.as_str())), (rx, false)))
+    });
+    Sse::new(updates).keep_alive(KeepAlive::default())
+}
+
+/// A message from the human node, sent as `from_id` along the same edges as any agent.
+#[derive(Deserialize)]
+struct Outgoing {
+    from_id: String,
+    to_id: String,
+    kind: String,
+    body: String,
+}
+
+async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Response {
+    let db = app.db.clone();
+    let sent = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<(String, String), msg::Refused>> {
+        let mut conn = store::open(&db)?;
+        let tx = store::write_tx(&mut conn)?;
+        let outgoing = msg::Outgoing {
+            from: &request.from_id,
+            to: &request.to_id,
+            kind: &request.kind,
+            body: &request.body,
+            thread: None,
+            refs: &[],
+            wait: None,
+        };
+        let sent = msg::send(&tx, &outgoing)?;
+        if sent.is_ok() {
+            tx.commit()?;
+        }
+        Ok(sent)
+    })
+    .await;
+    match sent {
+        Ok(Ok(Ok((id, thread)))) => {
+            (StatusCode::CREATED, Json(json!({"id": id, "thread": thread}))).into_response()
+        }
+        Ok(Ok(Err(refused))) => {
+            let (code, why) = msg::refused_error(refused);
+            let status = if code == 3 { StatusCode::CONFLICT } else { StatusCode::UNPROCESSABLE_ENTITY };
+            failure(status, why)
+        }
+        Ok(Err(err)) => failure(StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")),
+        Err(err) => failure(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+fn failure(status: StatusCode, error: String) -> Response {
+    (status, Json(json!({"error": error}))).into_response()
+}
