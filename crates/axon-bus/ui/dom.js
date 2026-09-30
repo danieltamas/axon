@@ -142,6 +142,12 @@ export function walk(nodes, visit, depth = 0, parent = null) {
   }
 }
 
+// A session Axon found as a running process (not a subagent inside one): what /api/end
+// can signal.
+export function isProcess(node) {
+  return Boolean(node.observed && node.pid && node.id === `${node.harness}-${node.pid}`);
+}
+
 // Every agent in the snapshot, with its depth and parent id.
 export function agents(snapshot) {
   const all = [];

@@ -3,7 +3,8 @@
 // so a snapshot at 50 events a second changes text, not DOM, and a pulse never restarts.
 
 import { activityChart } from "./activity.js";
-import { bytes, el, glyph, mark, setRing, setText, since, STATUS, tokens, money, walk } from "./dom.js";
+import { bytes, el, glyph, isProcess, mark, setRing, setText, since, STATUS, tokens, money, walk } from "./dom.js";
+import { createEnder } from "./send.js";
 
 const HARNESS_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", hermes: "Hermes" };
 
@@ -11,7 +12,7 @@ export function harnessName(harness) {
   return HARNESS_NAMES[harness] || harness;
 }
 
-export function createBoard(container, scroller, onSelect) {
+export function createBoard(container, scroller, token, onSelect) {
   const cards = new Map();
   const sums = new Map();
   let shape = "";
@@ -108,6 +109,12 @@ export function createBoard(container, scroller, onSelect) {
     subs.append(...(root.children || []).map(branch));
     box.classList.toggle("solo", !subs.childElementCount);
     box.append(card(root, 0).button);
+    // A session left open at a prompt is ended from its own card; the ender sits over the
+    // card's corner as a sibling, since a button cannot hold another.
+    if (isProcess(root)) {
+      box.classList.add("endable");
+      box.append(createEnder({ token, ids: [root.id], label: "End", confirm: "Click to end", compact: true }));
+    }
     if (subs.childElementCount) box.append(subs);
     return box;
   }

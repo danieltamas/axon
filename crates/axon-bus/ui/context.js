@@ -4,7 +4,7 @@
 
 import { activityChart, activityFacts } from "./activity.js";
 import { doingNow, harnessName, metricsLine } from "./board.js";
-import { bytes, clock, el, mark, setRing, since, STATUS, tokens, money } from "./dom.js";
+import { bytes, clock, el, isProcess, mark, setRing, since, STATUS, tokens, money } from "./dom.js";
 import { createComposer, createEnder } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };
@@ -333,10 +333,4 @@ function pending(thread) {
 
 function cap(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-// A session Axon found as a running process (not a subagent inside one): what /api/end
-// can signal.
-export function isProcess(node) {
-  return Boolean(node.observed && node.pid && node.id === `${node.harness}-${node.pid}`);
 }

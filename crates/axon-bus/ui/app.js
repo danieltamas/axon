@@ -6,8 +6,8 @@
 import { activityChart, sumHours } from "./activity.js";
 import { createArcs } from "./arcs.js";
 import { createBoard } from "./board.js";
-import { createContext, isProcess } from "./context.js";
-import { agents, bytes, el, money, setCurrency, setText, stats, tokens } from "./dom.js";
+import { createContext } from "./context.js";
+import { agents, bytes, el, isProcess, money, setCurrency, setText, stats, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
 import { createEnder } from "./send.js";
 import { createUsage } from "./usage.js";
@@ -21,7 +21,7 @@ const layout = $("layout");
 const overview = createOverview($("overview"), (key) => {
   location.hash = `#/p/${encodeURIComponent(key)}`;
 });
-const board = createBoard($("tree"), $("board"), (id) => focus({ selected: state.selected === id ? null : id }));
+const board = createBoard($("tree"), $("board"), token, (id) => focus({ selected: state.selected === id ? null : id }));
 const arcs = createArcs({ board, boardEl: $("board"), overlay: $("arcs") });
 const context = createContext($("context"), {
   token,

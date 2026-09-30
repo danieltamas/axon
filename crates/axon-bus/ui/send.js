@@ -139,8 +139,9 @@ function choice(name, legend, options, checked) {
 
 // Ends open harness sessions (their processes get a terminate signal), for sessions the
 // bus cannot reach. Two deliberate clicks, like a stop; the server re-checks every id.
-export function createEnder({ token, ids, label, confirm }) {
-  const box = el("div", "ender");
+// `compact` drops the status line: the outcome shows on the button, the reason in its title.
+export function createEnder({ token, ids, label, confirm, compact = false }) {
+  const box = el("div", compact ? "card-end" : "ender");
   const button = el("button", "stop-button", label);
   button.type = "button";
   const status = el("output");
@@ -150,6 +151,7 @@ export function createEnder({ token, ids, label, confirm }) {
     armed = null;
     button.classList.remove("armed");
     button.textContent = label;
+    button.title = "";
   };
   button.addEventListener("click", async () => {
     if (!armed) {
@@ -175,7 +177,12 @@ export function createEnder({ token, ids, label, confirm }) {
       : !response.ok
         ? reply.error || `Refused (${response.status}).`
         : [ended ? `Ended ${ended} ${ended === 1 ? "session" : "sessions"}; it leaves the board within a few seconds.` : null, refused.length ? `${refused.length} not ended: ${refused[0].why}.` : null].filter(Boolean).join(" ");
+    if (compact) {
+      button.textContent = status.dataset.ok === "true" ? "Ended" : "Not ended";
+      button.title = status.textContent;
+    }
   });
-  box.append(button, status);
+  box.append(button);
+  if (!compact) box.append(status);
   return box;
 }
