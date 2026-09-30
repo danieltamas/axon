@@ -30,7 +30,7 @@ use crate::{msg, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
-const ASSETS: [(&str, &str, &str); 14] = [
+const ASSETS: [(&str, &str, &str); 15] = [
     ("/activity.js", "text/javascript", include_str!("../ui/activity.js")),
     ("/app.js", "text/javascript", include_str!("../ui/app.js")),
     ("/arcs.js", "text/javascript", include_str!("../ui/arcs.js")),
@@ -45,6 +45,13 @@ const ASSETS: [(&str, &str, &str); 14] = [
     ("/send.js", "text/javascript", include_str!("../ui/send.js")),
     ("/style.css", "text/css", include_str!("../ui/style.css")),
     ("/usage.js", "text/javascript", include_str!("../ui/usage.js")),
+    ("/manifest.webmanifest", "application/manifest+json", include_str!("../ui/manifest.webmanifest")),
+];
+/// The icons that let the page be installed as an app (Add to Dock, Install).
+const ICONS: [(&str, &[u8]); 3] = [
+    ("/apple-touch-icon.png", include_bytes!("../ui/apple-touch-icon.png")),
+    ("/icon-192.png", include_bytes!("../ui/icon-192.png")),
+    ("/icon-512.png", include_bytes!("../ui/icon-512.png")),
 ];
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
@@ -109,6 +116,10 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, String)
     let mut router = Router::new().route("/", get(index));
     for (path, content_type, body) in ASSETS {
         router = router.route(path, get(move || async move { asset(content_type, body) }));
+    }
+    for (path, body) in ICONS {
+        let headers = [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-cache")];
+        router = router.route(path, get(move || async move { (headers, body).into_response() }));
     }
     let router = router
         .route("/api/snapshot", get(snapshot_json))
