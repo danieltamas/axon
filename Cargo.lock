@@ -161,6 +161,7 @@ name = "axon"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "axon-bus",
  "axon-core",
  "axum",
  "chrono",

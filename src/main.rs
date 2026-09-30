@@ -3,9 +3,11 @@
 //! Thin CLI over the `axon` library.
 //! - `axon --scan-only` — parse Claude logs → SQLite → print a JSON summary, then exit.
 //! - `axon` — same scan, then print a short CLI summary, open the browser, and serve the
-//!   local dashboard (M3-lite: analytics only; the live 3D brain lands in M4).
+//!   one dashboard: projects and their agents, and usage (docs/BUS-PLAN.md §0b).
+//! - `axon bus <cmd>` — the control plane (install, send, budget, hook…).
 
 use std::net::SocketAddr;
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -24,7 +26,12 @@ use axon::summary::{build_summary, windowed_cost, Summary};
 
 /// Axon — see DESIGN.md for the full build spec.
 #[derive(Parser, Debug)]
-#[command(name = "axon", version, about)]
+#[command(
+    name = "axon",
+    version,
+    about,
+    after_help = "Control plane: `axon bus --help` (install, send, budget, hook…)."
+)]
 struct Cli {
     /// Port for the local dashboard.
     #[arg(long, default_value_t = 7777)]
@@ -38,18 +45,37 @@ struct Cli {
     #[arg(long)]
     scan_only: bool,
 
+    /// Structure only in the agents' narrative: turns, tokens and tool names, never text.
+    #[arg(long)]
+    no_content: bool,
+
     /// Optional OTLP/HTTP endpoint to ALSO export traces (requires `--features otel`).
     #[arg(long)]
     otel: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    if cli.scan_only {
-        return run_scan_only();
+fn main() -> ExitCode {
+    // Harness hooks run `axon bus hook …` on every tool call, so the control plane is
+    // dispatched before any runtime starts or any log is scanned.
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "bus") {
+        let args = std::iter::once("axon bus".into()).chain(std::env::args_os().skip(2));
+        return axon_bus::cli_main(args);
     }
-    run_server(&cli).await
+    let cli = Cli::parse();
+    let outcome = if cli.scan_only {
+        run_scan_only()
+    } else {
+        tokio::runtime::Runtime::new()
+            .context("start the async runtime")
+            .and_then(|runtime| runtime.block_on(run_server(&cli)))
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err:?}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `--scan-only`: print the JSON summary on stdout and exit.
@@ -82,8 +108,12 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     }
     println!("  serving {url} — live (file-watch) — press Ctrl-C to stop\n");
 
+    // The projects view reads the bus tables; creating them touches no harness config.
+    let db = db_path();
+    axon_bus::init(&db)?;
+    let dashboard = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
-    server::serve(addr, state).await
+    server::serve(addr, state, dashboard).await
 }
 
 /// Keep the dashboard live by re-scanning whenever a log file changes (via `notify`

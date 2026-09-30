@@ -184,7 +184,15 @@ pub fn build(
         "messages": chatter::messages(conn)?,
         "links": chatter::links(conn)?,
         "content": facts.content,
+        "currency": currency(),
     }))
+}
+
+/// Costs in the snapshot are USD; the page shows them in the operator's display currency.
+fn currency() -> Value {
+    let pricing = axon_core::pricing::Pricing::bundled();
+    let code = pricing.display_currency.clone().unwrap_or_else(|| "USD".into());
+    json!({"code": code, "per_usd": pricing.fx()})
 }
 
 fn token_totals(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {

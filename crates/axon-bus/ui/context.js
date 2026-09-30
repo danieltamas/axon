@@ -4,7 +4,7 @@
 
 import { activityChart, activityFacts } from "./activity.js";
 import { doingNow, harnessName, metricsLine } from "./board.js";
-import { bytes, clock, el, mark, setRing, since, STATUS, tokens, usd } from "./dom.js";
+import { bytes, clock, el, mark, setRing, since, STATUS, tokens, money } from "./dom.js";
 import { createComposer } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };
@@ -16,6 +16,8 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
   container.replaceChildren(head, body, foot);
   const drafts = new Map();
   const openRuns = new Set();
+  // Details under an agent's head stay as the operator left them, across agents.
+  let detailsOpen = false;
   const keys = { head: "", body: "", foot: "" };
   let composer = null;
 
@@ -158,8 +160,8 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
   const TRANSCRIPTS = {
     claude: "Its transcript was not found under ~/.claude/projects, or it has no turns yet.",
     codex: "Its transcript was not found under ~/.codex/sessions in the last 8 days.",
-    opencode: "OpenCode keeps its transcript in its own store. Run axon-bus install to see what it says.",
-    hermes: "Hermes keeps its transcript in its own store. Run axon-bus install to see what it says.",
+    opencode: "OpenCode keeps its transcript in its own store. Run axon bus install to see what it says.",
+    hermes: "Hermes keeps its transcript in its own store. Run axon bus install to see what it says.",
   };
 
   // ---- one agent ----
@@ -179,7 +181,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
         ["Model", node.model],
         ["Branch", node.branch],
         ["Tokens", tokens(node.tokens)],
-        ["Cost", node.unpriced ? (node.tokens ? "unpriced model" : null) : usd(node.cost_usd)],
+        ["Cost", node.unpriced ? (node.tokens ? "unpriced model" : null) : money(node.cost_usd)],
         ["Memory", node.rss ? bytes(node.rss) : node.shares_process ? "shared with its parent" : null],
         ["Last turn", node.last_ts ? since(node.last_ts, now) : null],
       ]) {
@@ -190,18 +192,27 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
       }
       head.replaceChildren(back("Conversations"), who);
       // An observed session's mission is the operator's latest prompt, from its transcript.
-      if (node.mission && node.observed) head.append(el("p", "kicker", "Latest prompt"));
-      if (node.mission) head.append(el("p", "agent-mission", node.mission));
-      head.append(facts);
+      if (node.mission) {
+        const mission = el("p", "agent-mission", node.mission);
+        mission.title = node.mission;
+        head.append(mission);
+      }
       if (node.budget) head.append(gauge(node.budget));
-      if (node.activity) head.append(activityChart(node.activity.hours, "turns per hour"), activityFacts(node.activity));
+      // The narrative is what the rail is for; the rest folds away under one line.
+      const details = el("details", "agent-more");
+      details.open = detailsOpen;
+      details.addEventListener("toggle", () => (detailsOpen = details.open));
+      const summary = el("summary", null, [node.model, node.tokens ? tokens(node.tokens) : null, node.last_ts ? since(node.last_ts, now) : null].filter(Boolean).join(" · ") || "Details");
+      details.append(summary, facts);
+      if (node.activity) details.append(activityChart(node.activity.hours, "turns per hour"), activityFacts(node.activity));
+      head.append(details);
     });
     const rows = fold(node.narrative || []);
     part("body", `agent|${node.id}|${content}|${rows.length}|${rows.length ? rows[rows.length - 1].ts : 0}`, () => {
       const stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
       const list = [];
       if (node.observed && !rows.length) list.push(teach("No transcript to read", TRANSCRIPTS[node.harness] || "Axon has not ingested a turn from this session yet."));
-      else if (!content) list.push(el("p", "capture-off", "Content capture is off: turns, tokens and tool runs only. Run axon-bus serve --content to see what agents say."));
+      else if (!content) list.push(el("p", "capture-off", "Content capture is off: turns, tokens and tool runs only. Restart axon without --no-content to see what agents say."));
       if (!node.observed && !rows.length) list.push(el("p", "empty", "Nothing recorded for this agent yet."));
       rows.forEach((row, i) => list.push(narrativeRow(node.id, row, i)));
       body.replaceChildren(...list);
@@ -211,7 +222,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
     part("foot", `agent|${node.id}|${JSON.stringify(routes)}`, () => {
       if (!routes.length) {
         composer = null;
-        foot.replaceChildren(node.observed ? el("p", "foot-intro", "Messages need the bus: run axon-bus install, then restart this session.") : el("p", "foot-intro", "Nothing on the bus connects to this agent yet, so there is no edge to message it along."));
+        foot.replaceChildren(node.observed ? el("p", "foot-intro", "Messages need the bus: run axon bus install, then restart this session.") : el("p", "foot-intro", "Nothing on the bus connects to this agent yet, so there is no edge to message it along."));
         return;
       }
       composer = createComposer({ token, routes, drafts, draftKey: `agent:${node.id}` });
@@ -278,7 +289,7 @@ function gauge(budget) {
   const fill = el("span", "fill");
   fill.style.setProperty("--used", String(Math.min(1, budget.used)));
   bar.append(fill, el("span", "tick warn-tick"), el("span", "tick"));
-  const ceiling = [budget.tokens_max && `${tokens(budget.tokens_max)} tok`, budget.usd_max && usd(budget.usd_max)].filter(Boolean).join(" · ");
+  const ceiling = [budget.tokens_max && `${tokens(budget.tokens_max)} tok`, budget.usd_max && money(budget.usd_max)].filter(Boolean).join(" · ");
   const label = el("p", "gauge-label");
   label.append(el("b", null, `${Math.round(budget.used * 100)}%`), el("span", null, ` of its ${budget.kind} budget, ${ceiling}`));
   if (budget.state !== "ok") label.append(el("span", "gauge-state", budget.state));

@@ -24,7 +24,7 @@ const LOOKBACK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// A session whose last turn is this recent is working; older, it is idle.
 const ACTIVE_MS: i64 = 2 * 60 * 1000;
 /// Subagents shown under a session: those that ran within this window.
-const SUBAGENT_WINDOW_MS: i64 = 60 * 60 * 1000;
+const SUBAGENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 /// A process writes its session from its start on; a resumed session began earlier.
 const START_SLACK_MS: i64 = 60 * 1000;
 /// A session's activity profile covers this many hours, the current one last.

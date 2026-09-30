@@ -1,13 +1,15 @@
-// Axon Bus dashboard: renders /api/stream snapshots at two levels — every project, and
-// one project's topology beside its context rail (conversations, one agent, or one
-// thread). Agent-supplied text only ever goes through textContent, never markup.
+// The Axon dashboard. Projects renders /api/stream snapshots at two levels — every
+// project, and one project's topology beside its context rail (conversations, one agent,
+// or one thread). Usage renders Axon's spend record. Agent-supplied text only ever goes
+// through textContent, never markup.
 
 import { activityChart, sumHours } from "./activity.js";
 import { createArcs } from "./arcs.js";
 import { createBoard } from "./board.js";
 import { createContext } from "./context.js";
-import { agents, bytes, el, setText, tokens, usd } from "./dom.js";
+import { agents, bytes, el, money, setCurrency, setText, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
+import { createUsage } from "./usage.js";
 
 const token = document.querySelector('meta[name="axon-token"]').content;
 const $ = (id) => document.getElementById(id);
@@ -27,6 +29,14 @@ const context = createContext($("context"), {
   onBack: () => focus({}),
 });
 
+// Under the `axon-bus serve` alias there is no usage record; the view leaves the nav.
+const usage = createUsage($("usage"), {
+  onUnavailable: () => {
+    document.querySelector('[data-view="usage"]').hidden = true;
+    if (location.hash === "#/usage") location.hash = "#/";
+  },
+});
+
 function focus({ selected = null, thread = null }) {
   state.selected = selected;
   state.thread = thread;
@@ -41,8 +51,8 @@ function setView(view) {
 }
 for (const tab of document.querySelectorAll("[data-tab]")) tab.addEventListener("click", () => setView(tab.dataset.tab));
 
-// The hash is the level: `#/` is every project, `#/p/<repo>` one project, so the back
-// button walks out of a project.
+// The hash is the level: `#/` is every project, `#/p/<repo>` one project and `#/usage`
+// the spend record, so the back button walks out of a project.
 function route() {
   const match = location.hash.match(/^#\/p\/(.+)$/);
   const project = match ? decodeURIComponent(match[1]) : null;
@@ -51,7 +61,15 @@ function route() {
     state.selected = null;
     state.thread = null;
   }
-  layout.dataset.level = project ? "project" : "overview";
+  const onUsage = location.hash === "#/usage";
+  layout.dataset.level = onUsage ? "usage" : project ? "project" : "overview";
+  for (const link of document.querySelectorAll("[data-view]")) {
+    const here = link.dataset.view === (onUsage ? "usage" : "projects");
+    if (here) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+  if (onUsage) usage.show();
+  else usage.hide();
   document.body.dataset.level = layout.dataset.level;
   setView("agents");
   render();
@@ -68,14 +86,12 @@ function renderCrumbs(repo) {
   if (crumbs.dataset.key === key) return;
   crumbs.dataset.key = key;
   if (!state.project) {
-    crumbs.replaceChildren(el("span", "crumb here", "Projects"));
+    crumbs.replaceChildren();
     return;
   }
-  const back = el("a", "crumb", "Projects");
-  back.href = "#/";
   const here = el("span", "crumb here", repo ? repo.name : "Closed project");
   here.setAttribute("aria-current", "page");
-  crumbs.replaceChildren(back, el("span", "crumb-sep", "/"), here);
+  crumbs.replaceChildren(el("span", "crumb-sep", "/"), here);
 }
 
 // The project's name, one line of totals, and what needs the operator, each item a
@@ -102,7 +118,7 @@ function renderProjectHead(repo, s) {
       `${f.working} working`,
       f.agents > f.sessions ? `${f.agents - f.sessions} subagents` : null,
       `${tokens(f.tokens)} tokens`,
-      f.cost ? usd(f.cost) : null,
+      f.cost ? money(f.cost) : null,
       f.unpriced ? `${f.unpriced} unpriced` : null,
       f.rss ? bytes(f.rss) : null,
     ]
@@ -129,6 +145,7 @@ function renderProjectHead(repo, s) {
 function render() {
   const repo = state.project ? currentRepo() : null;
   renderCrumbs(repo);
+  if (layout.dataset.level === "usage") return;
   if (!state.project) {
     overview.render(state.snapshot, Date.now());
     return;
@@ -155,6 +172,7 @@ function connect() {
   });
   source.addEventListener("snapshot", (event) => {
     state.snapshot = JSON.parse(event.data);
+    if (setCurrency(state.snapshot.currency)) usage.redraw();
     requestAnimationFrame(render);
   });
   source.addEventListener("error", () => {

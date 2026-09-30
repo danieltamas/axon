@@ -3,7 +3,7 @@
 // so a snapshot at 50 events a second changes text, not DOM, and a pulse never restarts.
 
 import { activityChart } from "./activity.js";
-import { bytes, el, glyph, mark, setRing, setText, since, STATUS, tokens, usd, walk } from "./dom.js";
+import { bytes, el, glyph, mark, setRing, setText, since, STATUS, tokens, money, walk } from "./dom.js";
 
 const HARNESS_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", hermes: "Hermes" };
 
@@ -133,7 +133,7 @@ export function createBoard(container, scroller, onSelect) {
         update(card(node), node, depth, selected, now);
       });
       const sum = sums.get(lane.harness);
-      if (sum) setText(sum, `${active} of ${count} working${cost ? ` · ${usd(cost)}` : ""}`);
+      if (sum) setText(sum, `${active} of ${count} working${cost ? ` · ${money(cost)}` : ""}`);
     }
     for (const id of cards.keys()) if (!seen.has(id)) cards.delete(id);
   }
@@ -177,7 +177,7 @@ function roleLabel(node) {
 // Tokens, price, memory the agent owns, and its budget: whatever is known, nothing padded.
 export function metricsLine(node) {
   const parts = [`${tokens(node.tokens)} tok`];
-  if (node.cost_usd !== null && node.cost_usd !== undefined && !node.unpriced) parts.push(usd(node.cost_usd));
+  if (node.cost_usd !== null && node.cost_usd !== undefined && !node.unpriced) parts.push(money(node.cost_usd));
   else if (node.unpriced && node.tokens) parts.push("unpriced");
   if (node.rss) parts.push(bytes(node.rss));
   if (node.budget) parts.push(`${Math.round(node.budget.used * 100)}% budget`);

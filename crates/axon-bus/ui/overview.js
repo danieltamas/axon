@@ -2,7 +2,7 @@
 // what is being worked on, how many sessions are working, what it uses, and what needs
 // them. Rows keep a stable alphabetical order; selecting one opens the project.
 
-import { bytes, el, glyph, setText, since, tokens, usd, walk } from "./dom.js";
+import { bytes, el, glyph, setText, since, tokens, money, walk } from "./dom.js";
 
 const RECENT_MS = 15 * 60 * 1000;
 
@@ -134,7 +134,7 @@ export function createOverview(container, onOpen) {
     setText(entry.working, s.facts.working ? `${s.facts.working} working` : "idle");
     setText(entry.total, `${s.facts.sessions} open`);
     setText(entry.usageTop, `${tokens(s.facts.tokens)} tok`);
-    setText(entry.usageSub, [s.facts.cost ? usd(s.facts.cost) : null, s.facts.rss ? bytes(s.facts.rss) : null].filter(Boolean).join(" · "));
+    setText(entry.usageSub, [s.facts.cost ? money(s.facts.cost) : null, s.facts.rss ? bytes(s.facts.rss) : null].filter(Boolean).join(" · "));
     once(entry, "needs", JSON.stringify(s.attention), () => {
       if (!s.attention.length) {
         entry.needs.replaceChildren(el("span", "p-none", "—"));
@@ -204,7 +204,7 @@ function empty() {
   const box = el("div", "empty-board");
   box.append(
     el("p", "empty-title", "No sessions open"),
-    el("p", null, "Start Claude Code, Codex, OpenCode or Hermes in a repository. Axon lists it here within a few seconds; run axon-bus install to message, budget and stop it."),
+    el("p", null, "Start Claude Code, Codex, OpenCode or Hermes in a repository. Axon lists it here within a few seconds; run axon bus install to message, budget and stop it."),
   );
   return box;
 }

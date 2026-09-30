@@ -64,15 +64,33 @@ export function setText(node, text) {
 
 export function tokens(n) {
   if (!n) return "0";
+  if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K`;
   return String(n);
 }
 
-export function usd(value) {
+// Snapshot costs are USD; everything on the page shows in the display currency.
+let currency = { code: "USD", per_usd: 1 };
+const SYMBOLS = { USD: "$", EUR: "€", GBP: "£" };
+// True when the currency changed, so views already drawn can redraw.
+export function setCurrency(next) {
+  if (!next || !next.code || !(next.per_usd > 0)) return false;
+  const changed = next.code !== currency.code || next.per_usd !== currency.per_usd;
+  currency = next;
+  return changed;
+}
+
+// A value already in the display currency (Axon's usage summary).
+export function displayMoney(value) {
   if (value === null || value === undefined) return "—";
-  if (value < 0.01) return value > 0 ? "<$0.01" : "$0";
-  return `$${value < 100 ? value.toFixed(2) : Math.round(value)}`;
+  const symbol = SYMBOLS[currency.code] || `${currency.code} `;
+  if (value < 0.01) return value > 0 ? `<${symbol}0.01` : `${symbol}0`;
+  return `${symbol}${value < 100 ? value.toFixed(2) : Math.round(value).toLocaleString("en-US")}`;
+}
+
+export function money(usd) {
+  return displayMoney(usd === null || usd === undefined ? usd : usd * currency.per_usd);
 }
 
 // "now", "4m", "3h", "2d": how long ago, for a glance rather than an audit.

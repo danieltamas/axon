@@ -37,6 +37,8 @@ categories = ["command-line-utilities", "development-tools"]
 # Versions are indicative — run `cargo update` and pin during M1.
 [dependencies]
 axon-core.workspace = true
+# The control plane and the dashboard it serves (BUS-PLAN §0b: one app).
+axon-bus = { path = "crates/axon-bus" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 tower-http = { version = "0.6", features = ["fs", "compression-gzip"] }

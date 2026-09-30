@@ -30,16 +30,21 @@ use crate::{msg, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
-const ASSETS: [(&str, &str, &str); 9] = [
+const ASSETS: [(&str, &str, &str); 14] = [
     ("/activity.js", "text/javascript", include_str!("../ui/activity.js")),
     ("/app.js", "text/javascript", include_str!("../ui/app.js")),
     ("/arcs.js", "text/javascript", include_str!("../ui/arcs.js")),
     ("/board.js", "text/javascript", include_str!("../ui/board.js")),
+    ("/brain.js", "text/javascript", include_str!("../ui/brain.js")),
+    ("/brain-math.js", "text/javascript", include_str!("../ui/brain-math.js")),
+    ("/brain-render.js", "text/javascript", include_str!("../ui/brain-render.js")),
+    ("/brain-worker.js", "text/javascript", include_str!("../ui/brain-worker.js")),
     ("/context.js", "text/javascript", include_str!("../ui/context.js")),
     ("/dom.js", "text/javascript", include_str!("../ui/dom.js")),
     ("/overview.js", "text/javascript", include_str!("../ui/overview.js")),
     ("/send.js", "text/javascript", include_str!("../ui/send.js")),
     ("/style.css", "text/css", include_str!("../ui/style.css")),
+    ("/usage.js", "text/javascript", include_str!("../ui/usage.js")),
 ];
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
@@ -64,31 +69,39 @@ struct App {
 }
 
 pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> anyhow::Result<()> {
-    let conn = store::open(db).context("no hub; run `axon-bus init`")?;
-    transcript::set_capture(&conn, content)?;
-    drop(conn);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(serve(db.to_owned(), port, ready_file, content))
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
+        let address: SocketAddr = listener.local_addr()?;
+        let (router, token) = build(db, address.port(), content)?;
+        let origin = format!("http://{address}");
+        match ready_file {
+            Some(path) => write_ready(path, &origin, &token)?,
+            None => eprintln!("axon-bus: dashboard at {origin}"),
+        }
+        axum::serve(listener, router).await?;
+        Ok(())
+    })
 }
 
-async fn serve(
-    db: PathBuf,
-    port: u16,
-    ready_file: Option<&Path>,
-    content: bool,
-) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
-    let address: SocketAddr = listener.local_addr()?;
-    let origin = format!("http://{address}");
+/// The dashboard and its API, for a server another binary bound on 127.0.0.1:`port`.
+pub fn router(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
+    Ok(build(db, port, content)?.0)
+}
+
+fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, String)> {
+    let conn = store::open(db).context("no hub; run `axon bus init`")?;
+    transcript::set_capture(&conn, content)?;
+    drop(conn);
     let token = boot_token()?;
     let app = Arc::new(App {
-        db: db.clone(),
-        port: address.port(),
-        origin: origin.clone(),
+        db: db.to_owned(),
+        port,
+        origin: format!("http://127.0.0.1:{port}"),
         token: token.clone(),
-        snapshots: watch_database(db, content)?,
+        snapshots: watch_database(db.to_owned(), content)?,
     });
     let mut router = Router::new().route("/", get(index));
     for (path, content_type, body) in ASSETS {
@@ -100,12 +113,7 @@ async fn serve(
         .route("/api/msg", post(send))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app);
-    match ready_file {
-        Some(path) => write_ready(path, &origin, &token)?,
-        None => eprintln!("axon-bus: dashboard at {origin}"),
-    }
-    axum::serve(listener, router).await?;
-    Ok(())
+    Ok((router, token))
 }
 
 /// 256 bits from the OS, new on every boot, so a token never outlives its server.
@@ -352,4 +360,21 @@ async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Res
 
 fn failure(status: StatusCode, error: String) -> Response {
     (status, Json(json!({"error": error}))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Privacy gate (DESIGN.md §16): the page loads nothing remote. Links are fine; only
+    /// asset-loading forms are refused.
+    #[test]
+    fn page_loads_no_remote_assets() {
+        let files = std::iter::once(INDEX_HTML).chain(ASSETS.iter().map(|(_, _, body)| *body));
+        for body in files {
+            for needle in ["src=\"http", "@import", "url(http", "href=\"http", "import(\"http", "from \"http"] {
+                assert!(!body.contains(needle), "the dashboard must not load {needle:?}");
+            }
+        }
+    }
 }

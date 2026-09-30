@@ -1,13 +1,13 @@
-//! Local HTTP server (DESIGN.md §9, §16) — serves the Mission Control dashboard + JSON API.
+//! Local HTTP server (DESIGN.md §9, §16) — the one dashboard (BUS-PLAN §0b) + the usage API.
 //!
 //! Security boundary (there is no auth — loopback + Origin checks ARE the boundary):
 //! - bind `127.0.0.1` only;
 //! - reject any request whose `Host` is not loopback (anti-DNS-rebind);
 //! - reject any cross-origin `Origin`/`Referer` (anti-CSRF).
 //!
-//! Routes: `GET /` (the embedded dashboard), `GET /api/summary`, `GET /api/health`.
-//! The dashboard is the live three.js-style "brain" Mission Control; data comes from
-//! `/api/summary`, which a background task keeps fresh (see `main::spawn_refresher`).
+//! Routes: `GET /api/summary`, `GET /api/health`, and the dashboard router from `axon-bus`
+//! (the page, its assets, `/api/snapshot`, `/api/stream`, `POST /api/msg`), which adds its
+//! own per-boot token and CSP. `/api/summary` is kept fresh by `main::spawn_refresher`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use anyhow::Context;
 use axum::extract::{Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::compression::CompressionLayer;
@@ -27,10 +27,6 @@ use crate::summary::{build_summary, recent_events, Summary};
 /// How many recent turns the live feed shows.
 const FEED_LEN: usize = 12;
 
-/// The dashboard — a single self-contained file, embedded at compile time. Edit
-/// `ui/dist/index.html` to change the UI; no build step, no external assets (§16).
-const INDEX_HTML: &str = include_str!("../ui/dist/index.html");
-
 /// Shared application state. A background task periodically re-scans and swaps the summary
 /// in, so the dashboard is live (poll-based).
 pub struct AppState {
@@ -40,30 +36,26 @@ pub struct AppState {
     pub events: std::sync::RwLock<Vec<Event>>,
 }
 
-/// Build the router with the loopback/Origin guard and gzip compression applied.
-pub fn build_router(state: Arc<AppState>) -> Router {
+/// The usage API merged with the dashboard, behind the loopback/Origin guard and gzip.
+pub fn build_router(state: Arc<AppState>, dashboard: Router) -> Router {
     Router::new()
-        .route("/", get(index))
         .route("/api/health", get(api_health))
         .route("/api/summary", get(api_summary))
+        .with_state(state)
+        .merge(dashboard)
         .layer(middleware::from_fn(local_only))
         .layer(CompressionLayer::new())
-        .with_state(state)
 }
 
 /// Bind `addr` (loopback) and serve until the process is stopped.
-pub async fn serve(addr: SocketAddr, state: Arc<AppState>) -> anyhow::Result<()> {
+pub async fn serve(addr: SocketAddr, state: Arc<AppState>, dashboard: Router) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
-    axum::serve(listener, build_router(state))
+    axum::serve(listener, build_router(state, dashboard))
         .await
         .context("axum serve")?;
     Ok(())
-}
-
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
 }
 
 async fn api_health() -> Json<serde_json::Value> {
@@ -191,24 +183,5 @@ mod tests {
         assert!(url_is_local("http://127.0.0.1:7777/api/summary"));
         assert!(!url_is_local("http://evil.com"));
         assert!(!url_is_local("https://attacker.example:7777/x"));
-    }
-
-    /// Privacy gate (§16): the embedded UI must load NO remote assets. Navigational
-    /// `<a href="https://…">` links are fine (not fetched); asset-loading vectors are not.
-    #[test]
-    fn no_remote_assets_in_dashboard() {
-        for needle in [
-            "src=\"http",
-            "@import",
-            "url(http",
-            "googleapis",
-            "gstatic",
-            "<link rel=\"stylesheet\" href=\"http",
-        ] {
-            assert!(
-                !INDEX_HTML.contains(needle),
-                "embedded dashboard must not load remote assets — found {needle:?}"
-            );
-        }
     }
 }

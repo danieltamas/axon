@@ -1,7 +1,7 @@
-//! axon-bus — the Axon control plane (docs/BUS-PLAN.md).
+//! The Axon control plane (docs/BUS-PLAN.md), run as `axon bus <cmd>` or `axon-bus <cmd>`.
 //!
-//! No async runtime here by design: `axon-bus hook` runs on every tool call and must
-//! stay near the process-spawn floor (BUS-PLAN §00, spike Q4).
+//! No async runtime here by design: `hook` runs on every tool call and must stay near the
+//! process-spawn floor (BUS-PLAN §00, spike Q4). Only `serve` starts one.
 
 mod budget;
 mod chatter;
@@ -18,7 +18,7 @@ mod msg;
 mod registry;
 mod replay;
 mod route;
-mod serve;
+pub mod serve;
 mod snapshot;
 mod store;
 mod tail;
@@ -62,8 +62,18 @@ fn refused(refused: msg::Refused) -> ExitCode {
     ExitCode::from(code)
 }
 
-fn main() -> ExitCode {
-    let cli = Cli::parse();
+/// Create the bus tables in `db` if they are missing: schema only, no harness config.
+pub fn init(db: &std::path::Path) -> anyhow::Result<()> {
+    store::init(db).map(drop)
+}
+
+/// Parse `args` (program name first) and run the command.
+pub fn cli_main<I, T>(args: I) -> ExitCode
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let cli = Cli::parse_from(args);
     let db = axon_core::store::default_path();
     match run(cli.command, db) {
         Ok(code) => code,

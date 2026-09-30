@@ -79,6 +79,41 @@ Why a separate binary rather than a cargo feature:
 
 Everything below is kept, with the crate and tool names mapped: `agent-bus` → `axon-bus`, `src/usage/*` and `src/prices.rs` → `axon-core` (reused), `src/serve.rs` → the existing `axon` server, extended.
 
+## 0b. One app (2026-09-30, decided; revises §0 "separate binary")
+
+The human saw two dashboards (`axon` on :7777, `axon-bus serve` on :7433) and asked for one app. Decisions: **one binary** (`axon`, with `axon bus <cmd>` subcommands) and **one design system** (Mission Control's usage view rebuilt in the bus UI's tokens; the brain canvas kept as the one signature visual, restyled calm).
+
+§0's reasons still hold, and are met inside one binary:
+1. **Trust.** Serving never writes harness config. Only `axon bus install` does, as an explicit act. `axon` creates the bus tables in its own database (schema only), so the Projects view works before any install.
+2. **Hook latency.** `axon` has a synchronous `main`. `axon bus …` is dispatched on `argv[1]` before any tokio runtime or scan starts.
+3. **Graceful absence.** Without installed hooks, Projects shows observed sessions from usage data; bus-only surfaces (chatter, budgets, send) stay empty, not broken.
+
+**Layout (units, dependencies, layers touched):**
+
+| # | unit | depends on | touches |
+|---|---|---|---|
+| U1 | `axon-bus` becomes lib + thin bin: `lib.rs` holds the modules and `pub fn cli_main(args) -> ExitCode`; `serve` exposes `pub fn router(db, port, content) -> Router`; `src/main.rs` of `axon-bus` calls `cli_main` (kept as an alias so wired hooks and the frozen tests keep working) | — | crates/axon-bus/src |
+| U2 | `axon`: sync `main`; `argv[1] == "bus"` → `axon_bus::cli_main`; otherwise build the runtime, scan, `store::init` the bus tables, and serve the bus router merged with `/api/summary` and `/api/health` on :7777; `--no-content` passes through | U1 | src/main.rs, src/server.rs, Cargo.toml |
+| U3 | UI: one shell with two top-level views, **Projects** (today's bus views) and **Usage** (`usage.js`: range, notices, KPIs, cost by model/harness, agents, models, budgets, rtk, live feed; `brain.js`: core → models → agents, calm). Usage hides when `/api/summary` is absent (`axon-bus serve` alias). `ui/dist/index.html` is deleted (superseded) | U2 | crates/axon-bus/ui, ui/dist |
+| U4 | Docs: README and BUS-PLAN §1/§7 name one URL (`http://127.0.0.1:7777`) and `axon bus …` | U2, U3 | README.md, docs |
+
+**Complete when:** `axon --no-open` serves one page on `http://127.0.0.1:7777` whose Projects view shows the live topology and whose Usage view shows spend by model and agent, and `axon bus hook claude PreToolUse` answers without starting a runtime.
+
+**Measured by:**
+- `cargo test --workspace` green, with `crates/axon-bus/tests` and `tests/m1..m3_fixtures.rs` unchanged;
+- `curl` against :7777: `/` (200, CSP header), `/api/snapshot` (JSON tree), `/api/summary?range=7d` (JSON), `/api/stream` (SSE), POST `/api/msg` without token → 403, `Host: evil.com` → 403;
+- `hyperfine 'axon bus hook claude PreToolUse < fixture'` vs `axon-bus hook …`: within 1 ms p95;
+- screenshots of both views, light/dark, desktop and 390 px.
+
+**Acceptance criteria (for a different vendor to turn into tests):**
+- `axon bus <cmd>` and `axon-bus <cmd>` produce identical stdout, stderr and exit codes for `init`, `send`, `budget`, `hook`.
+- `axon` on a fresh `$XDG_DATA_HOME` creates the bus tables and serves `/api/snapshot` with `repos: []`, never a 5xx.
+- `axon --no-content` serves narrative rows with no text (the §7 privacy rule, through the new entry point).
+- Every bus route keeps its guard on :7777 (Host = this port, POST token + Origin); `/api/summary` keeps loopback Host + same-origin.
+- `axon --scan-only` output is unchanged.
+
+**Quality criteria:** files ≤ 500 lines; no second copy of any server, guard or snapshot code (the axon server mounts the bus router, it does not re-implement it); one token set in `style.css`, no inline styles or inline scripts (CSP `script-src 'self'`); the brain canvas respects `prefers-reduced-motion` and holds 60 fps at 200 nodes; no new dependencies; hook latency unchanged (above).
+
 A single binary that lets coding agents from different harnesses register, talk along fixed routes, and stay within a budget. A local dashboard shows every agent, its status, memory, tokens, cost and messages. It is plug'n'play on macOS, Linux and Windows.
 
 - Status: **approved 2026-09-29.** All §12 items are decided; next is M0 (§11).
