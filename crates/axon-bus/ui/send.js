@@ -136,3 +136,46 @@ function choice(name, legend, options, checked) {
   }
   return set;
 }
+
+// Ends open harness sessions (their processes get a terminate signal), for sessions the
+// bus cannot reach. Two deliberate clicks, like a stop; the server re-checks every id.
+export function createEnder({ token, ids, label, confirm }) {
+  const box = el("div", "ender");
+  const button = el("button", "stop-button", label);
+  button.type = "button";
+  const status = el("output");
+  let armed = null;
+  const disarm = () => {
+    clearTimeout(armed);
+    armed = null;
+    button.classList.remove("armed");
+    button.textContent = label;
+  };
+  button.addEventListener("click", async () => {
+    if (!armed) {
+      button.classList.add("armed");
+      button.textContent = confirm;
+      armed = setTimeout(disarm, CONFIRM_MS);
+      return;
+    }
+    disarm();
+    button.disabled = true;
+    const response = await fetch("/api/end", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Axon-Token": token },
+      body: JSON.stringify({ agents: ids }),
+    }).catch(() => null);
+    button.disabled = false;
+    const reply = response ? await response.json().catch(() => ({})) : {};
+    const ended = (reply.ended || []).length;
+    const refused = reply.refused || [];
+    status.dataset.ok = String(Boolean(response && response.ok && !refused.length));
+    status.textContent = !response
+      ? "The dashboard lost its server. Retry once it reconnects."
+      : !response.ok
+        ? reply.error || `Refused (${response.status}).`
+        : [ended ? `Ended ${ended} ${ended === 1 ? "session" : "sessions"}; it leaves the board within a few seconds.` : null, refused.length ? `${refused.length} not ended: ${refused[0].why}.` : null].filter(Boolean).join(" ");
+  });
+  box.append(button, status);
+  return box;
+}

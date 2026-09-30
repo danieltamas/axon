@@ -26,30 +26,73 @@ use tokio::sync::watch;
 
 use crate::memory::Sampler;
 use crate::observed::Observer;
-use crate::{msg, snapshot, store, transcript};
+use crate::{end, msg, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
 const ASSETS: [(&str, &str, &str); 15] = [
-    ("/activity.js", "text/javascript", include_str!("../ui/activity.js")),
+    (
+        "/activity.js",
+        "text/javascript",
+        include_str!("../ui/activity.js"),
+    ),
     ("/app.js", "text/javascript", include_str!("../ui/app.js")),
     ("/arcs.js", "text/javascript", include_str!("../ui/arcs.js")),
-    ("/board.js", "text/javascript", include_str!("../ui/board.js")),
-    ("/brain.js", "text/javascript", include_str!("../ui/brain.js")),
-    ("/brain-math.js", "text/javascript", include_str!("../ui/brain-math.js")),
-    ("/brain-render.js", "text/javascript", include_str!("../ui/brain-render.js")),
-    ("/brain-worker.js", "text/javascript", include_str!("../ui/brain-worker.js")),
-    ("/context.js", "text/javascript", include_str!("../ui/context.js")),
+    (
+        "/board.js",
+        "text/javascript",
+        include_str!("../ui/board.js"),
+    ),
+    (
+        "/brain.js",
+        "text/javascript",
+        include_str!("../ui/brain.js"),
+    ),
+    (
+        "/brain-math.js",
+        "text/javascript",
+        include_str!("../ui/brain-math.js"),
+    ),
+    (
+        "/brain-render.js",
+        "text/javascript",
+        include_str!("../ui/brain-render.js"),
+    ),
+    (
+        "/brain-worker.js",
+        "text/javascript",
+        include_str!("../ui/brain-worker.js"),
+    ),
+    (
+        "/context.js",
+        "text/javascript",
+        include_str!("../ui/context.js"),
+    ),
     ("/dom.js", "text/javascript", include_str!("../ui/dom.js")),
-    ("/overview.js", "text/javascript", include_str!("../ui/overview.js")),
+    (
+        "/overview.js",
+        "text/javascript",
+        include_str!("../ui/overview.js"),
+    ),
     ("/send.js", "text/javascript", include_str!("../ui/send.js")),
     ("/style.css", "text/css", include_str!("../ui/style.css")),
-    ("/usage.js", "text/javascript", include_str!("../ui/usage.js")),
-    ("/manifest.webmanifest", "application/manifest+json", include_str!("../ui/manifest.webmanifest")),
+    (
+        "/usage.js",
+        "text/javascript",
+        include_str!("../ui/usage.js"),
+    ),
+    (
+        "/manifest.webmanifest",
+        "application/manifest+json",
+        include_str!("../ui/manifest.webmanifest"),
+    ),
 ];
 /// The icons that let the page be installed as an app (Add to Dock, Install).
 const ICONS: [(&str, &[u8]); 3] = [
-    ("/apple-touch-icon.png", include_bytes!("../ui/apple-touch-icon.png")),
+    (
+        "/apple-touch-icon.png",
+        include_bytes!("../ui/apple-touch-icon.png"),
+    ),
     ("/icon-192.png", include_bytes!("../ui/icon-192.png")),
     ("/icon-512.png", include_bytes!("../ui/icon-512.png")),
 ];
@@ -118,13 +161,20 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, String)
         router = router.route(path, get(move || async move { asset(content_type, body) }));
     }
     for (path, body) in ICONS {
-        let headers = [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-cache")];
-        router = router.route(path, get(move || async move { (headers, body).into_response() }));
+        let headers = [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ];
+        router = router.route(
+            path,
+            get(move || async move { (headers, body).into_response() }),
+        );
     }
     let router = router
         .route("/api/snapshot", get(snapshot_json))
         .route("/api/stream", get(stream))
         .route("/api/msg", post(send))
+        .route("/api/end", post(end_sessions))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app);
     Ok((router, token))
@@ -264,7 +314,10 @@ async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Res
 
 /// Revalidated on every load, so the page never runs modules from an older binary.
 fn asset(content_type: &'static str, body: &'static str) -> Response {
-    let headers = [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")];
+    let headers = [
+        (header::CONTENT_TYPE, content_type),
+        (header::CACHE_CONTROL, "no-cache"),
+    ];
     (headers, body).into_response()
 }
 
@@ -280,7 +333,14 @@ async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
         let conn = store::open(&db)?;
         let mut memory = Sampler::new();
         memory.sample(&conn)?;
-        Ok(snapshot::build(&conn, &mut HashMap::new(), &memory, &mut Observer::default(), content)?.to_string())
+        Ok(snapshot::build(
+            &conn,
+            &mut HashMap::new(),
+            &memory,
+            &mut Observer::default(),
+            content,
+        )?
+        .to_string())
     })
     .await;
     match built {
@@ -372,6 +432,27 @@ async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Res
     }
 }
 
+#[derive(Deserialize)]
+struct Ending {
+    agents: Vec<String>,
+}
+
+/// End open harness sessions by their snapshot ids; see `end`.
+async fn end_sessions(State(app): State<Arc<App>>, Json(request): Json<Ending>) -> Response {
+    if request.agents.is_empty() || request.agents.len() > end::MAX_AT_ONCE {
+        return failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("name 1 to {} sessions", end::MAX_AT_ONCE),
+        );
+    }
+    let db = app.db.clone();
+    match tokio::task::spawn_blocking(move || end::end(&db, &request.agents)).await {
+        Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Err(err)) => failure(StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")),
+        Err(err) => failure(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
 fn failure(status: StatusCode, error: String) -> Response {
     (status, Json(json!({"error": error}))).into_response()
 }
@@ -386,8 +467,18 @@ mod tests {
     fn page_loads_no_remote_assets() {
         let files = std::iter::once(INDEX_HTML).chain(ASSETS.iter().map(|(_, _, body)| *body));
         for body in files {
-            for needle in ["src=\"http", "@import", "url(http", "href=\"http", "import(\"http", "from \"http"] {
-                assert!(!body.contains(needle), "the dashboard must not load {needle:?}");
+            for needle in [
+                "src=\"http",
+                "@import",
+                "url(http",
+                "href=\"http",
+                "import(\"http",
+                "from \"http",
+            ] {
+                assert!(
+                    !body.contains(needle),
+                    "the dashboard must not load {needle:?}"
+                );
             }
         }
     }

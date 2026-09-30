@@ -6,9 +6,10 @@
 import { activityChart, sumHours } from "./activity.js";
 import { createArcs } from "./arcs.js";
 import { createBoard } from "./board.js";
-import { createContext } from "./context.js";
+import { createContext, isProcess } from "./context.js";
 import { agents, bytes, el, money, setCurrency, setText, stats, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
+import { createEnder } from "./send.js";
 import { createUsage } from "./usage.js";
 
 const token = document.querySelector('meta[name="axon-token"]').content;
@@ -100,7 +101,9 @@ function renderProjectHead(repo, s) {
   const head = $("project-head");
   const roots = repo ? repo.harnesses.flatMap((h) => h.roots) : [];
   const hours = sumHours(roots.map((r) => r.activity));
-  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention, hours]) : "";
+  // Sessions left open at a prompt, which only a signal can close (see isProcess).
+  const idle = roots.filter((r) => isProcess(r) && r.status === "idle").map((r) => r.id);
+  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention, hours, idle]) : "";
   if (head.dataset.key === key) return;
   head.dataset.key = key;
   if (!repo) {
@@ -123,6 +126,10 @@ function renderProjectHead(repo, s) {
   head.replaceChildren(who);
   // Only observed sessions carry Axon's hourly record; a bus-only project has none.
   if (roots.some((r) => r.activity)) head.append(activityChart(hours, "turns per hour"));
+  if (idle.length) {
+    const n = idle.length;
+    head.append(createEnder({ token, ids: idle, label: `End ${n} idle ${n === 1 ? "session" : "sessions"}…`, confirm: `End ${n} idle: click again` }));
+  }
   if (!s.attention.length) return;
   const list = el("ul", "needs");
   for (const a of s.attention) {

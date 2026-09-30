@@ -7,7 +7,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use rusqlite::Connection;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
 
 /// Executable names of the harnesses whose sessions are listed.
 const HARNESSES: [(&str, &str); 4] = [
@@ -120,6 +120,17 @@ impl Sampler {
 
     pub fn sessions(&self) -> &[Session] {
         &self.sessions
+    }
+
+    /// Ask one of the sampled sessions to exit (SIGTERM), as closing its terminal would.
+    /// Only a pid this sample found running a harness session qualifies; true once sent.
+    pub fn terminate(&self, pid: i64) -> bool {
+        self.sessions.iter().any(|s| s.pid == pid)
+            && u32::try_from(pid)
+                .ok()
+                .and_then(|pid| self.system.process(Pid::from_u32(pid)))
+                .and_then(|process| process.kill_with(Signal::Term))
+                .unwrap_or(false)
     }
 }
 

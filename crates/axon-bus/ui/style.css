@@ -376,6 +376,12 @@ a.crumb:hover { color: var(--ink-strong); }
 .composer output { font-size: 12px; color: var(--stop); }
 .composer output[data-ok="true"] { color: var(--signal); }
 .composer output:empty { display: none; }
+.ender { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.ctx-foot .ender { padding: 10px var(--gutter) 16px; }
+.ender .stop-button { margin-left: 0; border: 1px solid color-mix(in srgb, var(--stop) 35%, transparent); }
+.ender output { font-size: 12px; color: var(--stop); }
+.ender output[data-ok="true"] { color: var(--signal); }
+.ender output:empty { display: none; }
 
 /* ---- usage ---- */
 .usage { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px var(--gutter) 64px; container-type: inline-size; }

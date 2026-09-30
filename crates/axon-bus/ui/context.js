@@ -5,7 +5,7 @@
 import { activityChart, activityFacts } from "./activity.js";
 import { doingNow, harnessName, metricsLine } from "./board.js";
 import { bytes, clock, el, mark, setRing, since, STATUS, tokens, money } from "./dom.js";
-import { createComposer } from "./send.js";
+import { createComposer, createEnder } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };
 
@@ -222,7 +222,12 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
     part("foot", `agent|${node.id}|${JSON.stringify(routes)}`, () => {
       if (!routes.length) {
         composer = null;
-        foot.replaceChildren(node.observed ? el("p", "foot-intro", "Messages need the bus: run axon bus install, then restart this session.") : el("p", "foot-intro", "Nothing on the bus connects to this agent yet, so there is no edge to message it along."));
+        if (!isProcess(node)) {
+          foot.replaceChildren(el("p", "foot-intro", node.observed ? "A subagent of a session the bus cannot reach; end the session to end it." : "Nothing on the bus connects to this agent yet, so there is no edge to message it along."));
+          return;
+        }
+        const ender = createEnder({ token, ids: [node.id], label: "End session…", confirm: `End pid ${node.pid}: click again` });
+        foot.replaceChildren(el("p", "foot-intro", "This session started before Axon's hooks, so it cannot be messaged. Ending it sends the terminate signal its terminal would."), ender);
         return;
       }
       composer = createComposer({ token, routes, drafts, draftKey: `agent:${node.id}` });
@@ -328,4 +333,10 @@ function pending(thread) {
 
 function cap(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// A session Axon found as a running process (not a subagent inside one): what /api/end
+// can signal.
+export function isProcess(node) {
+  return Boolean(node.observed && node.pid && node.id === `${node.harness}-${node.pid}`);
 }
