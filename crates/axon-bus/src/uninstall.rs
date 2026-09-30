@@ -8,8 +8,8 @@ use anyhow::{bail, Context};
 use serde_json::{json, Value};
 
 use crate::install::{
-    backup_path, current_exe, edited_since_install, is_bus_command, layout, read_optional, wire,
-    Layout, CLAUDE_EVENTS, CODEX_EVENTS, HERMES_MARKER,
+    backup_path, current_exe, edited_since_install, is_bus_command, is_codex_bus_entry, layout,
+    read_optional, wire, Layout, CLAUDE_EVENTS, CODEX_EVENTS, HERMES_MARKER,
 };
 use crate::Harness;
 
@@ -58,7 +58,11 @@ pub(crate) fn unwire(harness: Harness, current: &str, layout: &Layout) -> anyhow
                     let before = entries.len();
                     for entry in entries.iter_mut() {
                         if let Some(list) = entry["hooks"].as_array_mut() {
-                            list.retain(|h| !h["command"].as_str().is_some_and(|c| is_bus_command(c, harness, event)));
+                            list.retain(|h| {
+                                !h["command"]
+                                    .as_str()
+                                    .is_some_and(|c| is_bus_command(c, harness, event))
+                            });
                         }
                     }
                     entries.retain(|e| e["hooks"].as_array().map_or(true, |list| !list.is_empty()));
@@ -76,17 +80,23 @@ pub(crate) fn unwire(harness: Harness, current: &str, layout: &Layout) -> anyhow
             let mut doc: toml_edit::DocumentMut = current.parse()?;
             if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut()) {
                 for event in CODEX_EVENTS {
-                    let Some(entries) = hooks.get_mut(event).and_then(|e| e.as_array_mut()) else {
+                    let Some(item) = hooks.get_mut(event) else {
                         continue;
                     };
-                    let before = entries.len();
-                    entries.retain(|e| {
-                        !e.as_inline_table()
-                            .and_then(|t| t.get("command"))
-                            .and_then(|c| c.as_str())
-                            .is_some_and(|c| is_bus_command(c, harness, event))
-                    });
-                    if entries.is_empty() && before > 0 {
+                    let emptied = if let Some(tables) = item.as_array_of_tables_mut() {
+                        tables.retain(|t| !is_codex_bus_entry(t, harness, event));
+                        tables.is_empty()
+                    } else if let Some(entries) = item.as_array_mut() {
+                        let before = entries.len();
+                        entries.retain(|e| {
+                            !e.as_inline_table()
+                                .is_some_and(|t| is_codex_bus_entry(t, harness, event))
+                        });
+                        entries.is_empty() && before > 0
+                    } else {
+                        false
+                    };
+                    if emptied {
                         hooks.remove(event);
                     }
                 }
