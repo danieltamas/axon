@@ -57,8 +57,9 @@ pub fn run(db: &Path, harness: &str, event: &str) {
                 Err(anyhow::anyhow!("the hub at {} was removed", db.display()))
             };
             reply.or_else(|err| {
-                let fallback = gate_only(db, harness, event, actor)
-                    .or_else(|| rung_doorbell(db, harness, event, actor));
+                let fallback = gate_only(db, harness, event, actor, &payload)
+                    .or_else(|| rung_doorbell(db, harness, event, actor))
+                    .or_else(|| guard_only(harness, event, actor, &payload));
                 if fallback.is_some() {
                     eprintln!(
                         "axon-bus: hook {harness} {event} answered by the gate alone: {err:#}"
@@ -102,7 +103,13 @@ fn trusted_parent(db: &Path, payload: &Value) -> Option<String> {
 /// often a hub busy past its timeout). A WAL reader is not blocked by the writer, so the
 /// gate still answers; a stop or budget transition it must write fails, and so denies.
 /// None when the hub cannot be read at all or the actor is not registered yet.
-fn gate_only(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> Option<Option<Value>> {
+fn gate_only(
+    db: &Path,
+    harness: &str,
+    event: &str,
+    actor: Option<&str>,
+    payload: &Value,
+) -> Option<Option<Value>> {
     if !gate::is_pre_tool(harness, event) || !db.exists() {
         return None;
     }
@@ -114,7 +121,7 @@ fn gate_only(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> Opti
         if registry::root_of(&tx, &actor)?.is_none() {
             return Ok(None);
         }
-        let reply = gate::verdict(&tx, harness, event, &actor, &Value::Null)?;
+        let reply = gate::verdict(&tx, harness, event, &actor, payload)?;
         // Transitions it recorded are kept when the lock is free by now; losing them is
         // harmless because the next hook recomputes them.
         let _ = tx.commit();
@@ -135,6 +142,16 @@ fn rung_doorbell(
         return None;
     }
     let reason = doorbell::reason(db, actor?)?;
+    Some(Some(gate::deny(harness, reason)))
+}
+
+/// The bus-command guard needs no hub: when nothing above could answer, the human-only
+/// verbs and forged senders are still refused rather than let through by the error.
+fn guard_only(harness: &str, event: &str, actor: Option<&str>, payload: &Value) -> Option<Option<Value>> {
+    if !gate::is_pre_tool(harness, event) {
+        return None;
+    }
+    let reason = crate::cli_guard::refusal(actor.unwrap_or_default(), payload)?;
     Some(Some(gate::deny(harness, reason)))
 }
 

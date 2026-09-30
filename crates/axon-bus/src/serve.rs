@@ -66,6 +66,8 @@ struct App {
     origin: String,
     token: String,
     snapshots: watch::Receiver<Arc<String>>,
+    /// This server's capture option; another server's lease never widens it.
+    content: bool,
 }
 
 pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> anyhow::Result<()> {
@@ -102,6 +104,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, String)
         origin: format!("http://127.0.0.1:{port}"),
         token: token.clone(),
         snapshots: watch_database(db.to_owned(), content)?,
+        content,
     });
     let mut router = Router::new().route("/", get(index));
     for (path, content_type, body) in ASSETS {
@@ -152,7 +155,7 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
     let mut memory = Sampler::new();
     let mut observer = Observer::default();
     memory.sample(&conn)?;
-    let first = snapshot::build(&conn, &mut cache, &memory, &mut observer)?.to_string();
+    let first = snapshot::build(&conn, &mut cache, &memory, &mut observer, content)?.to_string();
     let (sender, receiver) = watch::channel(Arc::new(first));
     std::thread::spawn(move || {
         let mut seen: Option<i64> = None;
@@ -183,7 +186,7 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
                 continue;
             }
             seen = version;
-            match snapshot::build(&conn, &mut cache, &memory, &mut observer) {
+            match snapshot::build(&conn, &mut cache, &memory, &mut observer, content) {
                 Ok(tree) => {
                     let tree = tree.to_string();
                     sender.send_if_modified(|current| {
@@ -261,12 +264,12 @@ async fn index(State(app): State<Arc<App>>) -> Response {
 }
 
 async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
-    let db = app.db.clone();
+    let (db, content) = (app.db.clone(), app.content);
     let built = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
         let conn = store::open(&db)?;
         let mut memory = Sampler::new();
         memory.sample(&conn)?;
-        Ok(snapshot::build(&conn, &mut HashMap::new(), &memory, &mut Observer::default())?.to_string())
+        Ok(snapshot::build(&conn, &mut HashMap::new(), &memory, &mut Observer::default(), content)?.to_string())
     })
     .await;
     match built {

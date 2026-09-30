@@ -77,22 +77,71 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     })
 }
 
+/// Words that may stand before a program without making it an argument.
+const PREFIXES: [&str; 6] = ["exec", "env", "nohup", "time", "command", "sudo"];
+
+#[derive(Clone, Copy, PartialEq)]
+enum Invocation {
+    /// `axon-bus …` or `axon bus …`; its arguments start at this word.
+    Bus(usize),
+    /// The `axon` dashboard, which serves captured content like `axon-bus serve`.
+    Dashboard(usize),
+}
+
+/// Whether `words[i]` runs a bus command: `axon-bus` anywhere (as before), `axon` only in
+/// command position, since a path ending in `/axon` is usually a directory.
+fn invocation(words: &[String], i: usize) -> Option<Invocation> {
+    match words[i].rsplit('/').next()? {
+        "axon-bus" => Some(Invocation::Bus(i + 1)),
+        "axon" => {
+            let before = i.checked_sub(1).map(|b| words[b].as_str());
+            let command_position = before.map_or(true, |w| w == ";" || PREFIXES.contains(&w) || w.contains('='));
+            if !command_position {
+                None
+            } else if words.get(i + 1).map(String::as_str) == Some("bus") {
+                Some(Invocation::Bus(i + 2))
+            } else {
+                Some(Invocation::Dashboard(i + 1))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Capture is the default everywhere, so only an explicit, unconflicted structure-only
+/// serve is an agent's; `--content` beside `--no-content` would win in clap's order.
+fn serves_content(args: &[String]) -> bool {
+    let set = |name: &str| args.iter().any(|a| a == name || a.starts_with(&format!("{name}=")));
+    set("--content") || !set("--no-content")
+}
+
+const CAPTURE_REASON: &str = "content capture is turned on by the human only; an agent may run serve --no-content";
+
 /// Why `actor` may not run this tool call's bus command, or None.
 pub fn refusal(actor: &str, payload: &Value) -> Option<String> {
     let command = command(payload)?;
-    if !command.contains("axon-bus") {
+    if !command.contains("axon") {
         return None;
     }
     let words = words(command);
-    for (i, word) in words.iter().enumerate() {
-        if word.rsplit('/').next() != Some("axon-bus") {
+    for i in 0..words.len() {
+        let Some(invocation) = invocation(&words, i) else {
             continue;
-        }
-        let args: Vec<String> = words[i + 1..]
+        };
+        let (Invocation::Bus(start) | Invocation::Dashboard(start)) = invocation;
+        let args: Vec<String> = words[start.min(words.len())..]
             .iter()
             .take_while(|w| *w != ";")
             .cloned()
             .collect();
+        if invocation == Invocation::Dashboard(start) {
+            // `axon --scan-only`, `--help` and `--version` serve nothing.
+            let inert = args.iter().any(|a| ["--scan-only", "--help", "-h", "--version", "-V"].contains(&a.as_str()));
+            if !inert && serves_content(&args) {
+                return Some(CAPTURE_REASON.to_owned());
+            }
+            continue;
+        }
         let verb = args
             .iter()
             .find(|a| !a.starts_with('-'))
@@ -102,10 +151,7 @@ pub fn refusal(actor: &str, payload: &Value) -> Option<String> {
                 "raising or replacing a budget is reserved for the human; ask your root to escalate"
                     .to_owned(),
             ),
-            // Capture is serve's default, so only a structure-only serve is an agent's.
-            Some("serve") if !args.iter().any(|a| a == "--no-content") => {
-                Some("content capture is turned on by the human only; an agent may run serve --no-content".to_owned())
-            }
+            Some("serve") if serves_content(&args) => Some(CAPTURE_REASON.to_owned()),
             Some(verb) if FROM_VERBS.contains(&verb) => impersonation(actor, verb, flag(&args, "from")),
             Some(verb) if AGENT_VERBS.contains(&verb) => impersonation(actor, verb, flag(&args, "agent")),
             _ => None,
@@ -141,6 +187,12 @@ mod tests {
         assert!(refusal("w1", &bash("axon-bus serve --port 0")).is_some());
         assert!(refusal("w1", &bash("axon-bus serve --no-content")).is_none());
         assert!(refusal("w1", &bash("axon-bus release --agent=other src")).is_some());
+        assert!(refusal("w1", &bash("axon-bus serve --no-content --content")).is_some());
+        assert!(refusal("w1", &bash("axon bus send --from orch --to w --body hi")).is_some());
+        assert!(refusal("w1", &bash("axon bus serve --port 0")).is_some());
+        assert!(refusal("w1", &bash("./target/debug/axon --port 7777")).is_some());
+        assert!(refusal("w1", &bash("axon --no-content")).is_none());
+        assert!(refusal("w1", &bash("axon --scan-only")).is_none());
     }
 
     #[test]
@@ -157,6 +209,7 @@ mod tests {
             None
         );
         assert_eq!(refusal("w1", &bash("echo axon-bus --from orch")), None);
+        assert_eq!(refusal("w1", &bash("cd /Users/me/Sites/axon && ls")), None);
         assert_eq!(
             refusal("w1", &json!({"output": {"args": {"command": "ls"}}})),
             None

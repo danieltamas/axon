@@ -207,7 +207,7 @@ pub enum Command {
         #[arg(long)]
         ready_file: Option<PathBuf>,
         /// Show what agents say and think (the default; redacted, kept 7 days).
-        #[arg(long, overrides_with = "no_content")]
+        #[arg(long, conflicts_with = "no_content")]
         content: bool,
         /// Structure only: turns, tokens and tool names, never text.
         #[arg(long)]

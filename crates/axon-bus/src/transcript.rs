@@ -342,7 +342,8 @@ fn secret_patterns() -> &'static [regex::Regex] {
             // Passwords in URLs: scheme://user:secret@host.
             r"[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]+:([^@\s/]+)@",
             // Assignments to secret-named keys: PASSWORD=…, api_key: "…".
-            r#"(?i)\b[A-Z0-9_]*(?:password|passwd|secret|token|api_?key|access_?key|private_?key|credential)[A-Z0-9_]*\s*[=:]\s*["'`]?([^\s"'`]{6,})"#,
+            // The key may be quoted, as in JSON: {"password":"…"}.
+            r#"(?i)\b[A-Z0-9_]*(?:password|passwd|secret|token|api_?key|access_?key|private_?key|credential)[A-Z0-9_]*["']?\s*[=:]\s*["'`]?([^\s"'`,}]{6,})"#,
         ]
         .iter()
         .map(|p| regex::Regex::new(p).expect("valid secret pattern"))
@@ -360,11 +361,14 @@ pub fn redact(text: &str) -> String {
             .replace_all(&out, |caps: &regex::Captures| {
                 let whole = caps.get(0).expect("match");
                 let secret = caps.iter().flatten().last().expect("secret group");
-                // A bare number after `tokens:` is a count, not a credential.
-                if secret.as_str().bytes().all(|b| b.is_ascii_digit()) {
+                let head = &out[whole.start()..secret.start()];
+                // A bare number after `tokens:` is a count; after `password=` it is a secret.
+                let key = head.to_ascii_lowercase();
+                let counts = key.contains("token")
+                    && !["password", "passwd", "secret", "key", "credential"].iter().any(|k| key.contains(k));
+                if counts && secret.as_str().bytes().all(|b| b.is_ascii_digit()) {
                     return whole.as_str().to_owned();
                 }
-                let head = &out[whole.start()..secret.start()];
                 let tail = &out[secret.end()..whole.end()];
                 format!("{head}[redacted]{tail}")
             })
@@ -415,6 +419,9 @@ mod tests {
             assert!(redacted.contains(expected), "{text} -> {redacted}");
         }
         assert_eq!(redact("input_tokens: 123456"), "input_tokens: 123456");
+        assert_eq!(redact(r#"{"output_tokens":123456}"#), r#"{"output_tokens":123456}"#);
+        assert_eq!(redact(r#"{"password":"correct-horse-battery"}"#), r#"{"password":"[redacted]"}"#);
+        assert_eq!(redact("password=12345678"), "password=[redacted]");
         assert_eq!(redact("plain words stay"), "plain words stay");
     }
 

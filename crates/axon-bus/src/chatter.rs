@@ -9,14 +9,15 @@ use crate::store::now_ms;
 /// Messages per snapshot; the thread timeline shows no more.
 const RECENT_MESSAGES: i64 = 60;
 
-/// The newest messages, oldest first.
-pub fn messages(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
+/// The newest messages, oldest first. Bodies are withheld without content capture and redacted with it, like narrative text.
+pub fn messages(conn: &Connection, content: bool) -> rusqlite::Result<Vec<Value>> {
     let mut stmt = conn.prepare(
         "SELECT id,thread,seq,from_id,to_id,kind,body,needs_reply,sent_at,delivered_at,acked_at,
                 refs_json
          FROM (SELECT rowid AS n, * FROM messages ORDER BY rowid DESC LIMIT ?1) ORDER BY n",
     )?;
     let rows = stmt.query_map([RECENT_MESSAGES], |r| {
+        let body: String = r.get(6)?;
         Ok(json!({
             "id": r.get::<_, String>(0)?,
             "thread": r.get::<_, String>(1)?,
@@ -24,7 +25,7 @@ pub fn messages(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
             "from": r.get::<_, String>(3)?,
             "to": r.get::<_, String>(4)?,
             "kind": r.get::<_, String>(5)?,
-            "body": r.get::<_, String>(6)?,
+            "body": content.then(|| crate::transcript::redact(&body)),
             "needs_reply": r.get::<_, bool>(7)?,
             "sent_at": r.get::<_, Option<i64>>(8)?,
             "delivered_at": r.get::<_, Option<i64>>(9)?,

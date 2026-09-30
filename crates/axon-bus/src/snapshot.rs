@@ -86,6 +86,7 @@ pub fn build(
     cache: &mut HashMap<String, Checkout>,
     memory: &Sampler,
     observer: &mut Observer,
+    allow_content: bool,
 ) -> anyhow::Result<Value> {
     let rss = memory.rss();
     let mut stmt = conn.prepare(
@@ -128,7 +129,8 @@ pub fn build(
         tokens: token_totals(conn)?,
         costs: budget::agent_costs(conn)?,
         gauges: budget::gauges(conn)?,
-        content: transcript::content_enabled(conn)?,
+        // This server's own option bounds the shared lease another server may be renewing.
+        content: allow_content && transcript::content_enabled(conn)?,
         rss,
     };
     let mut children: HashMap<&str, Vec<&Node>> = HashMap::new();
@@ -181,7 +183,7 @@ pub fn build(
         .collect();
     Ok(json!({
         "repos": repos,
-        "messages": chatter::messages(conn)?,
+        "messages": chatter::messages(conn, facts.content)?,
         "links": chatter::links(conn)?,
         "content": facts.content,
         "currency": currency(),

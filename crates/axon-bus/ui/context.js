@@ -64,7 +64,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
           top.append(el("span", "ti-people", [...t.people].join(" ↔ ")), el("span", "ti-when", since(m.sent_at, now)));
           const meta = el("span", "ti-meta", `${t.messages.length} ${t.messages.length === 1 ? "message" : "messages"}`);
           if (pending(t)) item.dataset.waiting = "true";
-          item.append(top, el("span", "ti-body", m.body), meta);
+          item.append(top, el("span", "ti-body", m.body ?? "Message text is withheld: content capture is off."), meta);
           if (pending(t)) meta.append(el("b", "waiting", ` · ${pending(t).to} owes an answer`));
           return item;
         }),
@@ -145,7 +145,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
     const top = el("header");
     top.append(el("span", "m-kind", KIND_LABELS[m.kind] || m.kind), el("span", "m-route", `${m.from} → ${m.to}`), el("time", null, clock(m.sent_at)));
     const state = m.acked_at ? (m.needs_reply ? `answered ${since(m.acked_at, now)}` : `acknowledged ${since(m.acked_at, now)}`) : m.delivered_at ? (m.needs_reply ? "delivered · awaiting an answer" : "delivered") : "not delivered yet";
-    item.append(top, el("p", null, m.body), el("span", "m-state", state));
+    item.append(top, el("p", m.body == null ? "withheld" : null, m.body ?? "Message text is withheld: content capture is off."), el("span", "m-state", state));
     // A reference to a message already on screen (an answer's question) says nothing new.
     const refs = (m.refs || []).filter((ref) => !shown.has(ref));
     if (refs.length) {
