@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::{budget, msg, route, usage};
+use crate::{budget, cli_guard, msg, route};
 
 pub fn is_pre_tool(harness: &str, event: &str) -> bool {
     matches!(
@@ -51,7 +51,7 @@ pub fn verdict(
                 None => budget::check(conn, actor),
             })
             .unwrap_or_else(|err| Some(format!("axon-bus could not check stops and budgets: {err:#}")));
-        if let Some(reason) = stopped {
+        if let Some(reason) = stopped.or_else(|| cli_guard::refusal(actor, payload)) {
             return Ok(Some(deny(harness, reason)));
         }
         if let Some(to) = native_target(harness, payload) {
@@ -68,41 +68,13 @@ pub fn verdict(
             if let Some(to) = native_target(harness, payload) {
                 msg::log_native(conn, actor, to)?;
             }
-            if harness == "claude" && event == "PostToolUse" {
-                record_claude_usage(conn, actor, payload);
-            }
             Ok(msg::deliver(conn, actor)?.map(|text| {
                 json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
             }))
-        }
-        // A turn's last reply comes after its last tool call, so it is counted here.
-        ("claude", "Stop" | "SubagentStop") => {
-            record_claude_usage(conn, actor, payload);
-            Ok(None)
         }
         ("hermes", "pre_llm_call") => {
             Ok(msg::deliver(conn, actor)?.map(|text| json!({"context": text})))
         }
         _ => Ok(None),
-    }
-}
-
-/// After a Claude tool call or turn: keep the model a spawn resolved for its child (raw,
-/// so an unknown model stays unpriced), then ingest the actor's new transcript turns.
-/// Failures are reported, never allowed to undo the hook's registry change or delivery.
-fn record_claude_usage(conn: &Connection, actor: &str, payload: &Value) {
-    let spawned = &payload["tool_response"];
-    let recorded = (|| -> anyhow::Result<()> {
-        if let (Some(child), Some(model)) = (spawned["agentId"].as_str(), spawned["resolvedModel"].as_str()) {
-            conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
-        }
-        if let Some(transcript) = payload["transcript_path"].as_str() {
-            let child = payload["agent_id"].as_str();
-            usage::ingest_claude(conn, actor, child, std::path::Path::new(transcript))?;
-        }
-        Ok(())
-    })();
-    if let Err(err) = recorded {
-        eprintln!("axon-bus: usage for {actor} not recorded: {err:#}");
     }
 }

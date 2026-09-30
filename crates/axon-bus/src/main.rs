@@ -6,6 +6,7 @@
 mod budget;
 mod cli;
 mod claims;
+mod cli_guard;
 mod doorbell;
 mod gate;
 mod hook;
@@ -18,6 +19,7 @@ mod serve;
 mod snapshot;
 mod store;
 mod transcript;
+mod uninstall;
 mod usage;
 mod virtual_agent;
 
@@ -289,7 +291,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
                 harnesses
             };
             for harness in targets {
-                install::uninstall(harness)?;
+                uninstall::uninstall(harness)?;
             }
         }
         Command::Budget(BudgetCommand::Set { scope, tokens, usd }) => {

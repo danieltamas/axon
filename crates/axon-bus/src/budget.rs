@@ -26,6 +26,7 @@ struct Totals {
     tokens: i64,
     /// None when any usage row has no price: an unknown model is not free.
     cost_usd: Option<f64>,
+    /// When the newest usage was received (§6 staleness).
     newest_ts: Option<i64>,
 }
 
@@ -37,10 +38,24 @@ pub fn parse_tokens(text: &str) -> anyhow::Result<i64> {
         Some('M' | 'm') => (&number[..number.len() - 1], 1_000_000),
         _ => (number, 1),
     };
-    let count: i64 = digits
-        .parse()
-        .with_context(|| format!("invalid token ceiling {text}; use e.g. 50Ktok or 2Mtok"))?;
-    Ok(count * multiplier)
+    digits
+        .parse::<i64>()
+        .ok()
+        .and_then(|count| count.checked_mul(multiplier))
+        .filter(|&tokens| tokens > 0)
+        .with_context(|| format!("invalid token ceiling {text}; use e.g. 50Ktok or 2Mtok"))
+}
+
+/// `30`, `30usd` or `$30`: a USD ceiling. Zero, negative and non-finite values would
+/// never trip the gate, so they are refused.
+pub fn parse_usd_ceiling(text: &str) -> anyhow::Result<f64> {
+    let number = text.strip_suffix("usd").unwrap_or(text);
+    let number = number.strip_prefix('$').unwrap_or(number);
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|usd| usd.is_finite() && *usd > 0.0)
+        .with_context(|| format!("invalid USD ceiling {text}; use e.g. 30usd"))
 }
 
 /// Set (or replace) the ceiling on `scope`: the whole tree when it is a root, else the
@@ -116,7 +131,7 @@ fn totals(conn: &Connection, budget_scope: &str, kind: &str, priced: bool) -> an
     let mut stmt = conn.prepare(&format!(
         "SELECT u.model, sum(u.input_tokens), sum(u.output_tokens), sum(u.cache_read_tokens),
                 sum(u.cache_write_tokens), sum(u.cache_write_1h_tokens),
-                sum(u.cost_usd), count(u.cost_usd), count(*), max(u.ts)
+                sum(u.cost_usd), count(u.cost_usd), count(*), max(coalesce(u.received_at, u.ts))
          FROM usage u WHERE {member_filter} GROUP BY u.model"
     ))?;
     // Budgets are in USD, so the display-currency FX is not applied.
@@ -308,7 +323,15 @@ fn stop_members(conn: &Connection, budget: &Budget, totals: &Totals, spent: &str
     set_state(conn, scope, "stopped")?;
     let body = format!("budget of {scope} reached: {spent}");
     for member in members(conn, scope, &budget.kind)? {
-        msg::from_bus(conn, scope, &member, "stop", &body)?;
+        // A closed member runs no more tool calls; a stop would only strand its doorbell.
+        let closed: bool = conn.query_row(
+            "SELECT status='closed' FROM agents WHERE id=?1",
+            [&member],
+            |r| r.get(0),
+        )?;
+        if !closed {
+            msg::from_bus(conn, scope, &member, "stop", &body)?;
+        }
     }
     append_event(conn, msg::BUS, "budget_stop", scope, &json!({"tokens": totals.tokens}).to_string())
 }
@@ -331,7 +354,7 @@ fn set_state(conn: &Connection, scope: &str, state: &str) -> rusqlite::Result<us
 
 #[cfg(test)]
 mod tests {
-    use super::parse_tokens;
+    use super::{parse_tokens, parse_usd_ceiling};
 
     #[test]
     fn token_ceilings_parse_k_and_m() {
@@ -339,5 +362,17 @@ mod tests {
         assert_eq!(parse_tokens("2Mtok").unwrap(), 2_000_000);
         assert_eq!(parse_tokens("1500").unwrap(), 1_500);
         assert!(parse_tokens("lots").is_err());
+        for bad in ["0tok", "-5tok", "99999999999999Mtok"] {
+            assert!(parse_tokens(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn usd_ceilings_must_be_positive_and_finite() {
+        assert_eq!(parse_usd_ceiling("3usd").unwrap(), 3.0);
+        assert_eq!(parse_usd_ceiling("$2.5").unwrap(), 2.5);
+        for bad in ["0", "-1", "NaN", "inf"] {
+            assert!(parse_usd_ceiling(bad).is_err(), "{bad}");
+        }
     }
 }

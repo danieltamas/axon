@@ -108,10 +108,15 @@ pub fn release(conn: &Connection, agent: &str, cwd: &Path, paths: &[String]) -> 
     let checkout = checkout_of(cwd);
     let checkout_str = checkout.to_str().context("checkout path is not UTF-8")?;
     for path in paths {
-        conn.execute(
+        let released = conn.execute(
             "DELETE FROM claims WHERE agent_id=?1 AND checkout=?2 AND path=?3",
             params![agent, checkout_str, relative(&checkout, cwd, path)?],
         )?;
+        // A path inside a claimed directory is not a claim of its own; say so rather
+        // than report a release that left the claim held.
+        if released == 0 {
+            bail!("{agent} holds no claim on {path}; release the claimed path itself");
+        }
     }
     let payload = json!({"checkout": checkout_str, "paths": paths});
     append_event(conn, agent, "release", checkout_str, &payload.to_string())

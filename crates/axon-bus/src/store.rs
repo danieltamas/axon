@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS usage (
     cost_usd              REAL,
     source_offset         INTEGER,
     source_key            TEXT,
+    -- When the bus ingested the row; staleness (§6) is about receipt, not turn time.
+    received_at           INTEGER,
     UNIQUE (agent_id, source_key)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_agent ON usage(agent_id, ts);
@@ -175,16 +177,19 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
     Ok(conn)
 }
 
-/// `agents.effort` came after the table first shipped; `CREATE TABLE IF NOT EXISTS`
+/// Columns added after their table first shipped; `CREATE TABLE IF NOT EXISTS`
 /// leaves an existing table as it was.
 fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
-    let has_effort: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='effort')",
-        [],
-        |r| r.get(0),
-    )?;
-    if !has_effort {
-        conn.execute_batch("ALTER TABLE agents ADD COLUMN effort TEXT")?;
+    for (table, column, kind) in [("agents", "effort", "TEXT"), ("usage", "received_at", "INTEGER")] {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+            [table, column],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            // Identifiers come from the constant list above, never from input.
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
+        }
     }
     Ok(())
 }

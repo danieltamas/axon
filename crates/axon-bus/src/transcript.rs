@@ -56,10 +56,11 @@ fn tool(name: &str, input: &Value, failed: bool) -> Row {
         }
         None => input,
     };
+    // Redacted before it is cut, so a cut cannot leave a secret too short to recognise.
     let detail = ["file_path", "filePath", "path", "command", "cmd", "pattern"]
         .iter()
         .find_map(|key| input[key].as_str())
-        .map(|d| d.chars().take(MAX_DETAIL_CHARS).collect());
+        .map(|d| redact(d).chars().take(MAX_DETAIL_CHARS).collect());
     Row::Tool {
         name: name.to_owned(),
         detail,
@@ -190,16 +191,37 @@ fn hermes(record: &Value, tokens: Option<i64>) -> Vec<Row> {
     rows
 }
 
-/// Whether narrative text may be stored: the last `serve` boot decides (§7, opt-in).
+/// How long one `serve --content` heartbeat keeps capture on; `serve` renews it well
+/// before then, so capture ends within this long after `serve` stops (§7, opt-in).
+pub const CAPTURE_LEASE_MS: i64 = 30_000;
+
+/// Whether narrative text may be stored: only while a `serve --content` holds the lease.
 pub fn content_enabled(conn: &Connection) -> rusqlite::Result<bool> {
-    let value: Option<String> = conn
+    let until: Option<String> = conn
         .query_row(
-            "SELECT value FROM settings WHERE key='content_capture'",
+            "SELECT value FROM settings WHERE key='content_capture_until'",
             [],
             |r| r.get(0),
         )
         .optional()?;
-    Ok(value.as_deref() == Some("1"))
+    Ok(until
+        .and_then(|v| v.parse::<i64>().ok())
+        .is_some_and(|until| until > crate::store::now_ms()))
+}
+
+/// Start or renew the capture lease (`serve --content`), or end it (`serve` without it).
+pub fn set_capture(conn: &Connection, on: bool) -> rusqlite::Result<()> {
+    if !on {
+        conn.execute("DELETE FROM settings WHERE key='content_capture_until'", [])?;
+        return Ok(());
+    }
+    let until = crate::store::now_ms() + CAPTURE_LEASE_MS;
+    conn.execute(
+        "INSERT INTO settings (key,value) VALUES ('content_capture_until',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [until.to_string()],
+    )?;
+    Ok(())
 }
 
 /// Store rows; without content capture only their structure is kept (§7 privacy). The
@@ -268,6 +290,9 @@ pub fn store_rows(
     Ok(())
 }
 
+/// Retention runs at most this often, from whichever writer comes first.
+const EXPIRE_EVERY_MS: i64 = 3600 * 1000;
+
 /// Delete narrative past its retention.
 pub fn expire(conn: &Connection) -> rusqlite::Result<usize> {
     conn.execute(
@@ -276,44 +301,74 @@ pub fn expire(conn: &Connection) -> rusqlite::Result<usize> {
     )
 }
 
-/// Known credential shapes, masked before anything reaches the database.
-const SECRET_PREFIXES: [&str; 11] = [
-    "sk-",
-    "sk_live_",
-    "rk_live_",
-    "ghp_",
-    "gho_",
-    "github_pat_",
-    "glpat-",
-    "xoxb-",
-    "xoxp-",
-    "AKIA",
-    "AIza",
-];
+/// `expire`, when the last run is over an hour old. Hooks call it, so retention holds
+/// whether or not `serve` runs.
+pub fn expire_if_due(conn: &Connection) -> rusqlite::Result<()> {
+    let now = crate::store::now_ms();
+    let last: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='narrative_expired_at'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if last
+        .and_then(|v| v.parse::<i64>().ok())
+        .is_some_and(|at| now - at < EXPIRE_EVERY_MS)
+    {
+        return Ok(());
+    }
+    expire(conn)?;
+    conn.execute(
+        "INSERT INTO settings (key,value) VALUES ('narrative_expired_at',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [now.to_string()],
+    )?;
+    Ok(())
+}
+
+/// Credential shapes, masked before anything reaches the database. Each pattern's last
+/// group is the secret; anything before it (a key name, `Bearer`, a URL's user) stays.
+fn secret_patterns() -> &'static [regex::Regex] {
+    static PATTERNS: std::sync::OnceLock<Vec<regex::Regex>> = std::sync::OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        [
+            // Vendor-prefixed API keys and tokens.
+            r"\b((?:sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|xox[abpsr]-|xapp-|npm_|hf_|AKIA|ASIA|AIza|ya29\.)[A-Za-z0-9_\-.]{12,})",
+            // JSON Web Tokens.
+            r"\b(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})",
+            // Authorization headers.
+            r"(?i)\b(?:bearer|basic|token)\s+([A-Za-z0-9_\-.=+/]{16,})",
+            // Passwords in URLs: scheme://user:secret@host.
+            r"[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]+:([^@\s/]+)@",
+            // Assignments to secret-named keys: PASSWORD=…, api_key: "…".
+            r#"(?i)\b[A-Z0-9_]*(?:password|passwd|secret|token|api_?key|access_?key|private_?key|credential)[A-Z0-9_]*\s*[=:]\s*["'`]?([^\s"'`]{6,})"#,
+        ]
+        .iter()
+        .map(|p| regex::Regex::new(p).expect("valid secret pattern"))
+        .collect()
+    })
+}
 
 pub fn redact(text: &str) -> String {
     if text.contains("PRIVATE KEY-----") {
         return "[redacted: private key]".to_owned();
     }
-    let token_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    // A token starts wherever the previous char cannot continue one, so `KEY=sk-…`,
-    // `"sk-…"` and `` `sk-…` `` are caught as well as a bare word.
-    let mut at_boundary = true;
-    while let Some(c) = rest.chars().next() {
-        if at_boundary && SECRET_PREFIXES.iter().any(|p| rest.starts_with(p)) {
-            let len = rest.find(|c: char| !token_char(c)).unwrap_or(rest.len());
-            if len >= 16 {
-                out.push_str("[redacted]");
-                rest = &rest[len..];
-                at_boundary = false;
-                continue;
-            }
-        }
-        out.push(c);
-        at_boundary = !token_char(c);
-        rest = &rest[c.len_utf8()..];
+    let mut out = text.to_owned();
+    for pattern in secret_patterns() {
+        out = pattern
+            .replace_all(&out, |caps: &regex::Captures| {
+                let whole = caps.get(0).expect("match");
+                let secret = caps.iter().flatten().last().expect("secret group");
+                // A bare number after `tokens:` is a count, not a credential.
+                if secret.as_str().bytes().all(|b| b.is_ascii_digit()) {
+                    return whole.as_str().to_owned();
+                }
+                let head = &out[whole.start()..secret.start()];
+                let tail = &out[secret.end()..whole.end()];
+                format!("{head}[redacted]{tail}")
+            })
+            .into_owned();
     }
     out
 }
@@ -333,10 +388,33 @@ mod tests {
             redact("KEY=sk-abcdefghijklmnopqrstu `ghp_abcdefghijklmnopqrst`"),
             "KEY=[redacted] `[redacted]`"
         );
-        assert_eq!(
-            redact("task-sk-abcdefghijklmnopq"),
-            "task-sk-abcdefghijklmnopq"
-        );
+        for (text, expected) in [
+            (
+                "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuv'",
+                "Bearer [redacted]",
+            ),
+            (
+                "postgres://app:hunter22@db/main",
+                "postgres://app:[redacted]@db/main",
+            ),
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENG",
+                "AWS_SECRET_ACCESS_KEY=[redacted]",
+            ),
+            ("password: 'correct-horse'", "password: '[redacted]'"),
+            (
+                "jwt eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q",
+                "jwt [redacted]",
+            ),
+            (
+                "ghs_abcdefghijklmnop and hf_abcdefghijklmnop",
+                "[redacted] and [redacted]",
+            ),
+        ] {
+            let redacted = redact(text);
+            assert!(redacted.contains(expected), "{text} -> {redacted}");
+        }
+        assert_eq!(redact("input_tokens: 123456"), "input_tokens: 123456");
         assert_eq!(redact("plain words stay"), "plain words stay");
     }
 

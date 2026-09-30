@@ -2,7 +2,8 @@
 //! database plus a message sender; killing it loses nothing.
 //!
 //! Security: the Host header must name this loopback server (DNS rebinding), every POST
-//! needs the per-boot token and this exact Origin, and the CSP allows self only.
+//! needs the per-boot token and this exact Origin, and the CSP allows self only. The page
+//! hands its token to any local account, so `serve` is for single-user hosts (§7).
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -36,8 +37,9 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 /// page in under 1 s).
 const POLL: Duration = Duration::from_millis(100);
 
-/// Narrative past retention is deleted at boot and then hourly.
-const EXPIRE_EVERY: Duration = Duration::from_secs(3600);
+/// How often the poller renews the capture lease and runs retention; well inside the
+/// lease, so capture stays on while `serve --content` runs.
+const RENEW_EVERY: Duration = Duration::from_secs(10);
 
 struct App {
     db: PathBuf,
@@ -49,19 +51,15 @@ struct App {
 
 pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> anyhow::Result<()> {
     let conn = store::open(db).context("no hub; run `axon-bus init`")?;
-    conn.execute(
-        "INSERT INTO settings (key,value) VALUES ('content_capture',?1)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [if content { "1" } else { "0" }],
-    )?;
+    transcript::set_capture(&conn, content)?;
     drop(conn);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(serve(db.to_owned(), port, ready_file))
+    runtime.block_on(serve(db.to_owned(), port, ready_file, content))
 }
 
-async fn serve(db: PathBuf, port: u16, ready_file: Option<&Path>) -> anyhow::Result<()> {
+async fn serve(db: PathBuf, port: u16, ready_file: Option<&Path>, content: bool) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     let address: SocketAddr = listener.local_addr()?;
     let origin = format!("http://{address}");
@@ -71,7 +69,7 @@ async fn serve(db: PathBuf, port: u16, ready_file: Option<&Path>) -> anyhow::Res
         port: address.port(),
         origin: origin.clone(),
         token: token.clone(),
-        snapshots: watch_database(db)?,
+        snapshots: watch_database(db, content)?,
     });
     let router = Router::new()
         .route("/", get(index))
@@ -97,35 +95,45 @@ fn boot_token() -> anyhow::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// `{url, token}`, written whole (temp file + rename) and readable by the owner only.
+/// `{url, token}`, written whole (temp file + rename). The temp file is created fresh with
+/// owner-only permissions, so a file or symlink planted at its name is refused.
 fn write_ready(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
+    use std::io::Write;
     let temp = path.with_extension(format!("tmp-{}", std::process::id()));
-    std::fs::write(&temp, json!({"url": url, "token": token}).to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    let mut file = options
+        .open(&temp)
+        .with_context(|| format!("create {}", temp.display()))?;
+    file.write_all(json!({"url": url, "token": token}).to_string().as_bytes())?;
+    drop(file);
     std::fs::rename(&temp, path)?;
     Ok(())
 }
 
 /// One thread watches `PRAGMA data_version` and publishes a new snapshot when another
-/// connection changed the database.
-fn watch_database(db: PathBuf) -> anyhow::Result<watch::Receiver<Arc<String>>> {
+/// connection changed the database. It also renews the capture lease and runs retention.
+fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<Arc<String>>> {
     let conn = store::open(&db)?;
     let mut cache = HashMap::new();
     let first = snapshot::build(&conn, &mut cache)?.to_string();
     let (sender, receiver) = watch::channel(Arc::new(first));
     std::thread::spawn(move || {
         let mut seen: Option<i64> = None;
-        let mut expired_at: Option<Instant> = None;
+        let mut renewed_at: Option<Instant> = None;
         loop {
-            if expired_at.map_or(true, |at| at.elapsed() >= EXPIRE_EVERY) {
-                if let Err(err) = transcript::expire(&conn) {
-                    eprintln!("axon-bus: narrative expiry failed: {err}");
+            if renewed_at.map_or(true, |at| at.elapsed() >= RENEW_EVERY) {
+                let upkeep = transcript::set_capture(&conn, content)
+                    .and_then(|()| transcript::expire_if_due(&conn));
+                if let Err(err) = upkeep {
+                    eprintln!("axon-bus: capture lease or retention failed: {err}");
                 }
-                expired_at = Some(Instant::now());
+                renewed_at = Some(Instant::now());
             }
             std::thread::sleep(POLL);
             let version = conn.query_row("PRAGMA data_version", [], |r| r.get(0)).ok();

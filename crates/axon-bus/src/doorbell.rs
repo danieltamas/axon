@@ -10,17 +10,19 @@ pub fn dir(db: &Path) -> PathBuf {
     db.with_file_name("doorbells")
 }
 
-/// Agent ids come from hook payloads, so anything but a plain name is hashed.
+/// Agent ids come from hook payloads, so anything but a plain lowercase name is hashed.
+/// Lowercase keeps `Worker` and `worker` apart on case-insensitive filesystems, and the
+/// `=` of a hashed name never occurs in a plain one, so the two kinds cannot collide.
 fn path(db: &Path, agent: &str) -> PathBuf {
     let plain = !agent.is_empty()
         && !agent.starts_with('.')
         && agent
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c));
     let name = if plain {
         agent.to_owned()
     } else {
-        blake3::hash(agent.as_bytes()).to_hex().to_string()
+        format!("={}", blake3::hash(agent.as_bytes()).to_hex())
     };
     dir(db).join(format!("{name}.json"))
 }

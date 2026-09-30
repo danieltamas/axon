@@ -16,7 +16,7 @@ use crate::Harness;
 
 const BACKUP_SUFFIX: &str = ".axon-bus.bak";
 
-const CLAUDE_EVENTS: [&str; 8] = [
+pub(crate) const CLAUDE_EVENTS: [&str; 8] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
@@ -26,7 +26,7 @@ const CLAUDE_EVENTS: [&str; 8] = [
     "Stop",
     "SessionEnd",
 ];
-const CODEX_EVENTS: [&str; 7] = [
+pub(crate) const CODEX_EVENTS: [&str; 7] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
@@ -47,10 +47,10 @@ const HERMES_EVENTS: [&str; 8] = [
 ];
 
 /// Where a harness keeps what `install` touches.
-struct Layout {
-    config: PathBuf,
+pub(crate) struct Layout {
+    pub(crate) config: PathBuf,
     /// A file the installer owns outright (the OpenCode plugin shim).
-    plugin: Option<PathBuf>,
+    pub(crate) plugin: Option<PathBuf>,
 }
 
 fn env_dir(var: &str, fallback: &[&str]) -> PathBuf {
@@ -62,7 +62,7 @@ fn env_dir(var: &str, fallback: &[&str]) -> PathBuf {
     })
 }
 
-fn layout(harness: Harness) -> Layout {
+pub(crate) fn layout(harness: Harness) -> Layout {
     match harness {
         Harness::Claude => Layout {
             config: env_dir("CLAUDE_CONFIG_DIR", &[".claude"]).join("settings.json"),
@@ -86,7 +86,7 @@ fn layout(harness: Harness) -> Layout {
     }
 }
 
-fn backup_path(config: &Path) -> PathBuf {
+pub(crate) fn backup_path(config: &Path) -> PathBuf {
     let mut name = config.file_name().unwrap_or_default().to_os_string();
     name.push(BACKUP_SUFFIX);
     config.with_file_name(name)
@@ -103,8 +103,18 @@ fn command(exe: &str, harness: Harness, event: &str) -> String {
     format!("{exe} hook {} {event}", harness.as_str())
 }
 
+/// Whether a configured hook command is this bus's hook for `event`, whichever binary
+/// path installed it, so a reinstall or uninstall from another path still finds it.
+pub(crate) fn is_bus_command(text: &str, harness: Harness, event: &str) -> bool {
+    let Some(exe) = text.strip_suffix(&format!(" hook {} {event}", harness.as_str())) else {
+        return false;
+    };
+    let exe = exe.trim_matches('\'');
+    exe == "axon-bus" || exe.ends_with("/axon-bus")
+}
+
 /// The config text with the bus hooks added to `original` (None: no config yet).
-fn wire(
+pub(crate) fn wire(
     harness: Harness,
     original: Option<&str>,
     exe: &str,
@@ -127,7 +137,18 @@ fn wire(
                     .or_insert_with(|| json!([]))
                     .as_array_mut()
                     .with_context(|| format!("settings.json `hooks.{event}` is not a list"))?;
-                if !entries.iter().any(|e| e.to_string().contains(&cmd)) {
+                // An existing bus hook is repointed in place, keeping the user's order.
+                let mut wired = false;
+                for hook in entries
+                    .iter_mut()
+                    .filter_map(|e| e["hooks"].as_array_mut())
+                    .flatten()
+                    .filter(|h| h["command"].as_str().is_some_and(|c| is_bus_command(c, harness, event)))
+                {
+                    hook["command"] = json!(cmd);
+                    wired = true;
+                }
+                if !wired {
                     entries.push(json!({"hooks": [{"type": "command", "command": cmd}]}));
                 }
             }
@@ -147,12 +168,17 @@ fn wire(
                     .or_insert(toml_edit::value(toml_edit::Array::new()))
                     .as_array_mut()
                     .with_context(|| format!("config.toml `hooks.{event}` is not an array"))?;
-                let wired = entries.iter().any(|e| {
-                    e.as_inline_table()
-                        .and_then(|t| t.get("command"))
+                let mut wired = false;
+                for entry in entries.iter_mut().filter_map(|e| e.as_inline_table_mut()) {
+                    let ours = entry
+                        .get("command")
                         .and_then(|c| c.as_str())
-                        == Some(cmd.as_str())
-                });
+                        .is_some_and(|c| is_bus_command(c, harness, event));
+                    if ours {
+                        entry.insert("command", cmd.as_str().into());
+                        wired = true;
+                    }
+                }
                 if !wired {
                     let mut entry = toml_edit::InlineTable::new();
                     entry.insert("command", cmd.into());
@@ -193,7 +219,7 @@ fn wire(
     }
 }
 
-const HERMES_MARKER: &str = "# axon-bus hooks; `axon-bus uninstall` removes them\n";
+pub(crate) const HERMES_MARKER: &str = "# axon-bus hooks; `axon-bus uninstall` removes them\n";
 
 fn hermes_block(exe: &str) -> String {
     let mut block = format!("{HERMES_MARKER}hooks:\n");
@@ -202,77 +228,6 @@ fn hermes_block(exe: &str) -> String {
         block.push_str(&format!("  {event}:\n    - command: '{cmd}'\n"));
     }
     block
-}
-
-/// `current` without the bus hooks, keeping every edit the user made after install.
-/// Lists and tables the bus created are dropped once they are empty again.
-fn unwire(harness: Harness, current: &str, exe: &str, layout: &Layout) -> anyhow::Result<String> {
-    match harness {
-        Harness::Claude => {
-            let mut settings: Value = serde_json::from_str(current)?;
-            if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
-                for event in CLAUDE_EVENTS {
-                    let cmd = command(exe, harness, event);
-                    let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
-                        continue;
-                    };
-                    let before = entries.len();
-                    entries.retain(|e| !e.to_string().contains(&cmd));
-                    if entries.is_empty() && before > 0 {
-                        hooks.remove(event);
-                    }
-                }
-                if hooks.is_empty() {
-                    settings.as_object_mut().map(|s| s.remove("hooks"));
-                }
-            }
-            Ok(serde_json::to_string_pretty(&settings)? + "\n")
-        }
-        Harness::Codex => {
-            let mut doc: toml_edit::DocumentMut = current.parse()?;
-            if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut()) {
-                for event in CODEX_EVENTS {
-                    let cmd = command(exe, harness, event);
-                    let Some(entries) = hooks.get_mut(event).and_then(|e| e.as_array_mut()) else {
-                        continue;
-                    };
-                    let before = entries.len();
-                    entries.retain(|e| {
-                        e.as_inline_table()
-                            .and_then(|t| t.get("command"))
-                            .and_then(|c| c.as_str())
-                            != Some(cmd.as_str())
-                    });
-                    if entries.is_empty() && before > 0 {
-                        hooks.remove(event);
-                    }
-                }
-                if hooks.is_empty() {
-                    doc.remove("hooks");
-                }
-            }
-            Ok(doc.to_string())
-        }
-        Harness::Opencode => {
-            let mut config: Value = serde_json::from_str(current)?;
-            let plugin = layout.plugin.as_ref().expect("opencode has a plugin shim");
-            let url = json!(format!("file://{}", plugin.display()));
-            if let Some(plugins) = config.get_mut("plugin").and_then(Value::as_array_mut) {
-                plugins.retain(|p| *p != url);
-                if plugins.is_empty() {
-                    config.as_object_mut().map(|c| c.remove("plugin"));
-                }
-            }
-            Ok(serde_json::to_string_pretty(&config)? + "\n")
-        }
-        Harness::Hermes => {
-            let block = hermes_block(exe);
-            if !current.contains(&block) {
-                bail!("config.yaml: the axon-bus hooks block was edited; remove it by hand");
-            }
-            Ok(current.replacen(&block, "", 1))
-        }
-    }
 }
 
 fn plugin_source(exe: &str) -> String {
@@ -307,7 +262,7 @@ export const AxonBus = async () => ({{
     )
 }
 
-fn read_optional(path: &Path) -> anyhow::Result<Option<String>> {
+pub(crate) fn read_optional(path: &Path) -> anyhow::Result<Option<String>> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -338,22 +293,31 @@ fn pristine(harness: Harness, exe: &str, layout: &Layout) -> anyhow::Result<Opti
     Ok(current)
 }
 
-fn current_exe() -> anyhow::Result<String> {
+pub(crate) fn current_exe() -> anyhow::Result<String> {
     let exe = std::env::current_exe().context("locate the axon-bus binary")?;
     exe.to_str()
         .map(str::to_owned)
         .context("the axon-bus binary path is not UTF-8")
 }
 
-/// Whether the live config differs from what install wrote over the backup `original`.
-fn edited_since_install(
+/// Whether the live config differs from what install wrote over the backup `original`,
+/// ignoring which binary path the bus hooks point at.
+pub(crate) fn edited_since_install(
     harness: Harness,
     current: Option<&str>,
     original: &str,
     exe: &str,
     layout: &Layout,
 ) -> anyhow::Result<bool> {
-    Ok(current.is_some_and(|c| wire(harness, Some(original), exe, layout).map_or(true, |w| w != c)))
+    let Some(live) = current else {
+        return Ok(false);
+    };
+    let installed = wire(harness, Some(original), exe, layout)?;
+    if installed == live {
+        return Ok(false);
+    }
+    let without_bus = |text: &str| crate::uninstall::unwire(harness, text, layout).ok();
+    Ok(without_bus(live).is_none() || without_bus(live) != without_bus(&installed))
 }
 
 pub fn install(harness: Harness) -> anyhow::Result<()> {
@@ -366,12 +330,14 @@ pub fn install(harness: Harness) -> anyhow::Result<()> {
         (Some(original), Some(live))
             if edited_since_install(harness, Some(live), original, &exe, &layout)? =>
         {
-            if harness == Harness::Hermes && live.contains(HERMES_MARKER) {
-                live.clone()
+            // Hermes has one block to replace; the others are repointed in place.
+            let live = if harness == Harness::Hermes && live.contains(HERMES_MARKER) {
+                crate::uninstall::unwire(harness, live, &layout)?
             } else {
-                wire(harness, Some(live), &exe, &layout)
-                    .with_context(|| format!("wire {}", layout.config.display()))?
-            }
+                live.clone()
+            };
+            wire(harness, Some(&live), &exe, &layout)
+                .with_context(|| format!("wire {}", layout.config.display()))?
         }
         _ => {
             let original = pristine(harness, &exe, &layout)?;
@@ -387,37 +353,6 @@ pub fn install(harness: Harness) -> anyhow::Result<()> {
         write_if_changed(plugin, &plugin_source(&exe))?;
     }
     println!("{}: wired {}", harness.as_str(), layout.config.display());
-    Ok(())
-}
-
-pub fn uninstall(harness: Harness) -> anyhow::Result<()> {
-    let exe = current_exe()?;
-    let layout = layout(harness);
-    let backup = backup_path(&layout.config);
-    let current = read_optional(&layout.config)?;
-    if let Some(original) = read_optional(&backup)? {
-        match current.as_deref() {
-            // Edited after install: take out only the bus hooks, keep the edits.
-            Some(live) if edited_since_install(harness, Some(live), &original, &exe, &layout)? => {
-                let unwired = unwire(harness, live, &exe, &layout)
-                    .with_context(|| format!("unwire {}", layout.config.display()))?;
-                fs::write(&layout.config, unwired)?;
-            }
-            _ => fs::write(&layout.config, original)?,
-        }
-        fs::remove_file(&backup)?;
-    } else if current.is_some() && current == Some(wire(harness, None, &exe, &layout)?) {
-        fs::remove_file(&layout.config)?;
-    }
-    if let Some(plugin) = &layout.plugin {
-        if plugin.exists() {
-            fs::remove_file(plugin)?;
-        }
-        if let Some(dir) = plugin.parent() {
-            // Only removes the directory when the installer's shim was all it held.
-            let _ = fs::remove_dir(dir);
-        }
-    }
     Ok(())
 }
 

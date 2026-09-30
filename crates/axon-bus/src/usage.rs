@@ -27,29 +27,33 @@ fn transcript_of(transcript: &Path, child: Option<&str>) -> PathBuf {
     transcript.to_owned()
 }
 
-/// Ingest the turns `agent` added to its transcript since the last call. `child` is the
-/// Claude agent_id for a subagent, None for the session's main thread. A missing
-/// transcript is not an error: the hook may run before Claude flushes it.
-pub fn ingest_claude(
+/// Turns and narrative a transcript gained since the cursor, read and parsed before the
+/// hook takes the write lock so the lock is held only for the inserts.
+pub struct Pending {
+    agent: String,
+    child: Option<String>,
+    path: String,
+    start: i64,
+    end: i64,
+    text: String,
+}
+
+/// Read what `agent` added to its transcript since the last ingest. `child` is the Claude
+/// agent_id for a subagent, None for the session's main thread. A missing transcript is
+/// not an error: the hook may run before Claude flushes it.
+pub fn read_claude(
     conn: &Connection,
     agent: &str,
     child: Option<&str>,
     transcript: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<Pending>> {
     let path = transcript_of(transcript, child);
     let mut file = match std::fs::File::open(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         other => other?,
     };
-    let key = path.to_string_lossy();
-    let cursor: i64 = conn
-        .query_row(
-            "SELECT byte_offset FROM ingest_cursors WHERE agent_id=?1 AND path=?2",
-            params![agent, key],
-            |r| r.get(0),
-        )
-        .optional()?
-        .unwrap_or(0);
+    let key = path.to_string_lossy().into_owned();
+    let cursor = cursor(conn, agent, &key)?.unwrap_or(0);
     // A transcript shorter than the cursor was rewritten; read it again from the top.
     let start = if file.metadata()?.len() < cursor as u64 { 0 } else { cursor };
     file.seek(SeekFrom::Start(start as u64))?;
@@ -57,22 +61,50 @@ pub fn ingest_claude(
     file.read_to_end(&mut appended)?;
     // A line still being written is left for the next call.
     let Some(complete) = appended.iter().rposition(|&b| b == b'\n').map(|i| i + 1) else {
+        return Ok(None);
+    };
+    Ok(Some(Pending {
+        agent: agent.to_owned(),
+        child: child.map(str::to_owned),
+        path: key,
+        start,
+        end: start + complete as i64,
+        text: String::from_utf8_lossy(&appended[..complete]).into_owned(),
+    }))
+}
+
+fn cursor(conn: &Connection, agent: &str, path: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT byte_offset FROM ingest_cursors WHERE agent_id=?1 AND path=?2",
+        params![agent, path],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Store what `read_claude` found. Call inside the hook's write transaction; a concurrent
+/// hook that already moved the cursor has stored the same lines, so they are skipped.
+pub fn store(conn: &Connection, pending: &Pending) -> anyhow::Result<()> {
+    let Pending { agent, child, path, start, end, text } = pending;
+    let current = cursor(conn, agent, path)?.unwrap_or(0);
+    if current != *start && !(*start == 0 && current > *end) {
         return Ok(());
-    };
-    let text = String::from_utf8_lossy(&appended[..complete]);
-    let end = start + complete as i64;
+    }
+    let child = child.as_deref();
     let turns = match child {
-        Some(_) => parse_subagent_jsonl(&text, &SubagentMeta::default()),
-        None => parse_main_jsonl(&text),
+        Some(_) => parse_subagent_jsonl(text, &SubagentMeta::default()),
+        None => parse_main_jsonl(text),
     };
+    let received = now_ms();
     for turn in turns.iter().filter(|t| t.agent_id.as_deref() == child) {
         let Some(ts) = epoch_ms(&turn.first_ts) else {
             continue;
         };
         conn.execute(
             "INSERT OR IGNORE INTO usage (agent_id,ts,model,input_tokens,output_tokens,
-             cache_read_tokens,cache_write_tokens,cache_write_1h_tokens,cost_usd,source_offset,source_key)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+             cache_read_tokens,cache_write_tokens,cache_write_1h_tokens,cost_usd,source_offset,
+             source_key,received_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 agent,
                 ts,
@@ -84,15 +116,17 @@ pub fn ingest_claude(
                 turn.cache_write_1h as i64,
                 turn.reported_cost_usd,
                 end,
-                turn.message_id
+                turn.message_id,
+                received
             ],
         )?;
     }
-    store_narrative(conn, agent, child, &text)?;
+    store_narrative(conn, agent, child, text)?;
+    transcript::expire_if_due(conn)?;
     conn.execute(
         "INSERT INTO ingest_cursors (agent_id,path,byte_offset) VALUES (?1,?2,?3)
          ON CONFLICT(agent_id,path) DO UPDATE SET byte_offset=excluded.byte_offset",
-        params![agent, key, end],
+        params![agent, path, end],
     )?;
     Ok(())
 }

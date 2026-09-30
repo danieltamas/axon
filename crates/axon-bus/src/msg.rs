@@ -146,9 +146,12 @@ fn insert(conn: &Connection, msg: &Outgoing, stored: &Stored) -> anyhow::Result<
         // failed ring costs only that fallback: the stop row itself still denies.
         if let Some(db) = conn.path() {
             let reason = stop_reason(msg.from, msg.body);
-            for name in doorbell_names(conn, msg.to)? {
-                if let Err(err) = doorbell::ring(Path::new(db), &name, &reason) {
-                    eprintln!("axon-bus: stop for {} stored, but its doorbell failed: {err:#}", msg.to);
+            // A stop holds the addressee's whole subtree (§3), so each member gets one.
+            for member in subtree(conn, msg.to)? {
+                for name in doorbell_names(conn, &member)? {
+                    if let Err(err) = doorbell::ring(Path::new(db), &name, &reason) {
+                        eprintln!("axon-bus: stop for {} stored, but its doorbell failed: {err:#}", msg.to);
+                    }
                 }
             }
         }
@@ -263,12 +266,29 @@ pub fn await_answer(
     }
 }
 
-/// The reason of the oldest stop addressed to `agent` that its turn has not ended on yet.
+/// `agent` and its ancestors up to its root, as a `line(id)` CTE bound to ?1.
+const LINEAGE: &str = "WITH RECURSIVE line(id) AS (SELECT ?1 UNION
+    SELECT a.parent_id FROM agents a JOIN line ON a.id=line.id WHERE a.parent_id IS NOT NULL)";
+
+/// `agent` and everything spawned under it.
+fn subtree(conn: &Connection, agent: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "WITH RECURSIVE sub(id) AS (SELECT ?1 UNION SELECT a.id FROM agents a JOIN sub ON a.parent_id=sub.id)
+         SELECT id FROM sub",
+    )?;
+    let ids = stmt.query_map([agent], |r| r.get(0))?;
+    ids.collect()
+}
+
+/// The oldest stop that holds `agent`: addressed to it or to an ancestor, whose turn has
+/// not ended on it yet. Stopping an orchestrator stops the workers it is waiting on.
 pub fn pending_stop(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
     let stop: Option<(String, String)> = conn
         .query_row(
-            "SELECT from_id,body FROM messages WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL
-             ORDER BY rowid LIMIT 1",
+            &format!(
+                "{LINEAGE} SELECT from_id,body FROM messages WHERE to_id IN (SELECT id FROM line)
+                 AND kind='stop' AND acked_at IS NULL ORDER BY rowid LIMIT 1"
+            ),
             [agent],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -295,6 +315,16 @@ pub fn ack_stops(conn: &Connection, agent: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A closed agent runs no more tool calls, so every stop on it, budget stops included,
+/// is done; its doorbell can then go.
+pub fn ack_stops_on_close(conn: &Connection, agent: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE messages SET acked_at=?2 WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL",
+        params![agent, now_ms()],
+    )?;
+    Ok(())
+}
+
 /// Lift the stops that `scope`'s budget put on `agent`; stops from other budgets hold.
 pub fn clear_bus_stops(conn: &Connection, scope: &str, agent: &str) -> anyhow::Result<()> {
     conn.execute(
@@ -308,17 +338,31 @@ pub fn clear_bus_stops(conn: &Connection, scope: &str, agent: &str) -> anyhow::R
 /// Remove `agent`'s doorbell once no stop is pending. Call after the transaction that
 /// acked its stops commits, so a rolled-back ack never loses the fallback.
 pub fn silence_doorbell(conn: &Connection, agent: &str) -> anyhow::Result<()> {
-    let pending: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM messages WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL)",
-        [agent],
-        |r| r.get(0),
-    )?;
-    if let (false, Some(db)) = (pending, conn.path()) {
-        for name in doorbell_names(conn, agent)? {
+    let Some(db) = conn.path() else {
+        return Ok(());
+    };
+    // The agent's stops held its subtree too; each member keeps its doorbell only while
+    // some stop still holds it.
+    for member in subtree(conn, agent)? {
+        if pending_stop_row(conn, &member)? {
+            continue;
+        }
+        for name in doorbell_names(conn, &member)? {
             doorbell::clear(Path::new(db), &name)?;
         }
     }
     Ok(())
+}
+
+fn pending_stop_row(conn: &Connection, agent: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        &format!(
+            "{LINEAGE} SELECT EXISTS(SELECT 1 FROM messages WHERE to_id IN (SELECT id FROM line)
+             AND kind='stop' AND acked_at IS NULL)"
+        ),
+        [agent],
+        |r| r.get(0),
+    )
 }
 
 /// The names a hook may know `agent` by when the hub is unreadable: its id and, for a

@@ -228,7 +228,7 @@ pub enum BudgetCommand {
         scope: String,
         #[arg(value_parser = budget::parse_tokens)]
         tokens: Option<i64>,
-        #[arg(long)]
+        #[arg(long, value_parser = budget::parse_usd_ceiling)]
         usd: Option<f64>,
     },
     /// Print the ceiling, spend and state.
@@ -248,6 +248,13 @@ pub fn parse_ttl(text: &str) -> Result<std::time::Duration, String> {
         "h" => 3600,
         _ => return Err(format!("invalid ttl unit in {text}; use s, m or h")),
     };
-    Ok(std::time::Duration::from_secs(count * seconds))
+    let seconds = count
+        .checked_mul(seconds)
+        .filter(|&s| s <= MAX_TTL_SECS)
+        .ok_or_else(|| format!("ttl {text} is over the 24h limit"))?;
+    Ok(std::time::Duration::from_secs(seconds))
 }
+
+/// A grant is for a conversation, not a standing edge; that is what `link` is for.
+const MAX_TTL_SECS: u64 = 24 * 3600;
 

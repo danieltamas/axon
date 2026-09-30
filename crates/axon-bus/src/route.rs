@@ -71,6 +71,8 @@ pub fn accept(conn: &Connection, from: &str, to: &str) -> anyhow::Result<()> {
 }
 
 /// Open a direct edge between `from` and `to`, both ways, for one thread until `ttl_ms`.
+/// A grant only shortcuts a relay route that already exists, on a thread `from` takes part
+/// in; it never connects trees that no link joins.
 pub fn grant(
     conn: &Connection,
     from: &str,
@@ -82,6 +84,17 @@ pub fn grant(
         if parent_of(conn, id)?.is_none() {
             bail!("agent {id} is not registered");
         }
+    }
+    if route(conn, from, to)?.is_none() {
+        bail!("no route joins {from} and {to}; their roots must link first");
+    }
+    let in_thread: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE thread=?1 AND (from_id=?2 OR to_id=?2))",
+        params![thread, from],
+        |r| r.get(0),
+    )?;
+    if !in_thread {
+        bail!("{from} has no message on thread {thread}; grant a thread it takes part in");
     }
     let expires_at = now_ms() + ttl_ms;
     conn.execute(

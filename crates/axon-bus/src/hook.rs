@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::registry::{self, Agent, Status};
-use crate::{doorbell, gate, msg, store};
+use crate::{doorbell, gate, msg, store, usage};
 
 /// What a hook event means for the registry, independent of the harness that sent it.
 #[derive(Debug, PartialEq)]
@@ -44,11 +44,11 @@ pub fn run(db: &Path, harness: &str, event: &str) {
     if !hub_exists && !doorbell::dir(db).exists() {
         return;
     }
-    let explicit_parent = std::env::var("AXON_BUS_PARENT").ok();
     let result = read
         .context("read hook payload")
         .and_then(|_| serde_json::from_slice::<Value>(&stdin).context("hook payload is not JSON"))
         .and_then(|payload| {
+            let explicit_parent = trusted_parent(db, &payload);
             let change = normalize(harness, event, &payload, explicit_parent.as_deref())?;
             let actor = actor_of(&change);
             let reply = if hub_exists {
@@ -56,7 +56,13 @@ pub fn run(db: &Path, harness: &str, event: &str) {
             } else {
                 Err(anyhow::anyhow!("the hub at {} was removed", db.display()))
             };
-            reply.or_else(|err| rung_doorbell(db, harness, event, actor).ok_or(err))
+            reply.or_else(|err| {
+                let fallback = gate_only(db, harness, event, actor).or_else(|| rung_doorbell(db, harness, event, actor));
+                if fallback.is_some() {
+                    eprintln!("axon-bus: hook {harness} {event} answered by the gate alone: {err:#}");
+                }
+                fallback.ok_or(err)
+            })
         });
     match result {
         Ok(Some(reply)) => println!("{reply}"),
@@ -66,6 +72,52 @@ pub fn run(db: &Path, harness: &str, event: &str) {
         }
         Err(_) => {}
     }
+}
+
+/// `AXON_BUS_PARENT`, when it names an agent of this hook's own session tree. A parent
+/// from another tree would move this session's spend onto that tree's budget, so it is
+/// dropped and the child attaches to its session root instead.
+fn trusted_parent(db: &Path, payload: &Value) -> Option<String> {
+    let parent = std::env::var("AXON_BUS_PARENT").ok()?;
+    let session = str_at(payload, "/session_id")?;
+    let conn = store::open(db).ok()?;
+    let same_tree: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM agents a JOIN agents r ON r.id=a.root_id
+             WHERE a.id=?1 AND (a.session_id=?2 OR r.session_id=?2))",
+            [&parent, session],
+            |r| r.get(0),
+        )
+        .ok()?;
+    if !same_tree {
+        eprintln!("axon-bus: AXON_BUS_PARENT={parent} is not in session {session}; ignored");
+    }
+    same_tree.then_some(parent)
+}
+
+/// The stop and budget gate alone, for a pre-tool hook whose registry write failed (most
+/// often a hub busy past its timeout). A WAL reader is not blocked by the writer, so the
+/// gate still answers; a stop or budget transition it must write fails, and so denies.
+/// None when the hub cannot be read at all or the actor is not registered yet.
+fn gate_only(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> Option<Option<Value>> {
+    if !gate::is_pre_tool(harness, event) || !db.exists() {
+        return None;
+    }
+    let answer = (|| -> anyhow::Result<Option<Option<Value>>> {
+        let mut conn = store::open(db)?;
+        let tx = conn.transaction()?;
+        let Some(actor) = actor else { return Ok(None) };
+        let actor = registered_as(&tx, harness, actor)?.unwrap_or_else(|| actor.to_owned());
+        if registry::root_of(&tx, &actor)?.is_none() {
+            return Ok(None);
+        }
+        let reply = gate::verdict(&tx, harness, event, &actor, &Value::Null)?;
+        // Transitions it recorded are kept when the lock is free by now; losing them is
+        // harmless because the next hook recomputes them.
+        let _ = tx.commit();
+        Ok(Some(reply))
+    })();
+    answer.ok().flatten()
 }
 
 /// When the hub cannot answer, a stop already persisted as a doorbell still denies the
@@ -216,6 +268,7 @@ fn apply(
         return Ok(None);
     }
     let mut conn = store::open(db)?;
+    let transcript = read_claude_transcript(&conn, harness, event, &change, payload);
     let tx = store::write_tx(&mut conn)?;
     let resolve = |id: &str| -> rusqlite::Result<String> {
         Ok(registered_as(&tx, harness, id)?.unwrap_or_else(|| id.to_owned()))
@@ -227,7 +280,11 @@ fn apply(
             let id = resolve(id)?;
             let status = if closing { Status::Closed } else { Status::Idle };
             registry::set_status(&tx, &id, status)?;
-            msg::ack_stops(&tx, &id)?;
+            if closing {
+                msg::ack_stops_on_close(&tx, &id)?;
+            } else {
+                msg::ack_stops(&tx, &id)?;
+            }
             (id, true)
         }
         Change::SessionStart(ref node) | Change::Active(ref node) | Change::ChildStart(ref node) => {
@@ -249,6 +306,9 @@ fn apply(
             (id, false)
         }
     };
+    if harness == "claude" {
+        record_claude_usage(&tx, &actor, payload, transcript.as_ref());
+    }
     let reply = gate::verdict(&tx, harness, event, &actor, payload)?;
     if let Err(err) = tx.commit() {
         // A denial stands even when the transaction that computed it cannot commit.
@@ -264,6 +324,49 @@ fn apply(
         }
     }
     Ok(reply)
+}
+
+/// After a Claude tool call or turn (a turn's last reply follows its last tool call), the
+/// transcript lines the actor added, read before the write lock is taken.
+fn read_claude_transcript(
+    conn: &Connection,
+    harness: &str,
+    event: &str,
+    change: &Change,
+    payload: &Value,
+) -> Option<usage::Pending> {
+    if harness != "claude" || !matches!(event, "PostToolUse" | "Stop" | "SubagentStop") {
+        return None;
+    }
+    let path = str_at(payload, "/transcript_path")?;
+    let read = (|| {
+        let id = actor_of(change).context("no actor")?;
+        let actor = registered_as(conn, harness, id)?.unwrap_or_else(|| id.to_owned());
+        usage::read_claude(conn, &actor, str_at(payload, "/agent_id"), Path::new(path))
+    })();
+    read.unwrap_or_else(|err| {
+        eprintln!("axon-bus: transcript {path} not read: {err:#}");
+        None
+    })
+}
+
+/// Keep the model a spawn resolved for its child (raw, so an unknown model stays unpriced)
+/// and store the transcript lines read earlier. Failures are reported, never allowed to
+/// undo the hook's registry change or delivery.
+fn record_claude_usage(conn: &Connection, actor: &str, payload: &Value, transcript: Option<&usage::Pending>) {
+    let spawned = &payload["tool_response"];
+    let recorded = (|| -> anyhow::Result<()> {
+        if let (Some(child), Some(model)) = (spawned["agentId"].as_str(), spawned["resolvedModel"].as_str()) {
+            conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
+        }
+        if let Some(pending) = transcript {
+            usage::store(conn, pending)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = recorded {
+        eprintln!("axon-bus: usage for {actor} not recorded: {err:#}");
+    }
 }
 
 /// The id a root was registered under (`register --id orch --session S`), for hooks that

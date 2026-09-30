@@ -167,7 +167,9 @@ Nothing else without a written reason in the PR.
 
 ## 3. Message routing (deterministic)
 
-- Edges are parent ↔ child, plus root ↔ root over a `link` that the other root must `accept`. A send to anything else is rejected, and the error prints the route to take (`orch1 → orch2 → sub2`). The intermediate decides whether to forward. `grant --thread --ttl` opens a logged temporary direct edge.
+- Edges are parent ↔ child, plus root ↔ root over a `link` that the other root must `accept`. A send to anything else is rejected, and the error prints the route to take (`orch1 → orch2 → sub2`). The intermediate decides whether to forward. `grant --thread --ttl` opens a logged temporary direct edge; it only shortcuts an existing relay route, on a thread the granter has messaged, for at most 24 h (audit SEC-2).
+- A `stop` holds its addressee's whole subtree until the addressee's turn ends: stopping an orchestrator stops the workers it waits on (audit SEC-6, decided 2026-09-30).
+- Inside a governed session the gate checks each shell command that runs `axon-bus`: the acting agent (`--from`, `--agent`) must be the caller, and `budget set` and `serve --content` are the human's (audit SEC-1, decided 2026-09-30). Indirection through scripts or variables is not parsed; this stops forged calls, not a determined local attacker.
 - **Claude native sends are policed, not replaced.** A `PreToolUse` hook matching `SendMessage` reads `tool_input.to` and resolves the sender from `session_id` → registry (the payload carries no sender name). A non-edge send is denied with the route in `permissionDecisionReason`, which the model sees as the tool result (spike Q2). `PostToolUse` logs each allowed send.
 - The only fan-out is `sync`, to your own direct children. There is no broadcast.
 - Message kinds are `question`, `answer`, `stop`, `redirect`, `sync`, `handoff` and `ack`. The body is capped at 400 characters, and content goes by reference (`path:L10-40@sha`).
@@ -233,7 +235,7 @@ The dashboard is served by `agent-bus serve` and embedded in the binary. It need
    - **Progress notes.** Current Claude models return the text between tool calls as progress-update `thinking` blocks. These are empty unless the harness asks for `display: "updates"`, and Sonnet 5.5's `between_tools` mode produces them too. Render them as a distinct "progress" row, never as reasoning.
    - **Tool noise collapsed.** Bash, Read, Grep, Glob and similar calls collapse into one chip per run ("7 reads · 3 commands · 2 edits"), which expands on click. Edits and writes show their paths. Failures stay visible.
    - **Privacy.**
-     - Content capture is **opt-in** (`serve --content`, or `[content] enabled = true`). Without it, the stream shows the structure only: turn, token counts, tool chips.
+     - Content capture is **opt-in** (`serve --content`, or `[content] enabled = true`). Capture is a lease that a running `serve --content` renews; it lapses within 30 s of `serve` stopping. Hooks expire narrative older than 7 days whether or not `serve` runs. Without it, the stream shows the structure only: turn, token counts, tool chips.
      - Content lives only in the local database, is redacted for secret patterns before storage, has a retention default of 7 days, and is never exported by `replay` or the backtests.
 
 **Design** (agent-os design bar: product-first, the data is the visual, custom SVG glyphs, no emoji, no italics, no generic SaaS cards; harness glyphs are original marks with a color token each, never vendor logos):
@@ -247,6 +249,7 @@ The dashboard is served by `agent-bus serve` and embedded in the binary. It need
 - The server binds `127.0.0.1` only.
 - The Host header is checked to block DNS rebinding.
 - Every POST requires the per-boot token and a matching Origin.
+- `serve` is for single-user hosts. Any local account can load the page and read its token, so on a shared machine another user could read narratives and send messages (audit SEC-7, accepted 2026-09-30).
 - The CSP is strict: self only, no inline scripts.
 
 ## 8. Testing and backtesting
