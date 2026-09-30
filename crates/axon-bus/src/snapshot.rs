@@ -157,7 +157,7 @@ pub fn build(
             .or_insert_with(|| checkout(cwd));
         (found.repo.clone(), found.branch.clone())
     };
-    for root in observer.roots(conn, memory.sessions(), &mut repo_of)? {
+    for root in observer.roots(conn, memory.sessions(), &mut repo_of, facts.content)? {
         groups
             .entry((root.repo.is_none(), root.repo))
             .or_default()
@@ -247,6 +247,47 @@ fn render(
     }))
 }
 
+/// One narrative row as the page shows it. Stored rows and observed transcripts both
+/// come through `push_line`, so both collapse tool runs and label reasoning alike.
+pub(crate) struct Line<'a> {
+    pub kind: &'a str,
+    pub source: &'a str,
+    pub text: Option<String>,
+    pub recorded: Option<bool>,
+    pub tokens: Option<i64>,
+    /// Name, detail and whether it failed, for a tool call.
+    pub tool: Option<(String, Option<String>, bool)>,
+    pub ts: i64,
+}
+
+pub(crate) fn push_line(out: &mut Vec<Value>, line: Line) {
+    let Line { kind, source, text, recorded, tokens, tool, ts } = line;
+    if let Some((name, detail, failed)) = tool {
+        let tool = json!({"name": name, "detail": detail, "failed": failed});
+        match out.last_mut().filter(|last| last["kind"] == "tool_run") {
+            Some(run) => {
+                if let Some(tools) = run["tools"].as_array_mut() {
+                    tools.push(tool);
+                    run["count"] = json!(tools.len());
+                }
+            }
+            None => out.push(json!({"kind": "tool_run", "collapsed": true, "count": 1,
+                "tools": [tool], "source": source, "ts": ts})),
+        }
+        return;
+    }
+    let mut row = json!({"kind": kind, "text": text, "source": source, "ts": ts});
+    if kind == "reasoning" {
+        let recorded = recorded.unwrap_or(false);
+        row["recorded"] = json!(recorded);
+        row["tokens"] = json!(tokens);
+        if !recorded {
+            row["label"] = json!(format!("reasoning — not recorded by {source}"));
+        }
+    }
+    out.push(row);
+}
+
 /// The agent's latest narrative, with each run of consecutive tool calls collapsed into
 /// one `tool_run` chip.
 /// Without content capture, text stored while it was on is withheld too (§7 privacy).
@@ -265,34 +306,23 @@ fn narrative(conn: &Connection, agent: &str, content: bool) -> rusqlite::Result<
     let mut out: Vec<Value> = Vec::new();
     while let Some(r) = rows.next()? {
         let kind: String = r.get(0)?;
-        let source: String = r.get(1)?;
-        let text: Option<String> = r.get(2)?;
-        let ts: i64 = r.get(8)?;
-        if kind == "tool" {
-            let tool = json!({"name": r.get::<_, String>(5)?, "detail": r.get::<_, Option<String>>(6)?,
-                "failed": r.get::<_, bool>(7)?});
-            match out.last_mut().filter(|last| last["kind"] == "tool_run") {
-                Some(run) => {
-                    if let Some(tools) = run["tools"].as_array_mut() {
-                        tools.push(tool);
-                        run["count"] = json!(tools.len());
-                    }
-                }
-                None => out.push(json!({"kind": "tool_run", "collapsed": true, "count": 1,
-                    "tools": [tool], "source": source, "ts": ts})),
-            }
-            continue;
-        }
-        let mut row = json!({"kind": kind, "text": text, "source": source, "ts": ts});
-        if kind == "reasoning" {
-            let recorded: bool = r.get(3)?;
-            row["recorded"] = json!(recorded);
-            row["tokens"] = json!(r.get::<_, Option<i64>>(4)?);
-            if !recorded {
-                row["label"] = json!(format!("reasoning — not recorded by {source}"));
-            }
-        }
-        out.push(row);
+        let tool = if kind == "tool" {
+            Some((r.get(5)?, r.get(6)?, r.get(7)?))
+        } else {
+            None
+        };
+        push_line(
+            &mut out,
+            Line {
+                kind: &kind,
+                source: &r.get::<_, String>(1)?,
+                text: r.get(2)?,
+                recorded: r.get(3)?,
+                tokens: r.get(4)?,
+                tool,
+                ts: r.get(8)?,
+            },
+        );
     }
     Ok(out)
 }

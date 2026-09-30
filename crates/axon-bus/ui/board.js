@@ -2,6 +2,7 @@
 // session with its subagents beside it. Cards are kept by agent id and updated in place,
 // so a snapshot at 50 events a second changes text, not DOM, and a pulse never restarts.
 
+import { activityChart } from "./activity.js";
 import { bytes, el, glyph, mark, setRing, setText, since, STATUS, tokens, usd, walk } from "./dom.js";
 
 const HARNESS_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", hermes: "Hermes" };
@@ -29,11 +30,16 @@ export function createBoard(container, scroller, onSelect) {
     const status = el("span", "state-word");
     who.append(role, id);
     const mission = el("span", "mission");
+    const doing = el("span", "doing");
+    const doingLabel = el("b");
+    const doingText = el("span");
+    doing.append(doingLabel, doingText);
+    const spark = el("span", "spark");
     const model = el("span", "model");
     const metrics = el("span", "metrics");
     const notes = el("span", "notes");
-    button.append(ring, who, status, mission, model, metrics, notes);
-    entry = { button, ring, role, id, status, mission, model, metrics, notes };
+    button.append(ring, who, status, mission, doing, spark, model, metrics, notes);
+    entry = { button, ring, role, id, status, mission, doing, doingLabel, doingText, spark, model, metrics, notes };
     cards.set(node.id, entry);
     return entry;
   }
@@ -51,6 +57,16 @@ export function createBoard(container, scroller, onSelect) {
     setText(entry.status, STATUS[node.status] || node.status);
     // An observed session has no mission; when it last worked is the next best thing.
     setText(entry.mission, node.mission || (node.observed && node.last_ts ? `Last turn ${since(node.last_ts, now)}` : ""));
+    const latest = depth === 0 ? doingNow(node.narrative || []) : null;
+    entry.doing.hidden = !latest;
+    setText(entry.doingLabel, latest ? (node.status === "active" ? "Now" : latest.verb) : "");
+    setText(entry.doingText, latest ? latest.text : "");
+    const hours = depth === 0 && node.activity ? node.activity.hours : null;
+    const key = hours ? hours.join() : "";
+    if (entry.spark.dataset.key !== key) {
+      entry.spark.dataset.key = key;
+      entry.spark.replaceChildren(...(hours ? [activityChart(hours, null, true)] : []));
+    }
     setText(entry.model, node.model || (node.observed ? "no turns ingested yet" : ""));
     setText(entry.metrics, metricsLine(node));
     setText(entry.notes, notesLine(node, depth));
@@ -166,6 +182,21 @@ export function metricsLine(node) {
   if (node.rss) parts.push(bytes(node.rss));
   if (node.budget) parts.push(`${Math.round(node.budget.used * 100)}% budget`);
   return parts.join(" · ");
+}
+
+// The newest thing the agent said or ran. A reasoning row with nothing recorded and a
+// line withheld by content capture say nothing, so the search goes further back.
+export function doingNow(rows) {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    if (row.kind === "tool_run") {
+      const tool = row.tools[row.tools.length - 1];
+      const text = tool.detail ? `${tool.name} ${tool.detail}` : `${tool.name}${row.count > 1 ? ` · ${row.count} tools in this run` : ""}`;
+      return { verb: "Ran", text };
+    }
+    if (row.text) return { verb: "Said", text: row.text };
+  }
+  return null;
 }
 
 function notesLine(node, depth) {

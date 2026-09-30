@@ -148,10 +148,9 @@ export function createOverview(container, onOpen) {
 
   return {
     render(snapshot, now) {
-      // Working projects first, then the rest; alphabetical within each, so rows only
-      // move when a project starts or stops working.
-      const working = (repo) => repo.harnesses.some((lane) => lane.roots.some((root) => root.status === "active"));
-      const repos = (snapshot.repos || []).slice().sort((a, b) => working(b) - working(a) || a.name.localeCompare(b.name) || projectKey(a).localeCompare(projectKey(b)));
+      // A fixed order: rows never move as sessions start and stop, so a project stays
+      // where the operator last saw it. "no repo" (no path) goes last.
+      const repos = (snapshot.repos || []).slice().sort((a, b) => !a.repo - !b.repo || a.name.localeCompare(b.name) || projectKey(a).localeCompare(projectKey(b)));
       const seen = new Set();
       let sessions = 0;
       let busy = 0;

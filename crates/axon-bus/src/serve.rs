@@ -30,7 +30,8 @@ use crate::{msg, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
-const ASSETS: [(&str, &str, &str); 8] = [
+const ASSETS: [(&str, &str, &str); 9] = [
+    ("/activity.js", "text/javascript", include_str!("../ui/activity.js")),
     ("/app.js", "text/javascript", include_str!("../ui/app.js")),
     ("/arcs.js", "text/javascript", include_str!("../ui/arcs.js")),
     ("/board.js", "text/javascript", include_str!("../ui/board.js")),

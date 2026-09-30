@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 use crate::memory::Session;
 use crate::store::now_ms;
+use crate::tail::{Said, Tails};
 
 /// Ingested sessions older than this are not matched to an open process.
 const LOOKBACK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -26,6 +27,11 @@ const ACTIVE_MS: i64 = 2 * 60 * 1000;
 const SUBAGENT_WINDOW_MS: i64 = 60 * 60 * 1000;
 /// A process writes its session from its start on; a resumed session began earlier.
 const START_SLACK_MS: i64 = 60 * 1000;
+/// A session's activity profile covers this many hours, the current one last.
+const HOURS: usize = 24;
+const HOUR_MS: i64 = 3600 * 1000;
+/// Skills listed per session, most used first.
+const SKILLS: usize = 6;
 /// Axon writes on every agent turn; the ingested sessions are re-read at most this often.
 const REFRESH_EVERY: Duration = Duration::from_secs(5);
 
@@ -34,6 +40,7 @@ const REFRESH_EVERY: Duration = Duration::from_secs(5);
 pub struct Observer {
     refreshed: Option<Instant>,
     ingested: HashMap<String, Ingested>,
+    tails: Tails,
 }
 
 /// Resolves a working directory to its main repository and branch.
@@ -61,6 +68,17 @@ struct Ingested {
     projects: HashSet<String>,
     main: Usage,
     subagents: Vec<(String, Usage)>,
+    activity: Activity,
+}
+
+/// What a session did over the last `HOURS`: turns per hour, lines it changed, skills.
+#[derive(Default)]
+struct Activity {
+    hours: [u32; HOURS],
+    turns: u32,
+    lines_added: i64,
+    lines_removed: i64,
+    skills: HashMap<String, u32>,
 }
 
 impl Observer {
@@ -69,12 +87,14 @@ impl Observer {
         conn: &Connection,
         sessions: &[Session],
         repo_of: &mut Locate<'_>,
+        content: bool,
     ) -> anyhow::Result<Vec<Root>> {
         if self.refreshed.map_or(true, |at| at.elapsed() >= REFRESH_EVERY) {
             self.ingested = ingested(conn)?;
+            activity(conn, &mut self.ingested)?;
             self.refreshed = Some(Instant::now());
         }
-        roots(conn, sessions, &self.ingested, repo_of)
+        roots(conn, sessions, &self.ingested, &mut self.tails, repo_of, content)
     }
 }
 
@@ -82,7 +102,9 @@ fn roots(
     conn: &Connection,
     sessions: &[Session],
     ingested: &HashMap<String, Ingested>,
+    tails: &mut Tails,
     repo_of: &mut Locate<'_>,
+    content: bool,
 ) -> anyhow::Result<Vec<Root>> {
     // No turns ingested means Axon is not running on this database (a bus-only hub, a
     // test fixture): list exactly the registered agents.
@@ -118,7 +140,8 @@ fn roots(
             taken.insert(id);
         }
         let (repo, branch) = repo_of(&session.cwd);
-        let tree = render(session, found.map(|(_, i)| i), branch, now);
+        let said = found.and_then(|(id, _)| tails.read(session.harness, id, content));
+        let tree = render(session, found.map(|(_, i)| i), said, branch, now);
         roots.push(Root {
             repo,
             harness: session.harness.to_owned(),
@@ -128,7 +151,13 @@ fn roots(
     Ok(roots)
 }
 
-fn render(session: &Session, found: Option<&Ingested>, branch: Option<String>, now: i64) -> Value {
+fn render(
+    session: &Session,
+    found: Option<&Ingested>,
+    said: Option<Said<'_>>,
+    branch: Option<String>,
+    now: i64,
+) -> Value {
     let id = format!("{}-{}", session.harness, session.pid);
     let status = |last: i64| {
         if now - last < ACTIVE_MS {
@@ -162,12 +191,14 @@ fn render(session: &Session, found: Option<&Ingested>, branch: Option<String>, n
         })
         .unwrap_or_default();
     let main = found.map(|i| &i.main);
+    let written = said.as_ref().map_or(0, |s| s.written_ms);
     json!({
         "id": id,
         "harness": session.harness,
         "model": main.map(|u| u.model.as_str()),
         "role": "session",
-        "status": main.map_or("idle", |u| status(u.last_ts)),
+        "mission": said.as_ref().and_then(|s| s.prompt),
+        "status": main.map_or("idle", |u| status(u.last_ts.max(written))),
         "repo": session.cwd,
         "branch": branch,
         "tokens": main.map_or(0, |u| total(&u.buckets)),
@@ -175,11 +206,68 @@ fn render(session: &Session, found: Option<&Ingested>, branch: Option<String>, n
         "unpriced": main.is_some_and(|u| u.cost.is_none()),
         "rss": session.rss,
         "pid": session.pid,
-        "last_ts": main.map(|u| u.last_ts),
+        "last_ts": main.map(|u| u.last_ts.max(written)),
         "observed": true,
-        "narrative": [],
+        "activity": found.map(|i| activity_json(&i.activity)),
+        "narrative": said.map_or(&[][..], |s| s.rows),
         "children": children,
     })
+}
+
+fn activity_json(a: &Activity) -> Value {
+    let mut skills: Vec<(&String, &u32)> = a.skills.iter().collect();
+    skills.sort_by(|x, y| y.1.cmp(x.1).then_with(|| x.0.cmp(y.0)));
+    let skills: Vec<Value> = skills
+        .into_iter()
+        .take(SKILLS)
+        .map(|(name, count)| json!({"name": name, "count": count}))
+        .collect();
+    json!({
+        "hours": a.hours,
+        "turns": a.turns,
+        "lines_added": a.lines_added,
+        "lines_removed": a.lines_removed,
+        "skills": skills,
+    })
+}
+
+/// Fold the last `HOURS` of turns into each ingested session, in hours aligned to the
+/// clock so a bar keeps its place between snapshots.
+fn activity(conn: &Connection, sessions: &mut HashMap<String, Ingested>) -> anyhow::Result<()> {
+    let since = (now_ms() / HOUR_MS - (HOURS as i64 - 1)) * HOUR_MS;
+    let mut stmt = conn.prepare(
+        "SELECT session_id, (ts - ?1) / ?2, count(*), sum(loc_added), sum(loc_removed)
+         FROM usage_events WHERE ts >= ?1 GROUP BY 1, 2",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![since, HOUR_MS])?;
+    while let Some(r) = rows.next()? {
+        let Some(session) = sessions.get_mut(&r.get::<_, String>(0)?) else {
+            continue;
+        };
+        let hour = r.get::<_, i64>(1)?.clamp(0, HOURS as i64 - 1) as usize;
+        let turns: u32 = r.get(2)?;
+        let a = &mut session.activity;
+        a.hours[hour] += turns;
+        a.turns += turns;
+        a.lines_added += r.get::<_, i64>(3)?;
+        a.lines_removed += r.get::<_, i64>(4)?;
+    }
+    let mut stmt = conn.prepare(
+        "SELECT session_id, skills, count(*) FROM usage_events
+         WHERE ts >= ?1 AND skills NOT IN ('', '[]') GROUP BY 1, 2",
+    )?;
+    let mut rows = stmt.query([since])?;
+    while let Some(r) = rows.next()? {
+        let Some(session) = sessions.get_mut(&r.get::<_, String>(0)?) else {
+            continue;
+        };
+        let count: u32 = r.get(2)?;
+        let names: Vec<String> = serde_json::from_str(&r.get::<_, String>(1)?).unwrap_or_default();
+        for name in names {
+            *session.activity.skills.entry(name).or_default() += count;
+        }
+    }
+    Ok(())
 }
 
 /// Every session Axon ingested within the lookback, priced in USD.

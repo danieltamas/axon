@@ -53,7 +53,7 @@ pub(crate) struct Layout {
     pub(crate) plugin: Option<PathBuf>,
 }
 
-fn env_dir(var: &str, fallback: &[&str]) -> PathBuf {
+pub(crate) fn env_dir(var: &str, fallback: &[&str]) -> PathBuf {
     std::env::var_os(var).map(PathBuf::from).unwrap_or_else(|| {
         fallback.iter().fold(
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),

@@ -21,6 +21,7 @@ mod route;
 mod serve;
 mod snapshot;
 mod store;
+mod tail;
 mod transcript;
 mod uninstall;
 mod usage;
@@ -319,11 +320,12 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
         Command::Serve {
             port,
             ready_file,
-            content,
+            content: _,
+            no_content,
         } => {
             // The dashboard may be the first bus tool run on an Axon-only database.
             store::init(&db)?;
-            serve::run(&db, port, ready_file.as_deref(), content)?;
+            serve::run(&db, port, ready_file.as_deref(), !no_content)?;
         }
         Command::Replay { file, speed } => replay::run(&db, &file, speed)?,
         Command::Doctor => {

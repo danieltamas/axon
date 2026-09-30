@@ -2,13 +2,14 @@
 // composer) when an agent is selected, one thread (messages and composer) when a
 // conversation is opened. Never an empty column. Agent text only goes through textContent.
 
-import { harnessName, metricsLine } from "./board.js";
+import { activityChart, activityFacts } from "./activity.js";
+import { doingNow, harnessName, metricsLine } from "./board.js";
 import { bytes, clock, el, mark, setRing, since, STATUS, tokens, usd } from "./dom.js";
 import { createComposer } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };
 
-export function createContext(container, { token, onThread, onBack }) {
+export function createContext(container, { token, onThread, onAgent, onBack }) {
   const head = el("header", "ctx-head");
   const body = el("div", "ctx-body");
   const foot = el("footer", "ctx-foot");
@@ -43,14 +44,14 @@ export function createContext(container, { token, onThread, onBack }) {
   }
 
   // ---- conversations ----
-  function renderList(messages, now) {
+  function renderList(messages, roots, now) {
     const threads = threadsOf(messages);
-    part("head", `list|${threads.length}`, () => head.replaceChildren(el("h2", null, "Conversations"), el("span", "ctx-sub", threads.length ? `${threads.length} in this project` : "")));
+    if (!threads.length) {
+      renderLatest(roots, now);
+      return;
+    }
+    part("head", `list|${threads.length}`, () => head.replaceChildren(el("h2", null, "Conversations"), el("span", "ctx-sub", `${threads.length} in this project`)));
     part("body", `list|${threads.map((t) => `${t.id}:${t.messages.length}:${pending(t) ? 1 : 0}`).join()}|${Math.floor(now / 30000)}`, () => {
-      if (!threads.length) {
-        body.replaceChildren(teach("No conversations yet", "When agents in this project ask, answer, redirect or hand off on the bus, each exchange appears here as a thread you can open and step into."));
-        return;
-      }
       body.replaceChildren(
         ...threads.map((t) => {
           const m = last(t);
@@ -63,6 +64,40 @@ export function createContext(container, { token, onThread, onBack }) {
           if (pending(t)) item.dataset.waiting = "true";
           item.append(top, el("span", "ti-body", m.body), meta);
           if (pending(t)) meta.append(el("b", "waiting", ` · ${pending(t).to} owes an answer`));
+          return item;
+        }),
+      );
+    });
+    part("foot", "list", () => {
+      composer = null;
+      foot.replaceChildren();
+    });
+  }
+
+  // Without bus conversations the rail follows the sessions: what each last said or ran,
+  // newest first, each a way into that session.
+  function renderLatest(roots, now) {
+    const latest = roots
+      .map((node) => ({ node, said: doingNow(node.narrative || []) }))
+      .filter((x) => x.said)
+      .sort((a, b) => (b.node.last_ts || 0) - (a.node.last_ts || 0));
+    part("head", "latest", () => head.replaceChildren(el("h2", null, "Latest from sessions"), el("span", "ctx-sub", "No bus conversations in this project")));
+    part("body", `latest|${latest.map((x) => `${x.node.id}:${x.node.status}:${x.said.text}`).join()}|${Math.floor(now / 30000)}`, () => {
+      if (!latest.length) {
+        body.replaceChildren(teach("Nothing to follow yet", "When agents in this project ask, answer, redirect or hand off on the bus, each exchange appears here as a thread you can open and step into."));
+        return;
+      }
+      body.replaceChildren(
+        ...latest.map(({ node, said }) => {
+          const item = el("button", "thread-item");
+          item.type = "button";
+          item.addEventListener("click", () => onAgent(node.id));
+          const top = el("span", "ti-top");
+          const who = node.observed ? `${harnessName(node.harness)} · pid ${node.pid}` : `${harnessName(node.harness)} · ${node.id}`;
+          top.append(el("span", "ti-people", who), el("span", "ti-when", node.status === "active" ? "working" : node.last_ts ? since(node.last_ts, now) : ""));
+          if (node.status === "active") top.lastChild.dataset.status = "active";
+          item.append(top, el("span", "ti-body", `${said.verb === "Ran" ? "Ran " : ""}${said.text}`));
+          if (node.mission) item.append(el("span", "ti-meta", node.mission));
           return item;
         }),
       );
@@ -119,10 +154,18 @@ export function createContext(container, { token, onThread, onBack }) {
     return item;
   }
 
+  // Where an observed session's narrative comes from, when there is none to show.
+  const TRANSCRIPTS = {
+    claude: "Its transcript was not found under ~/.claude/projects, or it has no turns yet.",
+    codex: "Its transcript was not found under ~/.codex/sessions in the last 8 days.",
+    opencode: "OpenCode keeps its transcript in its own store. Run axon-bus install to see what it says.",
+    hermes: "Hermes keeps its transcript in its own store. Run axon-bus install to see what it says.",
+  };
+
   // ---- one agent ----
   function renderAgent(found, messages, links, content, now) {
     const node = found.node;
-    part("head", `agent|${node.id}|${node.status}|${JSON.stringify(node.budget)}|${node.mission}|${metricsLine(node)}|${node.model}|${node.branch}`, () => {
+    part("head", `agent|${node.id}|${node.status}|${JSON.stringify(node.budget)}|${node.mission}|${metricsLine(node)}|${node.model}|${node.branch}|${JSON.stringify(node.activity)}`, () => {
       const who = el("div", "agent");
       const ring = mark(node.harness);
       setRing(ring, node.budget);
@@ -146,15 +189,18 @@ export function createContext(container, { token, onThread, onBack }) {
         facts.append(pair);
       }
       head.replaceChildren(back("Conversations"), who);
+      // An observed session's mission is the operator's latest prompt, from its transcript.
+      if (node.mission && node.observed) head.append(el("p", "kicker", "Latest prompt"));
       if (node.mission) head.append(el("p", "agent-mission", node.mission));
       head.append(facts);
       if (node.budget) head.append(gauge(node.budget));
+      if (node.activity) head.append(activityChart(node.activity.hours, "turns per hour"), activityFacts(node.activity));
     });
-    const rows = node.narrative || [];
+    const rows = fold(node.narrative || []);
     part("body", `agent|${node.id}|${content}|${rows.length}|${rows.length ? rows[rows.length - 1].ts : 0}`, () => {
       const stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
       const list = [];
-      if (node.observed) list.push(teach("Seen from its process", "This session is open on this machine but not registered on the bus, so there is no narrative to show. Run axon-bus install and restart the session to see what it says and to message, budget or stop it."));
+      if (node.observed && !rows.length) list.push(teach("No transcript to read", TRANSCRIPTS[node.harness] || "Axon has not ingested a turn from this session yet."));
       else if (!content) list.push(el("p", "capture-off", "Content capture is off: turns, tokens and tool runs only. Run axon-bus serve --content to see what agents say."));
       if (!node.observed && !rows.length) list.push(el("p", "empty", "Nothing recorded for this agent yet."));
       rows.forEach((row, i) => list.push(narrativeRow(node.id, row, i)));
@@ -203,12 +249,12 @@ export function createContext(container, { token, onThread, onBack }) {
 
   return {
     // `view` is {kind: "list"} | {kind: "agent", found} | {kind: "thread", id}.
-    render(view, { messages, links, content }) {
+    render(view, { messages, links, content, roots = [] }) {
       const now = Date.now();
       container.dataset.mode = view.kind;
       if (view.kind === "agent") renderAgent(view.found, messages, links, content, now);
       else if (view.kind === "thread") renderThread(view.id, messages, now);
-      else renderList(messages, now);
+      else renderList(messages, roots, now);
     },
     // Keep a half-typed message when the page re-renders around it.
     focused: () => Boolean(composer && composer.contains(document.activeElement)),
@@ -238,6 +284,21 @@ function gauge(budget) {
   if (budget.state !== "ok") label.append(el("span", "gauge-state", budget.state));
   box.append(label, bar);
   return box;
+}
+
+// Reasoning the harness did not record says only that the model thought; dropped, the
+// tool calls on either side of it read as the one run they were.
+function fold(rows) {
+  const out = [];
+  for (const row of rows) {
+    if (row.kind === "reasoning" && !row.recorded) continue;
+    const last = out[out.length - 1];
+    if (row.kind === "tool_run" && last && last.kind === "tool_run") {
+      const tools = [...last.tools, ...row.tools];
+      out[out.length - 1] = { ...last, tools, count: tools.length };
+    } else out.push(row);
+  }
+  return out;
 }
 
 function teach(title, text) {

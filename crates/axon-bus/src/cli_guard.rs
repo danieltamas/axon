@@ -102,8 +102,9 @@ pub fn refusal(actor: &str, payload: &Value) -> Option<String> {
                 "raising or replacing a budget is reserved for the human; ask your root to escalate"
                     .to_owned(),
             ),
-            Some("serve") if args.iter().any(|a| a == "--content") => {
-                Some("content capture is turned on by the human only".to_owned())
+            // Capture is serve's default, so only a structure-only serve is an agent's.
+            Some("serve") if !args.iter().any(|a| a == "--no-content") => {
+                Some("content capture is turned on by the human only; an agent may run serve --no-content".to_owned())
             }
             Some(verb) if FROM_VERBS.contains(&verb) => impersonation(actor, verb, flag(&args, "from")),
             Some(verb) if AGENT_VERBS.contains(&verb) => impersonation(actor, verb, flag(&args, "agent")),
@@ -137,6 +138,8 @@ mod tests {
         assert!(refusal("w1", &forged).unwrap().contains("as yourself"));
         assert!(refusal("w1", &bash("~/.cargo/bin/axon-bus budget set root 9Mtok")).is_some());
         assert!(refusal("w1", &bash("axon-bus serve --content")).is_some());
+        assert!(refusal("w1", &bash("axon-bus serve --port 0")).is_some());
+        assert!(refusal("w1", &bash("axon-bus serve --no-content")).is_none());
         assert!(refusal("w1", &bash("axon-bus release --agent=other src")).is_some());
     }
 

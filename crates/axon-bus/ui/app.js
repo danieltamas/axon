@@ -2,6 +2,7 @@
 // one project's topology beside its context rail (conversations, one agent, or one
 // thread). Agent-supplied text only ever goes through textContent, never markup.
 
+import { activityChart, sumHours } from "./activity.js";
 import { createArcs } from "./arcs.js";
 import { createBoard } from "./board.js";
 import { createContext } from "./context.js";
@@ -22,6 +23,7 @@ const arcs = createArcs({ board, boardEl: $("board"), overlay: $("arcs") });
 const context = createContext($("context"), {
   token,
   onThread: (thread) => focus({ thread }),
+  onAgent: (selected) => focus({ selected }),
   onBack: () => focus({}),
 });
 
@@ -80,7 +82,9 @@ function renderCrumbs(repo) {
 // shortcut to the thread or agent it is about.
 function renderProjectHead(repo, s) {
   const head = $("project-head");
-  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention]) : "";
+  const roots = repo ? repo.harnesses.flatMap((h) => h.roots) : [];
+  const hours = sumHours(roots.map((r) => r.activity));
+  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention, hours]) : "";
   if (head.dataset.key === key) return;
   head.dataset.key = key;
   if (!repo) {
@@ -106,6 +110,8 @@ function renderProjectHead(repo, s) {
       .join("  ·  "),
   );
   head.replaceChildren(title, totals);
+  // Only observed sessions carry Axon's hourly record; a bus-only project has none.
+  if (roots.some((r) => r.activity)) head.append(activityChart(hours, "turns per hour, all sessions"));
   if (!s.attention.length) return;
   const list = el("ul", "needs");
   for (const a of s.attention) {
@@ -136,7 +142,8 @@ function render() {
   const scoped = messages.filter((m) => s.ids.has(m.from) || s.ids.has(m.to));
   const found = state.selected && agents(state.snapshot).find((a) => a.node.id === state.selected);
   const view = found ? { kind: "agent", found } : state.thread ? { kind: "thread", id: state.thread } : { kind: "list" };
-  context.render(view, { messages: scoped, links: state.snapshot.links || [], content: state.snapshot.content });
+  const roots = repo ? repo.harnesses.flatMap((h) => h.roots) : [];
+  context.render(view, { messages: scoped, links: state.snapshot.links || [], content: state.snapshot.content, roots });
 }
 
 function connect() {

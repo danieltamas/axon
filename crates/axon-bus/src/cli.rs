@@ -206,9 +206,12 @@ pub enum Command {
         /// Write {url, token} here once the server accepts connections.
         #[arg(long)]
         ready_file: Option<PathBuf>,
-        /// Capture what agents say and think (opt-in; redacted, kept 7 days).
-        #[arg(long)]
+        /// Show what agents say and think (the default; redacted, kept 7 days).
+        #[arg(long, overrides_with = "no_content")]
         content: bool,
+        /// Structure only: turns, tokens and tool names, never text.
+        #[arg(long)]
+        no_content: bool,
     },
     /// Replay a JSONL corpus of transcript records into the registry and narrative.
     Replay {
