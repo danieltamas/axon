@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use serde_json::{json, Value};
 
 use crate::Harness;
@@ -100,7 +100,17 @@ fn command(exe: &str, harness: Harness, event: &str) -> String {
     } else {
         format!("'{}'", exe.replace('\'', r"'\''"))
     };
-    format!("{exe} hook {} {event}", harness.as_str())
+    format!("{exe}{} hook {} {event}", bus_verb(&exe), harness.as_str())
+}
+
+/// `axon` runs the bus as a subcommand; the `axon-bus` alias takes the verb directly.
+fn bus_verb(exe: &str) -> &'static str {
+    let name = exe.trim_matches('\'').rsplit('/').next().unwrap_or_default();
+    if name == "axon" || name == "axon.exe" {
+        " bus"
+    } else {
+        ""
+    }
 }
 
 /// Whether a configured hook command is this bus's hook for `event`, whichever binary
@@ -109,8 +119,11 @@ pub(crate) fn is_bus_command(text: &str, harness: Harness, event: &str) -> bool 
     let Some(exe) = text.strip_suffix(&format!(" hook {} {event}", harness.as_str())) else {
         return false;
     };
-    let exe = exe.trim_matches('\'');
-    exe == "axon-bus" || exe.ends_with("/axon-bus")
+    // `axon bus hook …`, `axon-bus hook …`, and the bare `axon hook …` an earlier
+    // install wrote by mistake, so a reinstall repoints it.
+    let exe = exe.strip_suffix(" bus").unwrap_or(exe).trim_matches('\'');
+    let name = exe.rsplit('/').next().unwrap_or_default();
+    name == "axon-bus" || name == "axon"
 }
 
 /// Whether a Codex hook entry (inline or `[[hooks.Event]]` table) runs this bus hook.
@@ -238,8 +251,15 @@ pub(crate) fn wire(
         }
         Harness::Hermes => {
             let original = original.unwrap_or("");
-            if original.lines().any(|l| l.starts_with("hooks:")) {
-                bail!("config.yaml already has a `hooks:` block; add the axon-bus hooks to it by hand");
+            // The owner's `hooks:` block already holds other tools' hooks: join them there.
+            if !original.contains(HERMES_MARKER) {
+                let hooks: Vec<(&str, String)> = HERMES_EVENTS
+                    .iter()
+                    .map(|event| (*event, command(exe, harness, event)))
+                    .collect();
+                if let Some(merged) = crate::hermes_hooks::wire(original, &hooks) {
+                    return Ok(merged);
+                }
             }
             let mut text = original.to_owned();
             if !text.is_empty() && !text.ends_with('\n') {
@@ -263,12 +283,12 @@ fn hermes_block(exe: &str) -> String {
 }
 
 fn plugin_source(exe: &str) -> String {
-    let exe = json!(exe);
+    let hook = if bus_verb(exe).is_empty() { json!([exe, "hook"]) } else { json!([exe, "bus", "hook"]) };
     format!(
         r#"// axon-bus plugin shim; `axon-bus uninstall` removes it.
-const EXE = {exe};
+const HOOK = {hook};
 function hook(event, payload) {{
-  const run = Bun.spawnSync([EXE, "hook", "opencode", event], {{
+  const run = Bun.spawnSync([...HOOK, "opencode", event], {{
     stdin: Buffer.from(JSON.stringify(payload)),
   }});
   try {{
@@ -325,19 +345,17 @@ fn pristine(harness: Harness, exe: &str, layout: &Layout) -> anyhow::Result<Opti
     Ok(current)
 }
 
-/// The binary hooks run: `axon-bus`, whose first argument is the verb. Run as `axon bus`,
-/// that is the `axon-bus` beside `axon`; `axon hook …` is not a command, so without that
-/// sibling nothing is wired rather than every tool call failing its hook.
+/// The binary the hooks run. Run as `axon`, it must be an installed Axon: hooks outlive
+/// any build, so a binary under a cargo `target/` directory is never wired.
 pub(crate) fn current_exe() -> anyhow::Result<String> {
-    let mut exe = std::env::current_exe().context("locate the axon-bus binary")?;
-    if exe.file_stem().is_some_and(|stem| stem != "axon-bus") {
-        exe.set_file_name(format!("axon-bus{}", std::env::consts::EXE_SUFFIX));
-        anyhow::ensure!(
-            exe.is_file(),
-            "hooks run the axon-bus binary, and there is none at {}; build or install it beside axon",
-            exe.display()
-        );
-    }
+    let exe = std::env::current_exe().context("locate the axon binary")?;
+    let is_axon = exe.file_stem().is_some_and(|stem| stem == "axon");
+    let in_build = exe.components().any(|c| c.as_os_str() == "target");
+    anyhow::ensure!(
+        !(is_axon && in_build),
+        "{} is a development build; hooks are wired from an installed axon (see Install in the README)",
+        exe.display()
+    );
     exe.to_str()
         .map(str::to_owned)
         .context("the axon-bus binary path is not UTF-8")
@@ -407,6 +425,17 @@ pub fn detected() -> Vec<Harness> {
         .collect()
 }
 
+/// Whether `harness`'s hooks run `exe`. OpenCode's config only names the plugin shim;
+/// the shim names the binary.
+pub fn is_wired(harness: Harness, exe: &str) -> anyhow::Result<bool> {
+    let layout = layout(harness);
+    Ok(match &layout.plugin {
+        Some(plugin) => read_optional(plugin)?.is_some_and(|text| text == plugin_source(exe)),
+        None => read_optional(&layout.config)?
+            .is_some_and(|text| text.contains(command(exe, harness, "").trim_end())),
+    })
+}
+
 /// Print one line per harness and the hub; true when every detected harness is wired to
 /// this binary.
 pub fn doctor(db: &Path) -> anyhow::Result<bool> {
@@ -414,28 +443,18 @@ pub fn doctor(db: &Path) -> anyhow::Result<bool> {
     let mut healthy = true;
     for harness in detected() {
         let layout = layout(harness);
-        // OpenCode's config only names the plugin shim; the shim names the binary.
-        let (marker, config) = match &layout.plugin {
-            Some(plugin) => (
-                plugin_source(&exe),
-                read_optional(plugin)?.unwrap_or_default(),
-            ),
-            None => (
-                command(&exe, harness, ""),
-                read_optional(&layout.config)?.unwrap_or_default(),
-            ),
-        };
-        let (state, detail) = if config.contains(marker.trim_end()) {
+        let config = read_optional(&layout.config)?.unwrap_or_default();
+        let (state, detail) = if is_wired(harness, &exe)? {
             ("ok", "hooks point at this binary")
-        } else if config.contains("axon-bus") {
+        } else if config.contains("axon-bus") || config.contains("axon bus hook") {
             healthy = false;
             (
                 "warn",
-                "hooks point at another axon-bus binary; run `axon-bus install`",
+                "hooks point at another axon binary; run `axon bus install`",
             )
         } else {
             healthy = false;
-            ("missing", "not wired; run `axon-bus install`")
+            ("missing", "not wired; run `axon bus install`")
         };
         println!(
             "{state:<8}{:<10}{} ({detail})",
@@ -453,7 +472,7 @@ pub fn doctor(db: &Path) -> anyhow::Result<bool> {
         Err(_) => {
             healthy = false;
             println!(
-                "missing hub       {} (hooks stay inert; run `axon-bus init`)",
+                "missing hub       {} (hooks stay inert; run `axon bus init`)",
                 db.display()
             );
         }

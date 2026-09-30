@@ -49,6 +49,11 @@ struct Cli {
     #[arg(long)]
     no_content: bool,
 
+    /// Leave harness configs alone: do not wire Claude Code, Codex, OpenCode or Hermes
+    /// hooks (messages, stops and budgets need them; `axon bus uninstall` removes them).
+    #[arg(long)]
+    no_hooks: bool,
+
     /// Optional OTLP/HTTP endpoint to ALSO export traces (requires `--features otel`).
     #[arg(long)]
     otel: Option<String>,
@@ -108,9 +113,12 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     }
     println!("  serving {url} — live (file-watch) — press Ctrl-C to stop\n");
 
-    // The projects view reads the bus tables; creating them touches no harness config.
     let db = db_path();
     axon_bus::init(&db)?;
+    // Installing Axon is the whole setup: each harness is wired to this binary once.
+    if !cli.no_hooks {
+        axon_bus::ensure_hooks();
+    }
     let dashboard = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
     server::serve(addr, state, dashboard).await

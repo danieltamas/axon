@@ -10,6 +10,7 @@ mod cli;
 mod cli_guard;
 mod doorbell;
 mod gate;
+mod hermes_hooks;
 mod hook;
 mod install;
 mod memory;
@@ -19,6 +20,7 @@ mod registry;
 mod replay;
 mod route;
 pub mod serve;
+mod setup;
 mod snapshot;
 mod store;
 mod tail;
@@ -66,6 +68,8 @@ fn refused(refused: msg::Refused) -> ExitCode {
 pub fn init(db: &std::path::Path) -> anyhow::Result<()> {
     store::init(db).map(drop)
 }
+
+pub use setup::ensure_hooks;
 
 /// Parse `args` (program name first) and run the command.
 pub fn cli_main<I, T>(args: I) -> ExitCode

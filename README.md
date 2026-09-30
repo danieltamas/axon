@@ -77,6 +77,12 @@ axon
 `install -m 0755 /tmp/axon ~/.local/bin/axon`, or `~/.cargo/bin/axon` if you have Rust. (If the
 chosen dir isn't on your `PATH` yet, add it: `export PATH="$HOME/.local/bin:$PATH"`.)
 
+The first run also wires Axon into the coding agents it finds (Claude Code, Codex, OpenCode,
+Hermes) — hooks in their own configs that run this `axon`, so you can message, budget and stop
+agents from the dashboard. Nothing else to set up; each config is backed up first and
+`axon bus uninstall` puts it back. Run `axon --no-hooks` to leave them alone. Moving or
+reinstalling `axon` repoints the hooks on its next run.
+
 Checksums: [`bin/SHA256SUMS`](./bin/SHA256SUMS). Prefer to build it yourself? With
 [Rust](https://rustup.rs) installed, clone this repo and run `cargo install --path .` — that
 compiles and drops the `axon` command into `~/.cargo/bin`. The Homebrew / `curl | sh` one-liners

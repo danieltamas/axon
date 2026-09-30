@@ -119,10 +119,10 @@ pub(crate) fn unwire(harness: Harness, current: &str, layout: &Layout) -> anyhow
             Ok(serde_json::to_string_pretty(&config)? + "\n")
         }
         Harness::Hermes => {
-            // The block runs from the marker through the indented lines under `hooks:`.
-            let start = current
-                .find(HERMES_MARKER)
-                .context("config.yaml: the axon-bus marker is gone; remove its hooks by hand")?;
+            // Without the marker the hooks were merged into the owner's own block.
+            let Some(start) = current.find(HERMES_MARKER) else {
+                return Ok(crate::hermes_hooks::unwire(current));
+            };
             let body = &current[start + HERMES_MARKER.len()..];
             let Some(hooks) = body.strip_prefix("hooks:\n") else {
                 bail!("config.yaml: the axon-bus hooks block was edited; remove it by hand");
