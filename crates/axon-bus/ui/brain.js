@@ -9,6 +9,7 @@ import { displayMoney, tokens } from "./dom.js";
 const HARNESS = { "claude-code": "claude", claude: "claude", codex: "codex", opencode: "opencode", hermes: "hermes" };
 const still = matchMedia("(prefers-reduced-motion: reduce)");
 const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+const LIVE_FADE_MS = 3 * 60 * 1000;
 
 // Summary rows carry no harness per model; the id's family names it.
 export function modelHarness(model) {
@@ -120,6 +121,18 @@ export function createBrain(canvas, tip) {
           return { id: `m:${m.model}`, kind: "model", key: family, name: m.model, cost: m.cost_eur, out: m.tokens_out, turns: m.events, unpriced: m.unpriced, parent: hubs.has(family) ? `h:${family}` : "core" };
         }),
       ];
+      // How live each node is, from real turns only: each recent turn counts fully when it
+      // lands and fades over a few minutes, so an idle harness goes quiet.
+      const now = Date.now();
+      const live = new Map();
+      for (const r of summary.recent || []) {
+        const weight = Math.exp(-Math.max(0, now - r.ts) / LIVE_FADE_MS);
+        const model = `m:${r.model}`;
+        live.set(model, (live.get(model) || 0) + weight);
+      }
+      for (const n of nodes) if (n.kind === "model") n.live = Math.min(1, live.get(n.id) || 0);
+      for (const n of nodes) if (n.kind === "harness") n.live = Math.min(1, nodes.reduce((sum, m) => sum + (m.parent === n.id ? m.live : 0), 0));
+      nodes[0].live = Math.min(1, nodes.reduce((sum, n) => sum + (n.kind === "model" ? n.live : 0), 0));
       byId = new Map(nodes.map((n) => [n.id, n]));
       total = summary.cost_eur;
       const nextShape = nodes.map((n) => n.id).join("|");

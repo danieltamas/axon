@@ -60,7 +60,7 @@ export function createUsage(container, { onUnavailable }) {
   canvas.setAttribute("role", "img");
   const tip = el("div", "brain-tip");
   tip.hidden = true;
-  const legend = el("figcaption", "brain-legend", "Spend at the center, harnesses around it, models outside. Size is cost; a pulse is a turn landing.");
+  const legend = el("figcaption", "brain-legend", "Spend at the center, harnesses around it, models outside. Size is cost; flow is turns from the last few minutes, and a pulse is one landing now.");
   const figure = el("figure", "brain-wrap");
   figure.append(canvas, tip, legend);
   const brain = createBrain(canvas, tip);

@@ -66,7 +66,7 @@ export function createRenderer(canvas, emit) {
     const oldKeys = edges.map((e) => e.key);
     nodes = data.nodes.map((d, i) => {
       const was = before.get(d.id);
-      const n = { ...d, i, seed: seeded(i + 1) * TAU, act: 0.4, flash: 0, lit: 1, grow: 0, hueShift: 0, sprite: d.kind === "core" ? "core" : d.key, x: 0, y: 0, s: 1, z: 0, depth: 1 };
+      const n = { ...d, i, seed: seeded(i + 1) * TAU, act: 0, flash: 0, lit: 1, grow: 0, hueShift: 0, sprite: d.kind === "core" ? "core" : d.key, x: 0, y: 0, s: 1, z: 0, depth: 1 };
       if (d.kind === "core") n.home = [0, 0, 0];
       else if (d.kind === "harness") n.home = dir.get(d.id).map((v) => v * INNER);
       else {
@@ -129,13 +129,17 @@ export function createRenderer(canvas, emit) {
     out.z = z2;
   }
 
-  // Ambient flow follows spend; a landed turn adds activity along its path.
+  // Flow is only where real turns landed lately (`live`, from the page) or just now
+  // (`act`, from a pulse); an idle edge carries nothing.
+  const flow = (e) => nodes[e.b].live + nodes[e.b].act;
+
   function pickEdge() {
     let sum = 0;
-    for (const e of edges) sum += e.weight * (0.25 + nodes[e.b].act);
+    for (const e of edges) sum += flow(e);
+    if (sum <= 0) return -1;
     let r = Math.random() * sum;
     for (let i = 0; i < edges.length; i++) {
-      r -= edges[i].weight * (0.25 + nodes[edges[i].b].act);
+      r -= flow(edges[i]);
       if (r <= 0) return i;
     }
     return edges.length - 1;
@@ -176,7 +180,7 @@ export function createRenderer(canvas, emit) {
     const alpha = n.depth * Math.max(0.14, n.lit) * g;
     const sprite = sprites[n.sprite];
     ctx.globalCompositeOperation = theme.dark ? "lighter" : "multiply";
-    ctx.globalAlpha = Math.min(1, alpha * ((n.kind === "model" ? 0.55 : 0.8) + n.flash * 0.5 + n.act * 0.3));
+    ctx.globalAlpha = Math.min(1, alpha * ((n.kind === "model" ? 0.55 : 0.8) + n.flash * 0.5 + Math.min(1, n.act + n.live) * 0.3));
     const R = pr * 4.2;
     if (sprite) ctx.drawImage(sprite, n.x - R, n.y - R, R * 2, R * 2);
     ctx.globalCompositeOperation = "source-over";
@@ -260,8 +264,10 @@ export function createRenderer(canvas, emit) {
       if (p.next >= 0) Object.assign(p, { edge: p.next, next: -1, age: 0 });
       else p.edge = -1;
     }
-    if (edges.length && alive < AMBIENT) {
-      spawnDebt += dt * (AMBIENT / 2.9);
+    // As many in flight as the core is live: none at all when nothing ran lately.
+    const target = Math.round(AMBIENT * Math.min(1, nodes.length ? nodes[0].live + nodes[0].act : 0));
+    if (edges.length && alive < target) {
+      spawnDebt += dt * (target / 2.9);
       while (spawnDebt >= 1) {
         spawnDebt -= 1;
         launch(pickEdge(), -1, false);
@@ -427,7 +433,7 @@ export function createRenderer(canvas, emit) {
             const peak = peakCost(msg.nodes);
             for (const d of msg.nodes) {
               const n = byId.get(d.id);
-              if (n) Object.assign(n, { cost: d.cost, rTo: radius({ kind: n.kind, cost: d.cost }, peak) });
+              if (n) Object.assign(n, { cost: d.cost, live: d.live || 0, rTo: radius({ kind: n.kind, cost: d.cost }, peak) });
             }
           }
           break;
@@ -438,6 +444,7 @@ export function createRenderer(canvas, emit) {
           if (!m || !hub) break;
           m.act = Math.min(1, m.act + 0.6);
           hub.act = Math.min(1, hub.act + 0.4);
+          nodes[0].act = Math.min(1, nodes[0].act + 0.3);
           const first = edges.findIndex((e) => e.b === hub.i && nodes[e.a].kind === "core");
           const second = edges.findIndex((e) => e.b === m.i);
           if (still) ripple(m.i);
