@@ -23,6 +23,7 @@ impl Status {
     }
 }
 
+#[derive(Default)]
 pub struct Agent<'a> {
     pub id: &'a str,
     pub harness: &'a str,
@@ -30,6 +31,9 @@ pub struct Agent<'a> {
     pub parent_id: Option<&'a str>,
     pub cwd: Option<&'a str>,
     pub model: Option<&'a str>,
+    pub role: Option<&'a str>,
+    pub effort: Option<&'a str>,
+    pub mission: Option<&'a str>,
 }
 
 /// Register `agent` with `status`, or, when it is already known, move it to `status`
@@ -60,8 +64,8 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
     };
     conn.execute(
         "INSERT INTO agents (id,harness,session_id,parent_id,root_id,model,cwd,status,
-                             started_at,last_seen_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+                             started_at,last_seen_at,role,effort,mission)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12)",
         params![
             agent.id,
             agent.harness,
@@ -71,7 +75,10 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
             agent.model,
             agent.cwd,
             status.as_str(),
-            now
+            now,
+            agent.role,
+            agent.effort,
+            agent.mission
         ],
     )?;
     let payload = json!({"harness": agent.harness, "session_id": agent.session_id,

@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::registry::{self, Agent, Status};
-use crate::{gate, msg, store};
+use crate::{doorbell, gate, msg, store};
 
 /// What a hook event means for the registry, independent of the harness that sent it.
 #[derive(Debug, PartialEq)]
@@ -40,7 +40,8 @@ pub fn run(db: &Path, harness: &str, event: &str) {
     let mut stdin = Vec::new();
     // Drained even when the hub is absent, so the harness never writes into a closed pipe.
     let read = std::io::stdin().read_to_end(&mut stdin);
-    if !db.exists() {
+    let hub_exists = db.exists();
+    if !hub_exists && !doorbell::dir(db).exists() {
         return;
     }
     let explicit_parent = std::env::var("AXON_BUS_PARENT").ok();
@@ -49,12 +50,39 @@ pub fn run(db: &Path, harness: &str, event: &str) {
         .and_then(|_| serde_json::from_slice::<Value>(&stdin).context("hook payload is not JSON"))
         .and_then(|payload| {
             let change = normalize(harness, event, &payload, explicit_parent.as_deref())?;
-            apply(db, harness, event, change, &payload)
+            let actor = actor_of(&change);
+            let reply = if hub_exists {
+                apply(db, harness, event, change, &payload)
+            } else {
+                Err(anyhow::anyhow!("the hub at {} was removed", db.display()))
+            };
+            reply.or_else(|err| rung_doorbell(db, harness, event, actor).ok_or(err))
         });
     match result {
         Ok(Some(reply)) => println!("{reply}"),
         Ok(None) => {}
-        Err(err) => eprintln!("axon-bus: hook {harness} {event} allowed after an error: {err:#}"),
+        Err(err) if hub_exists => {
+            eprintln!("axon-bus: hook {harness} {event} allowed after an error: {err:#}")
+        }
+        Err(_) => {}
+    }
+}
+
+/// When the hub cannot answer, a stop already persisted as a doorbell still denies the
+/// actor's next tool call (fail closed); everything else is allowed.
+fn rung_doorbell(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> Option<Option<Value>> {
+    if !gate::is_pre_tool(harness, event) {
+        return None;
+    }
+    let reason = doorbell::reason(db, actor?)?;
+    Some(Some(gate::deny(harness, reason)))
+}
+
+fn actor_of<'a>(change: &Change<'a>) -> Option<&'a str> {
+    match change {
+        Change::Ignored => None,
+        Change::SessionStart(node) | Change::Active(node) | Change::ChildStart(node) => Some(node.id),
+        Change::Idle(id) | Change::Closed(id) => Some(id),
     }
 }
 
@@ -184,10 +212,8 @@ fn apply(
     change: Change,
     payload: &Value,
 ) -> anyhow::Result<Option<Value>> {
-    let actor = match &change {
-        Change::Ignored => return Ok(None),
-        Change::SessionStart(node) | Change::Active(node) | Change::ChildStart(node) => node.id,
-        Change::Idle(id) | Change::Closed(id) => id,
+    let Some(actor) = actor_of(&change) else {
+        return Ok(None);
     };
     let mut conn = store::open(db)?;
     let tx = store::write_tx(&mut conn)?;
@@ -244,6 +270,7 @@ fn upsert(conn: &Connection, harness: &str, node: &Node, status: Status) -> anyh
         parent_id,
         cwd: node.cwd,
         model: node.model,
+        ..Default::default()
     };
     registry::upsert(conn, &agent, status)
 }

@@ -3,7 +3,10 @@
 //! No async runtime here by design: `axon-bus hook` runs on every tool call and must
 //! stay near the process-spawn floor (BUS-PLAN §00, spike Q4).
 
+mod budget;
+mod cli;
 mod claims;
+mod doorbell;
 mod gate;
 mod hook;
 mod install;
@@ -11,172 +14,17 @@ mod msg;
 mod registry;
 mod route;
 mod store;
+mod usage;
+mod virtual_agent;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
 
-#[derive(Parser)]
-#[command(
-    name = "axon-bus",
-    version,
-    about = "Axon's control plane for coding agents"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
-pub enum Harness {
-    Claude,
-    Codex,
-    Opencode,
-    Hermes,
-}
-
-impl Harness {
-    pub const ALL: [Harness; 4] = [
-        Harness::Claude,
-        Harness::Codex,
-        Harness::Opencode,
-        Harness::Hermes,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Harness::Claude => "claude",
-            Harness::Codex => "codex",
-            Harness::Opencode => "opencode",
-            Harness::Hermes => "hermes",
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Create or migrate the shared database.
-    Init,
-    /// Register an idle agent.
-    Register {
-        #[arg(long)]
-        id: String,
-        #[arg(long)]
-        harness: Harness,
-        #[arg(long)]
-        session: String,
-        #[arg(long)]
-        cwd: String,
-        #[arg(long)]
-        parent: Option<String>,
-    },
-    /// Handle one harness hook; the payload arrives on stdin.
-    Hook { harness: String, event: String },
-    /// Send one message along an edge; prints {id, thread}.
-    Send {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-        #[arg(long)]
-        kind: String,
-        #[arg(long)]
-        body: String,
-        #[arg(long)]
-        thread: Option<String>,
-        /// Content by reference, e.g. `src/main.rs:L10-40@abc123`.
-        #[arg(long = "ref")]
-        refs: Vec<String>,
-    },
-    /// Ask a question and wait for its answer; prints {body, timed_out, thread}.
-    Ask {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-        #[arg(long)]
-        body: String,
-        /// Seconds to wait before returning the default.
-        #[arg(long)]
-        wait: u64,
-        #[arg(long)]
-        default: String,
-        #[arg(long)]
-        thread: Option<String>,
-    },
-    /// Answer a question addressed to you.
-    Reply {
-        question: String,
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        body: String,
-    },
-    /// Propose a root-to-root link.
-    Link {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-    },
-    /// Accept the link another root proposed.
-    Accept {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-    },
-    /// Open a temporary direct edge for one thread.
-    Grant {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-        #[arg(long)]
-        thread: String,
-        /// Lifetime such as `90s`, `10m` or `1h`.
-        #[arg(long, value_parser = parse_ttl)]
-        ttl: std::time::Duration,
-    },
-    /// Claim paths in the current checkout; a directory claims its subtree.
-    Claim {
-        #[arg(long)]
-        agent: String,
-        #[arg(long)]
-        task: Option<String>,
-        #[arg(required = true)]
-        paths: Vec<String>,
-    },
-    /// Release claimed paths in the current checkout, or all of the agent's claims.
-    Release {
-        #[arg(long)]
-        agent: String,
-        paths: Vec<String>,
-    },
-    /// List every claim as JSON lines.
-    Claims,
-    /// Check the audit log's hash chain.
-    Audit {
-        #[arg(long, required = true)]
-        verify: bool,
-        #[arg(long)]
-        db: Option<PathBuf>,
-    },
-    /// Wire the hooks into each harness's config (the detected ones by default).
-    Install {
-        #[arg(long = "harness")]
-        harnesses: Vec<Harness>,
-    },
-    /// Restore each harness's config from its pre-install backup.
-    Uninstall {
-        #[arg(long = "harness")]
-        harnesses: Vec<Harness>,
-    },
-    /// Report which harnesses are wired and whether the hub exists.
-    Doctor,
-}
+use cli::{BudgetCommand, Cli, Command};
+pub use cli::Harness;
 
 /// A request the CLI rejects as invalid (exit 2), as opposed to a failure (exit 1).
 #[derive(Debug)]
@@ -192,18 +40,6 @@ impl std::error::Error for Invalid {}
 
 /// Exit code of a refusal by policy, such as a conflicting claim or a non-edge send.
 const REFUSED: u8 = 3;
-
-fn parse_ttl(text: &str) -> Result<std::time::Duration, String> {
-    let (digits, unit) = text.split_at(text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len()));
-    let count: u64 = digits.parse().map_err(|_| format!("invalid ttl {text}"))?;
-    let seconds = match unit {
-        "" | "s" => 1,
-        "m" => 60,
-        "h" => 3600,
-        _ => return Err(format!("invalid ttl unit in {text}; use s, m or h")),
-    };
-    Ok(std::time::Duration::from_secs(count * seconds))
-}
 
 fn hub(db: &std::path::Path) -> anyhow::Result<rusqlite::Connection> {
     store::open(db).context("no hub; run `axon-bus init`")
@@ -241,6 +77,9 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             session,
             cwd,
             parent,
+            role,
+            model,
+            effort,
         } => {
             let mut conn = hub(&db)?;
             let tx = store::write_tx(&mut conn)?;
@@ -255,10 +94,51 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
                 session_id: &session,
                 parent_id: parent.as_deref(),
                 cwd: Some(&cwd),
-                model: None,
+                model: model.as_deref(),
+                role: role.as_deref(),
+                effort: effort.as_deref(),
+                mission: None,
             };
             registry::register(&tx, &agent).map_err(|e| Invalid(e.to_string()))?;
             tx.commit()?;
+        }
+        Command::Route {
+            task,
+            role,
+            budget,
+            advisor_response,
+        } => {
+            let advice = match advisor_response {
+                Some(path) => {
+                    let text = std::fs::read_to_string(&path)
+                        .with_context(|| format!("read {}", path.display()))?;
+                    let advice: serde_json::Value = serde_json::from_str(&text)
+                        .map_err(|e| Invalid(format!("{} is not JSON: {e}", path.display())))?;
+                    Some(advice)
+                }
+                None => None,
+            };
+            let mut conn = hub(&db)?;
+            let tx = store::write_tx(&mut conn)?;
+            let answer = route::route_task(&tx, &task, role.as_deref(), budget, advice.as_ref())?;
+            tx.commit()?;
+            println!("{answer}");
+        }
+        Command::Spawn {
+            task,
+            parent,
+            panel,
+            judge,
+            ..
+        } => {
+            let mut conn = hub(&db)?;
+            let tx = store::write_tx(&mut conn)?;
+            if registry::root_of(&tx, &parent)?.is_none() {
+                return Err(Invalid(format!("parent {parent} is not registered")).into());
+            }
+            let id = virtual_agent::register(&tx, &parent, &task, &panel, &judge)?;
+            tx.commit()?;
+            println!("{}", serde_json::json!({"id": id}));
         }
         Command::Send {
             from,
@@ -405,6 +285,20 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             };
             for harness in targets {
                 install::uninstall(harness)?;
+            }
+        }
+        Command::Budget(BudgetCommand::Set { scope, tokens, usd }) => {
+            let mut conn = hub(&db)?;
+            let tx = store::write_tx(&mut conn)?;
+            budget::set(&tx, &scope, tokens, usd).map_err(|e| Invalid(format!("{e:#}")))?;
+            tx.commit()?;
+        }
+        Command::Budget(BudgetCommand::Show { scope, json }) => {
+            let status = budget::show(&hub(&db)?, &scope)?;
+            if json {
+                println!("{status}");
+            } else {
+                println!("{status:#}");
             }
         }
         Command::Doctor => {

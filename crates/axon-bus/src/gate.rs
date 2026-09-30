@@ -5,9 +5,9 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::{msg, route};
+use crate::{budget, msg, route, usage};
 
-fn is_pre_tool(harness: &str, event: &str) -> bool {
+pub fn is_pre_tool(harness: &str, event: &str) -> bool {
     matches!(
         (harness, event),
         ("claude" | "codex", "PreToolUse")
@@ -16,7 +16,7 @@ fn is_pre_tool(harness: &str, event: &str) -> bool {
     )
 }
 
-fn deny(harness: &str, reason: String) -> Value {
+pub fn deny(harness: &str, reason: String) -> Value {
     match harness {
         "hermes" => json!({"decision": "block", "reason": reason}),
         "opencode" => json!({"decision": "deny", "reason": reason}),
@@ -47,6 +47,9 @@ pub fn verdict(
         if let Some(reason) = msg::pending_stop(conn, actor)? {
             return Ok(Some(deny(harness, reason)));
         }
+        if let Some(reason) = budget::check(conn, actor)? {
+            return Ok(Some(deny(harness, reason)));
+        }
         if let Some(to) = native_target(harness, payload) {
             // An unregistered target is a native peer the bus does not govern.
             let known = crate::registry::root_of(conn, to)?.is_some();
@@ -61,6 +64,9 @@ pub fn verdict(
             if let Some(to) = native_target(harness, payload) {
                 msg::log_native(conn, actor, to)?;
             }
+            if harness == "claude" && event == "PostToolUse" {
+                record_claude_usage(conn, actor, payload)?;
+            }
             Ok(msg::deliver(conn, actor)?.map(|text| {
                 json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
             }))
@@ -70,4 +76,18 @@ pub fn verdict(
         }
         _ => Ok(None),
     }
+}
+
+/// After a Claude tool call: keep the model a spawn resolved for its child (raw, so an
+/// unknown model stays unpriced), then ingest the actor's new transcript turns.
+fn record_claude_usage(conn: &Connection, actor: &str, payload: &Value) -> anyhow::Result<()> {
+    let spawned = &payload["tool_response"];
+    if let (Some(child), Some(model)) = (spawned["agentId"].as_str(), spawned["resolvedModel"].as_str()) {
+        conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
+    }
+    if let Some(transcript) = payload["transcript_path"].as_str() {
+        let child = payload["agent_id"].as_str();
+        usage::ingest_claude(conn, actor, child, std::path::Path::new(transcript))?;
+    }
+    Ok(())
 }

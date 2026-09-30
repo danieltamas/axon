@@ -1,12 +1,17 @@
 //! Message edges (BUS-PLAN §3): parent ↔ child, root ↔ root over an accepted `link`, and
 //! thread-scoped temporary `grant`s. A send is allowed only along an edge; otherwise the
 //! caller gets the relay route to take.
+//!
+//! Task routing (BUS-PLAN §4): `routes.toml` rules pick a lane, the remaining budget may
+//! step it down one lane, and an advisor's proposal is only logged beside it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::PathBuf;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::store::{append_event, now_ms};
 
@@ -171,4 +176,134 @@ pub fn refusal(conn: &Connection, from: &str, to: &str) -> anyhow::Result<String
         ),
         None => format!("{from} has no edge to {to}, and no route connects them"),
     })
+}
+
+/// `routes.toml`: lanes, most capable first, and the lane each role starts in.
+#[derive(Deserialize)]
+struct Routes {
+    lanes: Vec<Lane>,
+    #[serde(default)]
+    roles: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct Lane {
+    name: String,
+    harness: String,
+    model: String,
+    effort: String,
+}
+
+/// `$XDG_CONFIG_HOME/axon/routes.toml`, else `~/.config/axon/routes.toml`.
+fn routes_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
+        .join("axon/routes.toml")
+}
+
+fn load_routes() -> anyhow::Result<Routes> {
+    let path = routes_path();
+    let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let routes: Routes = toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    if routes.lanes.is_empty() {
+        bail!("{} defines no [[lanes]]", path.display());
+    }
+    Ok(routes)
+}
+
+/// The median USD cost of the finished agents that ran as `role` on this lane's model and
+/// effort. Per role x model x effort, never role alone, so a new model is judged on its own
+/// history (§4). None without priced history.
+fn typical_cost(conn: &Connection, role: Option<&str>, lane: &Lane) -> anyhow::Result<Option<f64>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM agents WHERE status='closed' AND role IS ?1 AND model=?2 AND effort=?3
+         ORDER BY id",
+    )?;
+    let ids: Vec<String> = stmt
+        .query_map(params![role, lane.model, lane.effort], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut costs = Vec::new();
+    for id in ids {
+        costs.extend(crate::budget::agent_cost(conn, &id)?);
+    }
+    costs.sort_by(f64::total_cmp);
+    let mid = costs.len() / 2;
+    Ok(match costs.len() {
+        0 => None,
+        n if n % 2 == 1 => Some(costs[mid]),
+        _ => Some((costs[mid - 1] + costs[mid]) / 2.0),
+    })
+}
+
+/// Answer `route`: {harness, model, effort, reason}, the same for the same inputs and
+/// history. Logs the answer and the advisor's shadow proposal; the proposal never changes
+/// the answer. Call inside a write transaction.
+pub fn route_task(
+    conn: &Connection,
+    task: &str,
+    role: Option<&str>,
+    budget_usd: Option<f64>,
+    advice: Option<&Value>,
+) -> anyhow::Result<String> {
+    let routes = load_routes()?;
+    let lane_index = |name: &str| routes.lanes.iter().position(|lane| lane.name == name);
+    let (mut index, mut reason) = match role.map(|role| (role, routes.roles.get(role))) {
+        Some((role, Some(name))) => {
+            let index = lane_index(name)
+                .with_context(|| format!("role {role} maps to lane {name}, which routes.toml does not define"))?;
+            (index, format!("role {role} maps to lane {name}"))
+        }
+        Some((role, None)) => (0, format!("role {role} has no lane; first lane {}", routes.lanes[0].name)),
+        None => (0, format!("no role; first lane {}", routes.lanes[0].name)),
+    };
+    if let Some(budget) = budget_usd {
+        let lane = &routes.lanes[index];
+        if let Some(typical) = typical_cost(conn, role, lane)? {
+            if typical > budget {
+                let shortfall = format!(
+                    "; budget ${budget:.2} cannot cover lane {}'s median ${typical:.2} for {} x {} x {}",
+                    lane.name,
+                    role.unwrap_or("no role"),
+                    lane.model,
+                    lane.effort
+                );
+                reason.push_str(&shortfall);
+                match routes.lanes.get(index + 1) {
+                    Some(cheaper) => {
+                        reason.push_str(&format!(", stepped down to lane {}", cheaper.name));
+                        index += 1;
+                    }
+                    None => reason.push_str(", and no cheaper lane exists"),
+                }
+            }
+        }
+    }
+    let lane = &routes.lanes[index];
+    let answer = json!({"harness": lane.harness, "model": lane.model, "effort": lane.effort,
+        "reason": reason})
+    .to_string();
+    conn.execute(
+        "INSERT INTO routing_decisions (ts,role,task_hash,rule_json,advisor_json) VALUES (?1,?2,?3,?4,?5)",
+        params![
+            now_ms(),
+            role,
+            blake3::hash(task.as_bytes()).to_hex().as_str(),
+            answer,
+            advice.map(Value::to_string)
+        ],
+    )?;
+    append_event(conn, crate::msg::BUS, "route", role.unwrap_or("-"), &answer)?;
+    Ok(answer)
+}
+
+/// `0.7usd`, `$0.7` or `0.7`: remaining budget in USD.
+pub fn parse_usd(text: &str) -> Result<f64, String> {
+    let number = text.strip_suffix("usd").unwrap_or(text);
+    let number = number.strip_prefix('$').unwrap_or(number);
+    match number.parse::<f64>() {
+        Ok(usd) if usd.is_finite() && usd >= 0.0 => Ok(usd),
+        _ => Err(format!("invalid budget {text}; use e.g. 0.5usd")),
+    }
 }

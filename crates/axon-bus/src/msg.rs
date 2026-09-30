@@ -1,16 +1,24 @@
 //! Messages (BUS-PLAN §3): send along edges, ask/reply, and hook-time delivery. Peer text
 //! is untrusted input: it is framed as such when injected and never grants anything.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
-use crate::route;
 use crate::store::{append_event, now_ms};
+use crate::{doorbell, route};
 
 /// Body cap, in Unicode scalar values; content goes by reference (`path:L10-40@sha`).
 pub const MAX_BODY_CHARS: usize = 400;
+
+/// Audit actor of what the bus decides itself.
+pub const BUS: &str = "axon-bus";
+
+/// Thread prefix of the bus's budget messages; `messages.from_id` must be a registered
+/// agent, so they are sent in the name of the budget's scope on `budget:<scope>`.
+const BUDGET_THREAD: &str = "budget:";
 
 pub const KINDS: [&str; 7] = [
     "question", "answer", "stop", "redirect", "sync", "handoff", "ack",
@@ -69,6 +77,11 @@ pub fn send(
     if msg.from == msg.to {
         return invalid(format!("{} cannot message itself", msg.from));
     }
+    if msg.thread.is_some_and(|t| t.starts_with(BUDGET_THREAD)) {
+        return invalid(format!(
+            "threads starting {BUDGET_THREAD} are reserved for the bus"
+        ));
+    }
     for id in [msg.from, msg.to] {
         if crate::registry::root_of(conn, id)?.is_none() {
             return invalid(format!("agent {id} is not registered"));
@@ -79,13 +92,6 @@ pub fn send(
             conn, msg.from, msg.to,
         )?)));
     }
-    let id = new_id("m-", msg.body);
-    let thread = msg.thread.map_or_else(|| id.clone(), str::to_owned);
-    let seq: i64 = conn.query_row(
-        "SELECT coalesce(max(seq), 0) + 1 FROM messages WHERE thread=?1",
-        [&thread],
-        |r| r.get(0),
-    )?;
     let (needs_reply, deadline, default_reply) = match msg.wait {
         Some((wait, default)) => (
             true,
@@ -94,6 +100,29 @@ pub fn send(
         ),
         None => (msg.kind == "question", None, None),
     };
+    let stored = Stored {
+        needs_reply,
+        deadline,
+        default_reply,
+    };
+    Ok(Ok(insert(conn, msg, &stored)?))
+}
+
+struct Stored<'a> {
+    needs_reply: bool,
+    deadline: Option<i64>,
+    default_reply: Option<&'a str>,
+}
+
+/// Store a message that already passed its checks, ringing the doorbell for a stop.
+fn insert(conn: &Connection, msg: &Outgoing, stored: &Stored) -> anyhow::Result<(String, String)> {
+    let id = new_id("m-", msg.body);
+    let thread = msg.thread.map_or_else(|| id.clone(), str::to_owned);
+    let seq: i64 = conn.query_row(
+        "SELECT coalesce(max(seq), 0) + 1 FROM messages WHERE thread=?1",
+        [&thread],
+        |r| r.get(0),
+    )?;
     conn.execute(
         "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body,refs_json,needs_reply,
                                deadline,default_reply)
@@ -107,15 +136,52 @@ pub fn send(
             msg.kind,
             msg.body,
             serde_json::to_string(msg.refs)?,
-            needs_reply,
-            deadline,
-            default_reply,
+            stored.needs_reply,
+            stored.deadline,
+            stored.default_reply,
         ],
     )?;
+    if msg.kind == "stop" {
+        // Rung before the send returns, so the stop holds even if the hub goes away.
+        if let Some(db) = conn.path() {
+            doorbell::ring(Path::new(db), msg.to, &stop_reason(msg.from, msg.body))?;
+        }
+    }
     let payload = json!({"id": id, "thread": thread, "to": msg.to, "kind": msg.kind,
         "body_hash": blake3::hash(msg.body.as_bytes()).to_hex().as_str()});
     append_event(conn, msg.from, "send", msg.to, &payload.to_string())?;
-    Ok(Ok((id, thread)))
+    Ok((id, thread))
+}
+
+/// A message from the bus itself about `scope`'s budget; no edge applies.
+pub fn from_bus(
+    conn: &Connection,
+    scope: &str,
+    to: &str,
+    kind: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let thread = format!("{BUDGET_THREAD}{scope}");
+    let msg = Outgoing {
+        from: scope,
+        to,
+        kind,
+        body,
+        thread: Some(&thread),
+        refs: &[],
+        wait: None,
+    };
+    let stored = Stored {
+        needs_reply: false,
+        deadline: None,
+        default_reply: None,
+    };
+    insert(conn, &msg, &stored)?;
+    Ok(())
+}
+
+fn stop_reason(from: &str, body: &str) -> String {
+    format!("Stopped by {from} through axon-bus: {body}. End this turn now; do not start new work.")
 }
 
 /// Answer question `question` as `from`. Returns the answer's `(id, thread)`.
@@ -209,17 +275,40 @@ pub fn pending_stop(conn: &Connection, agent: &str) -> anyhow::Result<Option<Str
          WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL",
         params![agent, now_ms()],
     )?;
-    Ok(Some(format!(
-        "Stopped by {from} through axon-bus: {body}. End this turn now; do not start new work."
-    )))
+    Ok(Some(stop_reason(&from, &body)))
 }
 
-/// A stop is honoured once the agent's turn ends.
+/// A peer's stop is honoured once the agent's turn ends. A budget stop from the bus holds
+/// until the budget is raised (`clear_bus_stops`).
 pub fn ack_stops(conn: &Connection, agent: &str) -> anyhow::Result<()> {
     conn.execute(
-        "UPDATE messages SET acked_at=?2 WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL",
-        params![agent, now_ms()],
+        "UPDATE messages SET acked_at=?2
+         WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL AND thread NOT LIKE ?3",
+        params![agent, now_ms(), format!("{BUDGET_THREAD}%")],
     )?;
+    silence_doorbell(conn, agent)
+}
+
+/// Lift the bus's budget stops on `agent`.
+pub fn clear_bus_stops(conn: &Connection, agent: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE messages SET acked_at=?2
+         WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL AND thread LIKE ?3",
+        params![agent, now_ms(), format!("{BUDGET_THREAD}%")],
+    )?;
+    silence_doorbell(conn, agent)
+}
+
+/// Remove the doorbell once no stop is pending for `agent`.
+fn silence_doorbell(conn: &Connection, agent: &str) -> anyhow::Result<()> {
+    let pending: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE to_id=?1 AND kind='stop' AND acked_at IS NULL)",
+        [agent],
+        |r| r.get(0),
+    )?;
+    if let (false, Some(db)) = (pending, conn.path()) {
+        doorbell::clear(Path::new(db), agent)?;
+    }
     Ok(())
 }
 

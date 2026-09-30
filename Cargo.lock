@@ -181,8 +181,10 @@ dependencies = [
  "blake3",
  "clap",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
+ "toml",
  "toml_edit",
 ]
 

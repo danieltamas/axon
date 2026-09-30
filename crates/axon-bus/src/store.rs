@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS agents (
     role         TEXT,
     mission      TEXT,
     model        TEXT,
+    effort       TEXT,
     repo         TEXT,
     cwd          TEXT,
     worktree     TEXT,
@@ -66,6 +67,45 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(to_id, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread, seq);
 
+-- cache_write_tokens are 5-minute writes; 1-hour writes are priced differently.
+-- source_key dedupes transcript turns (one row per message id); source_offset is the
+-- transcript byte offset ingest resumes from.
+CREATE TABLE IF NOT EXISTS usage (
+    agent_id              TEXT NOT NULL REFERENCES agents(id),
+    ts                    INTEGER NOT NULL,
+    model                 TEXT NOT NULL,
+    input_tokens          INTEGER NOT NULL DEFAULT 0,
+    output_tokens         INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd              REAL,
+    source_offset         INTEGER,
+    source_key            TEXT,
+    UNIQUE (agent_id, source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_agent ON usage(agent_id, ts);
+
+-- stale_warned_at: when the one stale-usage warning went out (reset by fresh usage).
+CREATE TABLE IF NOT EXISTS budgets (
+    scope_id        TEXT PRIMARY KEY REFERENCES agents(id),
+    kind            TEXT NOT NULL CHECK (kind IN ('tree','agent')),
+    tokens_max      INTEGER,
+    usd_max         REAL,
+    state           TEXT NOT NULL DEFAULT 'ok' CHECK (state IN ('ok','warned','stopped')),
+    stale_warned_at INTEGER
+);
+
+-- One row per `route` answer: the rule's answer and, as a shadow, what an advisor proposed.
+CREATE TABLE IF NOT EXISTS routing_decisions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           INTEGER NOT NULL,
+    role         TEXT,
+    task_hash    TEXT NOT NULL,
+    rule_json    TEXT NOT NULL,
+    advisor_json TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts           INTEGER NOT NULL,
@@ -100,7 +140,22 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
     drop(axon_core::store::Store::open(path_str)?);
     let conn = open(path)?;
     conn.execute_batch(SCHEMA)?;
+    add_missing_columns(&conn)?;
     Ok(conn)
+}
+
+/// `agents.effort` came after the table first shipped; `CREATE TABLE IF NOT EXISTS`
+/// leaves an existing table as it was.
+fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let has_effort: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='effort')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_effort {
+        conn.execute_batch("ALTER TABLE agents ADD COLUMN effort TEXT")?;
+    }
+    Ok(())
 }
 
 /// Open an existing database; never creates one (a hook must not create an absent hub).
