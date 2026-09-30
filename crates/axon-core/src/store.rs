@@ -1,9 +1,10 @@
 //! SQLite persistence (DESIGN.md §9, §16). Events are keyed on their idempotent `id`, so a
 //! boot-scan, a re-scan, and (later) a live-tail delta all converge to the same row set.
 //!
-//! M1 uses a single connection. The mpsc single-writer / reader-pool contract and the
-//! `files(path, inode, offset, size)` tail-resume table arrive with the live pipeline (M4).
+//! `scanned_sources` remembers each log's size and mtime when it was last read, so a scan
+//! re-reads only the logs that changed.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -38,7 +39,19 @@ CREATE TABLE IF NOT EXISTS usage_events (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_agent ON usage_events(agent);
+CREATE TABLE IF NOT EXISTS scanned_sources (
+    path      TEXT PRIMARY KEY,
+    size      INTEGER NOT NULL,
+    mtime_ms  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scan_meta (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 ";
+
+/// A source's size and modification time (epoch ms) when it was last read.
+pub type Stamp = (i64, i64);
 
 /// The database shared by `axon` and `axon-bus`: `$XDG_DATA_HOME/axon/axon.db`.
 pub fn default_path() -> PathBuf {
@@ -90,6 +103,55 @@ impl Store {
         let tx = self.conn.transaction()?;
         for e in events {
             upsert_with(&tx, e)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Each source's stamp from the last scan that read it. A different `fingerprint`
+    /// (the parser version and the pricing in force) forgets them all, so every source is
+    /// read and priced again.
+    pub fn source_stamps(&self, fingerprint: &str) -> anyhow::Result<HashMap<String, Stamp>> {
+        let known: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM scan_meta WHERE key = 'fingerprint'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        if known.as_deref() != Some(fingerprint) {
+            self.conn.execute("DELETE FROM scanned_sources", [])?;
+            self.conn.execute(
+                "INSERT INTO scan_meta (key, value) VALUES ('fingerprint', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [fingerprint],
+            )?;
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, size, mtime_ms FROM scanned_sources")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Upsert `events` and record the stamps of the sources they came from, in one
+    /// transaction: a source is marked read only once its events are stored.
+    pub fn record_scan(
+        &mut self,
+        events: &[Event],
+        stamps: &[(String, Stamp)],
+    ) -> anyhow::Result<()> {
+        let tx = self.conn.transaction()?;
+        for e in events {
+            upsert_with(&tx, e)?;
+        }
+        for (path, (size, mtime_ms)) in stamps {
+            tx.execute(
+                "INSERT INTO scanned_sources (path, size, mtime_ms) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms",
+                params![path, size, mtime_ms],
+            )?;
         }
         tx.commit()?;
         Ok(())

@@ -15,13 +15,13 @@ use chrono::Datelike;
 use clap::Parser;
 
 use axon::config::Config;
-use axon::ingest;
+use axon::ingest::{self, Source, SourceKind};
 use axon::model::Event;
 use axon::normalize;
 use axon::pricing::Pricing;
 use axon::rtk;
 use axon::server;
-use axon::store::Store;
+use axon::store::{Stamp, Store};
 use axon::summary::{build_summary, windowed_cost, Summary};
 
 /// Axon — see DESIGN.md for the full build spec.
@@ -90,20 +90,18 @@ fn run_scan_only() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Bare `axon`: scan, print a CLI summary, open the browser, and serve the live dashboard.
+/// Bare `axon`: serve the live dashboard at once and open the browser; the first scan
+/// runs in the background and prints the CLI summary when it lands.
 async fn run_server(cli: &Cli) -> anyhow::Result<()> {
-    let (summary, events) = scan()?;
-    print_cli_summary(&summary, cli.port);
-
     if let Some(otel) = &cli.otel {
         eprintln!("axon: --otel {otel} ignored (OTEL export is M6; needs --features otel)");
     }
 
     let state = Arc::new(server::AppState {
-        summary: std::sync::RwLock::new(summary),
-        events: std::sync::RwLock::new(events),
+        summary: std::sync::RwLock::new(build_summary(&[])),
+        events: std::sync::RwLock::new(Vec::new()),
     });
-    spawn_refresher(state.clone());
+    spawn_refresher(state.clone(), cli.port);
 
     let url = format!("http://127.0.0.1:{}", cli.port);
     if !cli.no_open {
@@ -128,8 +126,8 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
 /// file-watch), debounced, with a 15s periodic fallback. The scan is blocking (fs + SQLite)
 /// so it runs on the blocking pool — it never stalls the server, and the browser (a separate
 /// process) keeps animating at 60fps regardless. A min-gap caps re-scan frequency under load.
-/// (Incremental tailing — re-reading only changed bytes — is the future optimization.)
-fn spawn_refresher(state: Arc<server::AppState>) {
+/// The first pass runs at once and prints the CLI summary.
+fn spawn_refresher(state: Arc<server::AppState>, port: u16) {
     use std::time::Duration;
     let trigger = Arc::new(tokio::sync::Notify::new());
     let poke = trigger.clone();
@@ -150,14 +148,20 @@ fn spawn_refresher(state: Arc<server::AppState>) {
                 let _ = w.watch(&path, RecursiveMode::Recursive);
             }
         }
+        let mut first = true;
         loop {
-            tokio::select! {
-                _ = trigger.notified() => {}                                  // a log changed
-                _ = tokio::time::sleep(Duration::from_secs(15)) => {}          // periodic fallback
+            if !first {
+                tokio::select! {
+                    _ = trigger.notified() => {}                              // a log changed
+                    _ = tokio::time::sleep(Duration::from_secs(15)) => {}      // periodic fallback
+                }
+                tokio::time::sleep(Duration::from_millis(600)).await; // debounce a write burst
             }
-            tokio::time::sleep(Duration::from_millis(600)).await; // debounce a write burst
             match tokio::task::spawn_blocking(scan).await {
                 Ok(Ok((s, ev))) => {
+                    if std::mem::take(&mut first) {
+                        print_cli_summary(&s, port);
+                    }
                     *state.summary.write().unwrap_or_else(|p| p.into_inner()) = s;
                     *state.events.write().unwrap_or_else(|p| p.into_inner()) = ev;
                 }
@@ -169,37 +173,57 @@ fn spawn_refresher(state: Arc<server::AppState>) {
     });
 }
 
-/// Scan all harnesses, normalize, persist to SQLite, and aggregate. Returns the all-time
-/// summary plus the raw events (so the server can re-aggregate for a selected time range).
+/// Read the logs that changed since the last scan, normalize, persist to SQLite, and
+/// aggregate. Returns the all-time summary plus the raw events (so the server can
+/// re-aggregate for a selected time range).
 fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     let pricing = load_pricing();
-    let mut turns = ingest::scan_claude_root(&claude_projects_dir());
-    turns.extend(ingest::scan_codex_root(&codex_sessions_dir()));
-    turns.extend(ingest::scan_opencode_db(&opencode_db_path()));
-    for db in ccflare_db_paths() {
-        if db.exists() {
-            turns.extend(ingest::scan_ccflare_db(&db));
-        }
-    }
+    let mut sources = ingest::claude_sources(&claude_projects_dir());
+    sources.extend(ingest::codex_sources(&codex_sessions_dir()));
+    sources.push(Source {
+        kind: SourceKind::OpenCode,
+        path: opencode_db_path(),
+    });
+    sources.extend(ccflare_db_paths().into_iter().map(|path| Source {
+        kind: SourceKind::Ccflare,
+        path,
+    }));
 
-    let mut events = Vec::with_capacity(turns.len());
+    let db = db_path();
+    let mut store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
+    // A new parser or new prices mean every stored turn is read and priced again.
+    let fingerprint = format!(
+        "{}\n{}",
+        env!("CARGO_PKG_VERSION"),
+        std::fs::read_to_string(pricing_path()).unwrap_or_default()
+    );
+    let known = store.source_stamps(&fingerprint)?;
+
+    let mut events = Vec::new();
+    let mut stamps = Vec::new();
     let mut skipped = 0usize;
-    for t in &turns {
-        match normalize::to_event(t, &pricing) {
-            Ok(e) => events.push(e),
-            Err(e) => {
-                skipped += 1;
-                eprintln!("axon: skipped turn {}: {e:#}", t.message_id);
+    for source in &sources {
+        // Stamped before the read: a write that lands during it changes the stamp again.
+        let Some(stamp) = stamp(source) else { continue };
+        let key = source.path.to_string_lossy().into_owned();
+        if known.get(&key) == Some(&stamp) {
+            continue;
+        }
+        for t in source.parse() {
+            match normalize::to_event(&t, &pricing) {
+                Ok(e) => events.push(e),
+                Err(e) => {
+                    skipped += 1;
+                    eprintln!("axon: skipped turn {}: {e:#}", t.message_id);
+                }
             }
         }
+        stamps.push((key, stamp));
     }
     if skipped > 0 {
         eprintln!("axon: skipped {skipped} turn(s) with unparseable timestamps");
     }
-
-    let db = db_path();
-    let mut store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
-    store.upsert_all(&events)?;
+    store.record_scan(&events, &stamps)?;
 
     let all = store.all_events()?;
     let mut summary = build_summary(&all);
@@ -214,6 +238,29 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     summary.week_cost_eur = windowed_cost(&all, local_week_start_ms());
     summary.month_cost_eur = windowed_cost(&all, local_month_start_ms());
     Ok((summary, all))
+}
+
+/// A source's size and mtime; for a SQLite source its write-ahead log counts too, since
+/// new rows sit there until a checkpoint touches the main file. None when it is missing.
+fn stamp(source: &Source) -> Option<Stamp> {
+    let of = |path: &std::path::Path| {
+        let meta = std::fs::metadata(path).ok()?;
+        let mtime = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        Some((meta.len() as i64, mtime.as_millis() as i64))
+    };
+    let (size, mtime) = of(&source.path)?;
+    if matches!(source.kind, SourceKind::OpenCode | SourceKind::Ccflare) {
+        let mut wal = source.path.clone().into_os_string();
+        wal.push("-wal");
+        if let Some((wal_size, wal_mtime)) = of(std::path::Path::new(&wal)) {
+            return Some((size + wal_size, mtime.max(wal_mtime)));
+        }
+    }
+    Some((size, mtime))
 }
 
 /// Epoch-ms of local midnight today.
@@ -361,8 +408,12 @@ fn commafy(n: u64) -> String {
 }
 
 /// Load `~/.config/axon/pricing.toml` if present, else the bundled defaults.
+fn pricing_path() -> std::path::PathBuf {
+    config_dir().join("axon").join("pricing.toml")
+}
+
 fn load_pricing() -> Pricing {
-    let path = config_dir().join("axon").join("pricing.toml");
+    let path = pricing_path();
     if path.exists() {
         match Pricing::load(&path) {
             Ok(p) => return p,

@@ -9,7 +9,7 @@ pub mod codex;
 pub mod loc;
 pub mod opencode;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::model::Harness;
 
@@ -43,12 +43,62 @@ pub struct RawTurn {
     pub reported_cost_usd: Option<f64>,
 }
 
-/// Walk `~/.claude/projects/<ENCODED_CWD>/` and parse every main thread plus its
-/// `subagents/agent-*.jsonl` (joined to `agent-*.meta.json`). Unreadable files are skipped.
-pub fn scan_claude_root(projects_dir: &Path) -> Vec<RawTurn> {
-    let mut turns = Vec::new();
+/// One log a scan reads: a transcript file, or a harness's own database. A scan can
+/// skip a source whose size and modification time are unchanged since it was last read.
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub kind: SourceKind,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    ClaudeMain,
+    ClaudeSubagent,
+    Codex,
+    OpenCode,
+    Ccflare,
+}
+
+impl Source {
+    /// Every turn in this source; an unreadable source has none.
+    pub fn parse(&self) -> Vec<RawTurn> {
+        let read = || std::fs::read_to_string(&self.path).ok();
+        match self.kind {
+            SourceKind::ClaudeMain => read()
+                .map(|content| claude::parse_main_jsonl(&content))
+                .unwrap_or_default(),
+            SourceKind::ClaudeSubagent => {
+                let meta = std::fs::read_to_string(self.path.with_extension("meta.json"))
+                    .ok()
+                    .and_then(|s| claude::SubagentMeta::from_json_str(&s).ok())
+                    .unwrap_or_default();
+                read()
+                    .map(|content| claude::parse_subagent_jsonl(&content, &meta))
+                    .unwrap_or_default()
+            }
+            SourceKind::Codex => {
+                let stem = self
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("codex");
+                read()
+                    .map(|content| codex::parse_session(&content, stem))
+                    .unwrap_or_default()
+            }
+            SourceKind::OpenCode => opencode::parse_db(&self.path),
+            SourceKind::Ccflare => ccflare::parse_db(&self.path),
+        }
+    }
+}
+
+/// Every main thread under `~/.claude/projects/<ENCODED_CWD>/`, plus each session's
+/// `subagents/agent-*.jsonl` (joined to `agent-*.meta.json` when parsed).
+pub fn claude_sources(projects_dir: &Path) -> Vec<Source> {
+    let mut sources = Vec::new();
     let Ok(projects) = std::fs::read_dir(projects_dir) else {
-        return turns;
+        return sources;
     };
     for project in projects.flatten() {
         let ppath = project.path();
@@ -61,20 +111,21 @@ pub fn scan_claude_root(projects_dir: &Path) -> Vec<RawTurn> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    turns.extend(claude::parse_main_jsonl(&content));
-                }
+                sources.push(Source {
+                    kind: SourceKind::ClaudeMain,
+                    path,
+                });
             } else if path.is_dir() {
-                scan_subagents(&path.join("subagents"), &mut turns);
+                subagent_sources(&path.join("subagents"), &mut sources);
             }
         }
     }
-    turns
+    sources
 }
 
-/// Walk `~/.codex/sessions/**/` and parse every Codex session `.jsonl`.
-pub fn scan_codex_root(sessions_dir: &Path) -> Vec<RawTurn> {
-    let mut turns = Vec::new();
+/// Every Codex session `.jsonl` under `~/.codex/sessions/**/`.
+pub fn codex_sources(sessions_dir: &Path) -> Vec<Source> {
+    let mut sources = Vec::new();
     let mut stack = vec![sessions_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -85,14 +136,30 @@ pub fn scan_codex_root(sessions_dir: &Path) -> Vec<RawTurn> {
             if path.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "jsonl") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex");
-                    turns.extend(codex::parse_session(&content, stem));
-                }
+                sources.push(Source {
+                    kind: SourceKind::Codex,
+                    path,
+                });
             }
         }
     }
-    turns
+    sources
+}
+
+/// Parse every main thread and subagent under `~/.claude/projects/`.
+pub fn scan_claude_root(projects_dir: &Path) -> Vec<RawTurn> {
+    claude_sources(projects_dir)
+        .iter()
+        .flat_map(Source::parse)
+        .collect()
+}
+
+/// Parse every Codex session under `~/.codex/sessions/`.
+pub fn scan_codex_root(sessions_dir: &Path) -> Vec<RawTurn> {
+    codex_sources(sessions_dir)
+        .iter()
+        .flat_map(Source::parse)
+        .collect()
 }
 
 /// Read all OpenCode assistant turns from its SQLite database.
@@ -106,7 +173,7 @@ pub fn scan_ccflare_db(db_path: &Path) -> Vec<RawTurn> {
     ccflare::parse_db(db_path)
 }
 
-fn scan_subagents(dir: &Path, turns: &mut Vec<RawTurn>) {
+fn subagent_sources(dir: &Path, sources: &mut Vec<Source>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -116,16 +183,11 @@ fn scan_subagents(dir: &Path, turns: &mut Vec<RawTurn>) {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        if !(name.starts_with("agent-") && name.ends_with(".jsonl")) {
-            continue;
-        }
-        let meta_path = path.with_extension("meta.json");
-        let meta = std::fs::read_to_string(&meta_path)
-            .ok()
-            .and_then(|s| claude::SubagentMeta::from_json_str(&s).ok())
-            .unwrap_or_default();
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            turns.extend(claude::parse_subagent_jsonl(&content, &meta));
+        if name.starts_with("agent-") && name.ends_with(".jsonl") {
+            sources.push(Source {
+                kind: SourceKind::ClaudeSubagent,
+                path,
+            });
         }
     }
 }
