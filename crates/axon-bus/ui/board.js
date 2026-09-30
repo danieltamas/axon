@@ -1,5 +1,5 @@
-// One project's topology (BUS-PLAN §7.1): a section per harness, and in it each root
-// session with its subagents beside it. Cards are kept by agent id and updated in place,
+// One project's topology (BUS-PLAN §7.1): a section per harness, its sessions grouped by
+// state, each with its subagents beside it. Cards are kept by agent id and updated in place,
 // so a snapshot at 50 events a second changes text, not DOM, and a pulse never restarts.
 
 import { activityChart } from "./activity.js";
@@ -123,14 +123,16 @@ export function createBoard(container, scroller, onSelect) {
       const sum = el("span", "sum");
       sums.set(lane.harness, sum);
       head.append(name, sum);
-      // Sessions with subagents take a row each; the rest tile beneath them.
-      const roots = el("div", "roots");
-      const boxes = lane.roots.map(family);
-      const solos = el("div", "solos");
-      solos.append(...boxes.filter((b) => b.classList.contains("solo")));
-      roots.append(...boxes.filter((b) => !b.classList.contains("solo")));
-      if (solos.childElementCount) roots.append(solos);
-      section.append(head, roots);
+      section.append(head);
+      for (const { label, roots } of bands(lane.roots)) {
+        const band = el("div", "band");
+        const title = el("h4", "band-head");
+        title.append(el("span", null, label), el("span", "count", roots.length));
+        const grid = el("div", "band-grid");
+        grid.append(...roots.map(family));
+        band.append(title, grid);
+        section.append(band);
+      }
       return section;
     });
   }
@@ -138,7 +140,7 @@ export function createBoard(container, scroller, onSelect) {
   // The skeleton is rebuilt only when the tree's shape changes; everything else is an
   // in-place update.
   function render(repo, selected) {
-    const nextShape = repo ? JSON.stringify(repo.harnesses.map((h) => [h.harness, ids(h.roots)])) : "";
+    const nextShape = repo ? JSON.stringify(repo.harnesses.map((h) => [h.harness, bands(h.roots).map((b) => [b.label, ids(b.roots)])])) : "";
     if (nextShape !== shape || !container.childElementCount) {
       shape = nextShape;
       container.replaceChildren(...skeleton(repo));
@@ -239,6 +241,29 @@ function notesLine(node) {
   if (node.branch && node.branch !== "main" && node.branch !== "master") notes.push(`on ${node.branch}`);
   if (node.repo_badge) notes.push(`working in ${node.repo_badge.split("/").pop()}`);
   return notes.join(" · ");
+}
+
+// Sessions grouped by what the operator does next: the ones that need them, the ones
+// working, then the quiet ones. Quiet groups put the latest activity first; working ones
+// keep the lane's order, so a turn landing does not reshuffle the cards being watched.
+const BANDS = [
+  ["Needs you", (n) => n.status === "orphaned" || (n.budget && n.budget.state === "stopped")],
+  ["Working", (n) => n.status === "active"],
+  ["Idle", (n) => n.status === "idle"],
+  ["Closed", () => true],
+];
+
+function bands(roots) {
+  const latest = (node) => Math.max(node.last_ts || 0, ...(node.children || []).map(latest));
+  const recent = [...roots].sort((a, b) => latest(b) - latest(a));
+  const left = new Set(roots);
+  const out = [];
+  for (const [label, test] of BANDS) {
+    const picked = (label === "Working" ? roots : recent).filter((n) => left.has(n) && test(n));
+    picked.forEach((n) => left.delete(n));
+    if (picked.length) out.push({ label, roots: picked });
+  }
+  return out;
 }
 
 function ids(roots) {

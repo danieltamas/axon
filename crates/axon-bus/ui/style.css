@@ -158,18 +158,23 @@ a.crumb:hover { color: var(--ink-strong); }
 .need b { min-width: 0; padding: 0; background: none; }
 @container (max-width: 700px) { .project-head { grid-template-columns: minmax(0, 1fr); } }
 
-/* ---- topology: a card per session, its subagents as aligned rows beside it ---- */
-.tree { --gap: 28px; --root-w: 340px; --root-y: 29px; --sub-y: 18px; }
+/* ---- topology: sessions grouped by state, each with its subagents beside it ---- */
+.tree { --gap: 16px; --root-y: 29px; --sub-y: 18px; }
 .lane { margin-top: 28px; }
 .lane-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
 .lane-head h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--ink-strong); }
 .sum { font: 12px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
 .glyph { width: 12px; height: 12px; flex: none; }
 .glyph path { fill: none; stroke: var(--h); stroke-width: 2.4; stroke-linejoin: round; }
-.roots { display: flex; flex-direction: column; gap: 16px; }
-.solos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; align-items: start; }
-.family { display: grid; grid-template-columns: minmax(0, var(--root-w)) minmax(0, 1fr); column-gap: var(--gap); align-items: start; }
-.family.solo { display: block; }
+.band + .band { margin-top: 20px; }
+.band-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
+/* A session with subagents takes two tracks, card and rail; dense flow lets single
+   sessions fill in around it instead of leaving the rest of its row empty. */
+.band-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); grid-auto-flow: row dense; gap: var(--gap); align-items: start; }
+.family { min-width: 0; }
+@container (min-width: 700px) {
+  .family:not(.solo) { grid-column: span 2; display: grid; grid-template-columns: subgrid; align-items: start; }
+}
 
 .node { position: relative; width: 100%; min-width: 0; border: 0; background: none; text-align: left; transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s; }
 .node.root { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raise); }
@@ -196,17 +201,17 @@ a.crumb:hover { color: var(--ink-strong); }
 .node > :empty, .n-foot > :empty, .who > :empty { display: none; }
 .node[data-status="closed"] { opacity: 0.55; }
 
-.node.sub { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(0, 10rem) 8.5rem 5.5rem; align-items: center; column-gap: 12px; padding: 8px 10px; border-radius: 6px; }
+.node.sub { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-areas: "mark who state" ". model metrics"; align-items: center; gap: 2px 10px; padding: 8px 10px; border-radius: 6px; }
 .node.sub:hover { background: var(--surface); }
 .node.sub[aria-pressed="true"] { background: var(--signal-wash); }
 .node.sub[data-status="idle"]:not(:hover):not([aria-pressed="true"]) { opacity: 0.7; }
-.sub .mark { width: 20px; height: 20px; }
-.sub .who { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline; }
+.sub .mark { grid-area: mark; width: 20px; height: 20px; }
+.sub .who { grid-area: who; display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline; }
 .sub .role { overflow: hidden; text-overflow: ellipsis; }
 .sub .mission { grid-column: 1 / -1; font-size: 12px; color: var(--muted); -webkit-line-clamp: 1; line-clamp: 1; }
-.sub .model { font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sub .metrics { font: 12px var(--mono); color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.sub .state-word { justify-self: end; }
+.sub .model { grid-area: model; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub .metrics { grid-area: metrics; font: 12px var(--mono); color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sub .state-word { grid-area: state; justify-self: end; }
 
 .mark { width: 28px; height: 28px; overflow: visible; }
 .mark .shape { fill: transparent; stroke: var(--h); stroke-width: 2.3; stroke-linejoin: round; transition: fill 0.3s; }
@@ -236,14 +241,12 @@ a.crumb:hover { color: var(--ink-strong); }
 .branch > .node::before { content: ""; position: absolute; left: -12px; top: var(--sub-y); width: 20px; border-top: 1px solid var(--wire); }
 .subs > .branch:first-child:last-child > .node::before { left: -20px; width: 28px; }
 @container (max-width: 700px) {
-  .family, .family.solo { display: block; }
   .family:not(.solo) > .node::after { left: 28px; top: 100%; width: 0; height: 6px; border-top: 0; border-left: 1px solid var(--wire); }
   .subs { margin: 6px 0 0 16px; padding-left: 24px; }
   .subs > .branch:first-child::before { top: 0; }
   .subs > .branch:first-child:last-child::before { display: block; height: var(--sub-y); }
   .subs > .branch:first-child:last-child > .node::before { left: -12px; width: 20px; }
-  .node.sub { grid-template-columns: 20px minmax(0, 1fr) auto auto; }
-  .sub .model, .sub .id { display: none; }
+  .sub .id { display: none; }
 }
 
 .arc { fill: none; stroke-width: 1.2; }
@@ -448,7 +451,6 @@ a.crumb:hover { color: var(--ink-strong); }
   .layout, .layout[data-level] { grid-template-columns: minmax(0, 1fr); }
   .layout[data-level="project"][data-view="agents"] .context, .layout[data-level="project"][data-view="activity"] .board { display: none; }
   .context { border-left: 0; }
-  .tree { --root-w: 100%; }
   .keys { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
