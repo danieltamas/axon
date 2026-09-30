@@ -215,14 +215,18 @@ fn routes_path() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+        })
         .join("axon/routes.toml")
 }
 
 fn load_routes() -> anyhow::Result<Routes> {
     let path = routes_path();
-    let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let routes: Routes = toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let routes: Routes =
+        toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
     if routes.lanes.is_empty() {
         bail!("{} defines no [[lanes]]", path.display());
     }
@@ -267,11 +271,18 @@ pub fn route_task(
     let lane_index = |name: &str| routes.lanes.iter().position(|lane| lane.name == name);
     let (mut index, mut reason) = match role.map(|role| (role, routes.roles.get(role))) {
         Some((role, Some(name))) => {
-            let index = lane_index(name)
-                .with_context(|| format!("role {role} maps to lane {name}, which routes.toml does not define"))?;
+            let index = lane_index(name).with_context(|| {
+                format!("role {role} maps to lane {name}, which routes.toml does not define")
+            })?;
             (index, format!("role {role} maps to lane {name}"))
         }
-        Some((role, None)) => (0, format!("role {role} has no lane; first lane {}", routes.lanes[0].name)),
+        Some((role, None)) => (
+            0,
+            format!(
+                "role {role} has no lane; first lane {}",
+                routes.lanes[0].name
+            ),
+        ),
         None => (0, format!("no role; first lane {}", routes.lanes[0].name)),
     };
     if let Some(budget) = budget_usd {

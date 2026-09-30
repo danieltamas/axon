@@ -1,6 +1,8 @@
 //! Budgets (BUS-PLAN §6): a ceiling on a tree (set on its root) or on one agent. The gate
 //! warns the root at 80%, stops every member at 100%, and fails closed on stale usage.
 
+use std::collections::HashMap;
+
 use anyhow::{bail, Context};
 use axon_core::model::canonicalize_model;
 use axon_core::pricing::{Buckets, Pricing};
@@ -122,7 +124,12 @@ fn members(conn: &Connection, scope: &str, kind: &str) -> rusqlite::Result<Vec<S
 
 /// Usage over the scope's members, priced per model from axon-core's bundled USD rates.
 /// With `priced` false the cost is left unknown, sparing the hook path the rate table.
-fn totals(conn: &Connection, budget_scope: &str, kind: &str, priced: bool) -> anyhow::Result<Totals> {
+fn totals(
+    conn: &Connection,
+    budget_scope: &str,
+    kind: &str,
+    priced: bool,
+) -> anyhow::Result<Totals> {
     let member_filter = if kind == "agent" {
         "u.agent_id=?1"
     } else {
@@ -134,12 +141,7 @@ fn totals(conn: &Connection, budget_scope: &str, kind: &str, priced: bool) -> an
                 sum(u.cost_usd), count(u.cost_usd), count(*), max(coalesce(u.received_at, u.ts))
          FROM usage u WHERE {member_filter} GROUP BY u.model"
     ))?;
-    // Budgets are in USD, so the display-currency FX is not applied.
-    let pricing = priced.then(|| {
-        let mut pricing = Pricing::bundled();
-        pricing.fx_to_display = None;
-        pricing
-    });
+    let pricing = priced.then(usd_pricing);
     let mut totals = Totals {
         tokens: 0,
         cost_usd: priced.then_some(0.0),
@@ -161,22 +163,93 @@ fn totals(conn: &Connection, budget_scope: &str, kind: &str, priced: bool) -> an
             + buckets.cache_read
             + buckets.cache_write_5m
             + buckets.cache_write_1h) as i64;
-        let reported: f64 = r.get::<_, Option<f64>>(6)?.unwrap_or(0.0);
-        let (reported_rows, all_rows): (i64, i64) = (r.get(7)?, r.get(8)?);
-        let row_cost = if reported_rows == all_rows {
-            Some(reported)
-        } else if let Some(pricing) = &pricing {
-            // Rows without a reported cost are priced from their buckets; a model without
-            // rates makes the whole total unknown. Mixed groups are not expected per model.
-            let (cost, unpriced) = pricing.cost(&canonicalize_model(&model), &buckets);
-            (!unpriced).then_some(cost)
-        } else {
-            None
-        };
+        let row_cost = group_cost(pricing.as_ref(), &model, &buckets, r, 6)?;
         totals.cost_usd = totals.cost_usd.zip(row_cost).map(|(a, b)| a + b);
         totals.newest_ts = totals.newest_ts.max(r.get(9)?);
     }
     Ok(totals)
+}
+
+/// Budgets are in USD, so the display-currency FX is not applied.
+pub(crate) fn usd_pricing() -> Pricing {
+    let mut pricing = Pricing::bundled();
+    pricing.fx_to_display = None;
+    pricing
+}
+
+/// One model group's cost from columns `at` (sum of reported cost), `at+1` (rows with a
+/// reported cost) and `at+2` (all rows): the reported sum when every row has one, else
+/// priced from the buckets. None when the model has no rates (an unknown model is not
+/// free) or pricing was not asked for. Mixed groups are not expected per model.
+fn group_cost(
+    pricing: Option<&Pricing>,
+    model: &str,
+    buckets: &Buckets,
+    r: &rusqlite::Row,
+    at: usize,
+) -> rusqlite::Result<Option<f64>> {
+    let reported: f64 = r.get::<_, Option<f64>>(at)?.unwrap_or(0.0);
+    let (reported_rows, all_rows): (i64, i64) = (r.get(at + 1)?, r.get(at + 2)?);
+    if reported_rows == all_rows {
+        return Ok(Some(reported));
+    }
+    Ok(pricing.and_then(|pricing| {
+        let (cost, unpriced) = pricing.cost(&canonicalize_model(model), buckets);
+        (!unpriced).then_some(cost)
+    }))
+}
+
+/// Every agent's USD cost in one pass for the dashboard; None where any usage is unpriced.
+pub fn agent_costs(conn: &Connection) -> anyhow::Result<HashMap<String, Option<f64>>> {
+    let pricing = usd_pricing();
+    let mut stmt = conn.prepare(
+        "SELECT agent_id, model, sum(input_tokens), sum(output_tokens), sum(cache_read_tokens),
+                sum(cache_write_tokens), sum(cache_write_1h_tokens),
+                sum(cost_usd), count(cost_usd), count(*)
+         FROM usage GROUP BY agent_id, model",
+    )?;
+    let mut costs: HashMap<String, Option<f64>> = HashMap::new();
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let model: String = r.get(1)?;
+        let bucket = |i| r.get::<_, i64>(i).map(|v| v.max(0) as u64);
+        let buckets = Buckets {
+            input: bucket(2)?,
+            output: bucket(3)?,
+            cache_read: bucket(4)?,
+            cache_write_5m: bucket(5)?,
+            cache_write_1h: bucket(6)?,
+        };
+        let cost = group_cost(Some(&pricing), &model, &buckets, r, 7)?;
+        let total = costs.entry(r.get(0)?).or_insert(Some(0.0));
+        *total = total.zip(cost).map(|(a, b)| a + b);
+    }
+    Ok(costs)
+}
+
+/// Every budget as the dashboard draws it: the fraction used, keyed by scope.
+pub fn gauges(conn: &Connection) -> anyhow::Result<HashMap<String, Value>> {
+    let mut stmt = conn.prepare("SELECT scope_id FROM budgets")?;
+    let scopes: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut gauges = HashMap::new();
+    for scope in scopes {
+        let Some(budget) = load(conn, &scope)? else {
+            continue;
+        };
+        let totals = totals(conn, &scope, &budget.kind, true)?;
+        let gauge = json!({
+            "kind": budget.kind,
+            "used": used(&budget, &totals),
+            "state": budget.state,
+            "tokens_max": budget.tokens_max,
+            "usd_max": budget.usd_max,
+            "cost_usd": totals.cost_usd,
+        });
+        gauges.insert(scope, gauge);
+    }
+    Ok(gauges)
 }
 
 /// What one agent's usage cost in USD; None when it has no usage or any of it is unpriced.
@@ -260,7 +333,9 @@ fn check_scope(conn: &Connection, budget: &Budget, root: &str) -> anyhow::Result
     if used >= 1.0 {
         // The denial stands even if recording the stop fails (§2: this gate fails closed).
         if let Err(err) = stop_members(conn, budget, &totals, &spent) {
-            eprintln!("axon-bus: budget of {scope} reached, but recording its stop failed: {err:#}");
+            eprintln!(
+                "axon-bus: budget of {scope} reached, but recording its stop failed: {err:#}"
+            );
         }
         return Ok(Some(exhausted));
     }
@@ -318,7 +393,12 @@ fn check_scope(conn: &Connection, budget: &Budget, root: &str) -> anyhow::Result
     Ok(None)
 }
 
-fn stop_members(conn: &Connection, budget: &Budget, totals: &Totals, spent: &str) -> anyhow::Result<()> {
+fn stop_members(
+    conn: &Connection,
+    budget: &Budget,
+    totals: &Totals,
+    spent: &str,
+) -> anyhow::Result<()> {
     let scope = budget.scope_id.as_str();
     set_state(conn, scope, "stopped")?;
     let body = format!("budget of {scope} reached: {spent}");
@@ -333,7 +413,13 @@ fn stop_members(conn: &Connection, budget: &Budget, totals: &Totals, spent: &str
             msg::from_bus(conn, scope, &member, "stop", &body)?;
         }
     }
-    append_event(conn, msg::BUS, "budget_stop", scope, &json!({"tokens": totals.tokens}).to_string())
+    append_event(
+        conn,
+        msg::BUS,
+        "budget_stop",
+        scope,
+        &json!({"tokens": totals.tokens}).to_string(),
+    )
 }
 
 fn ceiling(budget: &Budget) -> String {

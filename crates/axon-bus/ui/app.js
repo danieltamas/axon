@@ -1,236 +1,182 @@
-// Axon Bus dashboard: renders /api/stream snapshots. Agent-supplied text only ever goes
-// through textContent, never markup.
-"use strict";
+// Axon Bus dashboard: renders /api/stream snapshots at two levels — every project, and
+// one project's topology beside its context rail (conversations, one agent, or one
+// thread). Agent-supplied text only ever goes through textContent, never markup.
+
+import { createArcs } from "./arcs.js";
+import { createBoard } from "./board.js";
+import { createContext } from "./context.js";
+import { agents, bytes, el, setText, tokens, usd } from "./dom.js";
+import { createOverview, projectKey, summarize } from "./overview.js";
 
 const token = document.querySelector('meta[name="axon-token"]').content;
-const state = { snapshot: { repos: [] }, selected: null, openRuns: new Set(), form: null };
+const $ = (id) => document.getElementById(id);
+// `selected` (an agent) and `thread` are exclusive: the rail shows one context at a time.
+const state = { snapshot: { repos: [] }, project: null, selected: null, thread: null };
 
-// One original mark per harness: never a vendor logo.
-const GLYPHS = {
-  claude: "M12 3 21 12 12 21 3 12Z",
-  codex: "M4 4h16v16H4Z",
-  opencode: "M12 3a9 9 0 1 0 0.01 0Z",
-  hermes: "M12 3 21 20H3Z",
-  virtual: "M12 2 20.7 7v10L12 22 3.3 17V7Z",
-};
+const layout = $("layout");
+const overview = createOverview($("overview"), (key) => {
+  location.hash = `#/p/${encodeURIComponent(key)}`;
+});
+const board = createBoard($("tree"), $("board"), (id) => focus({ selected: state.selected === id ? null : id }));
+const arcs = createArcs({ board, boardEl: $("board"), overlay: $("arcs") });
+const context = createContext($("context"), {
+  token,
+  onThread: (thread) => focus({ thread }),
+  onBack: () => focus({}),
+});
 
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined && text !== null) node.textContent = String(text);
-  return node;
+function focus({ selected = null, thread = null }) {
+  state.selected = selected;
+  state.thread = thread;
+  if (selected || thread) setView("activity");
+  render();
 }
 
-function glyph(harness) {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("class", `glyph h-${GLYPHS[harness] ? harness : "virtual"}`);
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS(ns, "path");
-  path.setAttribute("d", GLYPHS[harness] || GLYPHS.virtual);
-  svg.append(path);
-  return svg;
+// Below 860px one pane shows at a time: the agents, or the activity rail.
+function setView(view) {
+  layout.dataset.view = view;
+  for (const tab of document.querySelectorAll("[data-tab]")) tab.setAttribute("aria-selected", String(tab.dataset.tab === view));
 }
+for (const tab of document.querySelectorAll("[data-tab]")) tab.addEventListener("click", () => setView(tab.dataset.tab));
 
-function tokens(n) {
-  if (!n) return "0";
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return String(n);
-}
-
-function walk(nodes, visit) {
-  for (const node of nodes) {
-    visit(node);
-    walk(node.children || [], visit);
+// The hash is the level: `#/` is every project, `#/p/<repo>` one project, so the back
+// button walks out of a project.
+function route() {
+  const match = location.hash.match(/^#\/p\/(.+)$/);
+  const project = match ? decodeURIComponent(match[1]) : null;
+  if (project !== state.project) {
+    state.project = project;
+    state.selected = null;
+    state.thread = null;
   }
+  layout.dataset.level = project ? "project" : "overview";
+  document.body.dataset.level = layout.dataset.level;
+  setView("agents");
+  render();
+}
+window.addEventListener("hashchange", route);
+
+function currentRepo() {
+  return (state.snapshot.repos || []).find((repo) => projectKey(repo) === state.project) || null;
 }
 
-function everyNode() {
-  const all = [];
-  for (const repo of state.snapshot.repos)
-    for (const h of repo.harnesses) walk(h.roots, (n) => all.push(n));
-  return all;
+function renderCrumbs(repo) {
+  const crumbs = $("crumbs");
+  const key = state.project ? `${state.project}|${repo ? repo.name : ""}` : "";
+  if (crumbs.dataset.key === key) return;
+  crumbs.dataset.key = key;
+  if (!state.project) {
+    crumbs.replaceChildren(el("span", "crumb here", "Projects"));
+    return;
+  }
+  const back = el("a", "crumb", "Projects");
+  back.href = "#/";
+  const here = el("span", "crumb here", repo ? repo.name : "Closed project");
+  here.setAttribute("aria-current", "page");
+  crumbs.replaceChildren(back, el("span", "crumb-sep", "/"), here);
 }
 
-function renderCounts() {
-  const all = everyNode();
-  const count = (s) => all.filter((n) => n.status === s).length;
-  const box = document.getElementById("counts");
-  box.replaceChildren(
-    ...[["active", count("active")], ["idle", count("idle")], ["agents", all.length]].map(([label, n]) => {
-      const item = el("span", `count c-${label}`);
-      item.append(el("b", null, n), el("span", null, label));
-      return item;
-    }),
+// The project's name, one line of totals, and what needs the operator, each item a
+// shortcut to the thread or agent it is about.
+function renderProjectHead(repo, s) {
+  const head = $("project-head");
+  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention]) : "";
+  if (head.dataset.key === key) return;
+  head.dataset.key = key;
+  if (!repo) {
+    head.replaceChildren();
+    return;
+  }
+  const title = el("h1", null, repo.name);
+  title.title = repo.repo || "";
+  const f = s.facts;
+  const totals = el(
+    "p",
+    "totals",
+    [
+      `${f.sessions} ${f.sessions === 1 ? "session" : "sessions"}`,
+      `${f.working} working`,
+      f.agents > f.sessions ? `${f.agents - f.sessions} subagents` : null,
+      `${tokens(f.tokens)} tokens`,
+      f.cost ? usd(f.cost) : null,
+      f.unpriced ? `${f.unpriced} unpriced` : null,
+      f.rss ? bytes(f.rss) : null,
+    ]
+      .filter(Boolean)
+      .join("  ·  "),
   );
-}
-
-function nodeRow(node, depth) {
-  const row = el("button", "node");
-  row.type = "button";
-  row.dataset.status = node.status;
-  row.style.setProperty("--depth", depth);
-  row.setAttribute("aria-pressed", String(state.selected === node.id));
-  row.addEventListener("click", () => {
-    state.selected = node.id;
-    render();
-  });
-  const name = el("span", "name");
-  name.append(el("span", "dot"), glyph(node.harness), el("span", "id", node.role ? `${node.role} · ${node.id}` : node.id));
-  const meta = el("span", "meta");
-  if (node.model) meta.append(el("span", "model", node.model));
-  if (node.branch && depth === 0) meta.append(el("span", "badge branch", node.branch));
-  if (node.repo_badge) meta.append(el("span", "badge repo", node.repo_badge.split("/").pop()));
-  meta.append(el("span", "tok", tokens(node.tokens)));
-  row.append(name, meta);
-  const items = [row];
-  for (const child of node.children || []) items.push(...nodeRow(child, depth + 1));
-  return items;
-}
-
-function renderTree() {
-  const tree = document.getElementById("tree");
-  if (!state.snapshot.repos.length) {
-    tree.replaceChildren(el("p", "empty", "No agents yet. Start a Claude, Codex, OpenCode or Hermes session with the hooks installed."));
-    return;
+  head.replaceChildren(title, totals);
+  if (!s.attention.length) return;
+  const list = el("ul", "needs");
+  for (const a of s.attention) {
+    const item = el("li");
+    const button = el("button", `need n-${a.level}`);
+    button.type = "button";
+    button.append(el("span", null, a.text), el("b", null, a.count > 1 ? `×${a.count}` : ""));
+    button.addEventListener("click", () => (a.thread ? focus({ thread: a.thread }) : focus({ selected: a.agent })));
+    item.append(button);
+    list.append(item);
   }
-  tree.replaceChildren(
-    ...state.snapshot.repos.map((repo) => {
-      const group = el("section", "repo");
-      const head = el("h2", "repo-name", repo.name);
-      if (repo.repo) head.title = repo.repo;
-      group.append(head);
-      for (const h of repo.harnesses) {
-        const lane = el("div", "harness");
-        const label = el("h3", "harness-name");
-        label.append(glyph(h.harness), el("span", null, h.harness));
-        lane.append(label);
-        for (const root of h.roots) lane.append(...nodeRow(root, 0));
-        group.append(lane);
-      }
-      return group;
-    }),
-  );
-}
-
-function narrativeRow(row, index) {
-  if (row.kind === "tool_run") {
-    const key = `${state.selected}:${index}`;
-    const run = el("details", "row tools");
-    run.open = state.openRuns.has(key);
-    run.addEventListener("toggle", () => (run.open ? state.openRuns.add(key) : state.openRuns.delete(key)));
-    const counts = {};
-    for (const t of row.tools) counts[t.name] = (counts[t.name] || 0) + 1;
-    const summary = el("summary", null, Object.entries(counts).map(([n, c]) => `${c} ${n}`).join(" · "));
-    const failed = row.tools.filter((t) => t.failed).length;
-    if (failed) summary.append(el("span", "failed", ` · ${failed} failed`));
-    const list = el("ul");
-    for (const t of row.tools) list.append(el("li", t.failed ? "failed" : null, t.detail ? `${t.name}  ${t.detail}` : t.name));
-    run.append(summary, list);
-    return run;
-  }
-  const item = el("article", `row ${row.kind}`);
-  const label = row.kind === "reasoning" && !row.recorded ? row.label : row.kind;
-  const head = el("header", null, label);
-  if (row.tokens) head.append(el("span", "tok", `${tokens(row.tokens)} tokens`));
-  item.append(head);
-  if (row.text) item.append(el("p", null, row.text));
-  else if (row.kind !== "reasoning" || row.recorded) item.append(el("p", "structure", "content capture is off"));
-  return item;
-}
-
-function senderFor(node) {
-  const all = everyNode();
-  const parent = all.find((n) => (n.children || []).some((c) => c.id === node.id));
-  return parent ? parent.id : null;
-}
-
-function messageForm(node) {
-  const form = el("form", "send");
-  const from = senderFor(node);
-  if (!from) {
-    form.append(el("p", "hint", "Roots take messages from their children or linked roots."));
-    return form;
-  }
-  const kind = el("select");
-  for (const k of ["stop", "redirect", "question", "sync"]) kind.append(new Option(k, k));
-  const body = el("input");
-  body.maxLength = 400;
-  body.required = true;
-  body.placeholder = `Message ${node.id} as ${from}`;
-  const button = el("button", null, "Send");
-  const status = el("output");
-  form.append(kind, body, button, status);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const response = await fetch("/api/msg", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Axon-Token": token },
-      body: JSON.stringify({ from_id: from, to_id: node.id, kind: kind.value, body: body.value }),
-    });
-    const reply = await response.json().catch(() => ({}));
-    status.textContent = response.ok ? "sent" : reply.error || `failed (${response.status})`;
-    if (response.ok) body.value = "";
-  });
-  return form;
-}
-
-function renderDetail() {
-  const detail = document.getElementById("detail");
-  const node = everyNode().find((n) => n.id === state.selected);
-  if (!node) {
-    detail.replaceChildren(el("p", "empty", "Select an agent to follow what it says and thinks."));
-    return;
-  }
-  const head = el("header", "agent");
-  const title = el("h2");
-  title.append(glyph(node.harness), el("span", null, node.id));
-  const facts = el("dl");
-  for (const [k, v] of [["status", node.status], ["model", node.model], ["role", node.role], ["branch", node.branch], ["tokens", tokens(node.tokens)]]) {
-    if (v) facts.append(el("dt", null, k), el("dd", null, v));
-  }
-  head.append(title, facts);
-  if (node.mission) head.append(el("p", "mission", node.mission));
-  const stream = el("div", "narrative");
-  const rows = node.narrative || [];
-  if (!rows.length) stream.append(el("p", "empty", "Nothing recorded yet."));
-  rows.forEach((row, i) => stream.append(narrativeRow(row, i)));
-  // The form survives snapshot updates in place, so a half-typed message keeps its text
-  // and focus; it is rebuilt only when the recipient or the sender changes.
-  const formKey = `${node.id}\n${senderFor(node)}`;
-  if (state.form && state.form.key === formKey && state.form.element.parentNode === detail) {
-    while (detail.firstChild !== state.form.element) detail.firstChild.remove();
-    detail.insertBefore(head, state.form.element);
-    detail.insertBefore(stream, state.form.element);
-    return;
-  }
-  state.form = { key: formKey, element: messageForm(node) };
-  detail.replaceChildren(head, stream, state.form.element);
+  head.append(list);
 }
 
 function render() {
-  renderCounts();
-  renderTree();
-  renderDetail();
+  const repo = state.project ? currentRepo() : null;
+  renderCrumbs(repo);
+  if (!state.project) {
+    overview.render(state.snapshot, Date.now());
+    return;
+  }
+  const messages = state.snapshot.messages || [];
+  const s = repo ? summarize(repo, messages, Date.now()) : { ids: new Set(), facts: {}, attention: [] };
+  if (state.selected && !s.ids.has(state.selected)) state.selected = null;
+  renderProjectHead(repo, s);
+  board.render(repo, state.selected);
+  arcs.update(state.snapshot, { visible: s.ids, thread: state.thread });
+  const scoped = messages.filter((m) => s.ids.has(m.from) || s.ids.has(m.to));
+  const found = state.selected && agents(state.snapshot).find((a) => a.node.id === state.selected);
+  const view = found ? { kind: "agent", found } : state.thread ? { kind: "thread", id: state.thread } : { kind: "list" };
+  context.render(view, { messages: scoped, links: state.snapshot.links || [], content: state.snapshot.content });
 }
 
 function connect() {
-  const link = document.getElementById("link");
+  const link = $("link");
   const source = new EventSource("/api/stream");
   source.addEventListener("open", () => {
     link.dataset.state = "live";
-    link.textContent = "live";
+    setText(link, "Live");
   });
   source.addEventListener("snapshot", (event) => {
     state.snapshot = JSON.parse(event.data);
-    render();
+    requestAnimationFrame(render);
   });
   source.addEventListener("error", () => {
     link.dataset.state = "down";
-    link.textContent = "reconnecting";
+    setText(link, "Reconnecting");
   });
 }
 
+const THEMES = ["auto", "light", "dark"];
+function applyTheme(theme) {
+  if (theme === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $("theme").dataset.mode = theme;
+  $("theme").setAttribute("aria-label", `Theme: ${theme}`);
+  try {
+    localStorage.setItem("axon-bus-theme", theme);
+  } catch {
+    // Storage can be off; the theme then lasts for this page only.
+  }
+}
+$("theme").addEventListener("click", () => applyTheme(THEMES[(THEMES.indexOf($("theme").dataset.mode) + 1) % THEMES.length]));
+let saved = "auto";
+try {
+  saved = localStorage.getItem("axon-bus-theme") || "auto";
+} catch {
+  // As above: no storage, no remembered theme.
+}
+applyTheme(THEMES.includes(saved) ? saved : "auto");
+
+new ResizeObserver(() => arcs.redraw()).observe($("tree"));
+route();
 connect();

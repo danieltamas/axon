@@ -1,0 +1,189 @@
+// One project's topology (BUS-PLAN §7.1): a section per harness, and in it each root
+// session with its subagents beside it. Cards are kept by agent id and updated in place,
+// so a snapshot at 50 events a second changes text, not DOM, and a pulse never restarts.
+
+import { bytes, el, glyph, mark, setRing, setText, since, STATUS, tokens, usd, walk } from "./dom.js";
+
+const HARNESS_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", hermes: "Hermes" };
+
+export function harnessName(harness) {
+  return HARNESS_NAMES[harness] || harness;
+}
+
+export function createBoard(container, scroller, onSelect) {
+  const cards = new Map();
+  const sums = new Map();
+  let shape = "";
+
+  function card(node) {
+    let entry = cards.get(node.id);
+    if (entry) return entry;
+    const button = el("button", "node");
+    button.type = "button";
+    button.dataset.id = node.id;
+    button.addEventListener("click", () => onSelect(node.id));
+    const ring = mark(node.harness);
+    const who = el("span", "who");
+    const role = el("span", "role");
+    const id = el("span", "id");
+    const status = el("span", "state-word");
+    who.append(role, id);
+    const mission = el("span", "mission");
+    const model = el("span", "model");
+    const metrics = el("span", "metrics");
+    const notes = el("span", "notes");
+    button.append(ring, who, status, mission, model, metrics, notes);
+    entry = { button, ring, role, id, status, mission, model, metrics, notes };
+    cards.set(node.id, entry);
+    return entry;
+  }
+
+  function update(entry, node, depth, selected, now) {
+    const b = entry.button;
+    if (b.dataset.status !== node.status) b.dataset.status = node.status;
+    b.dataset.depth = depth;
+    b.classList.toggle("observed", Boolean(node.observed));
+    b.setAttribute("aria-pressed", String(selected === node.id));
+    b.setAttribute("aria-label", `${node.role || "agent"} ${node.id}, ${STATUS[node.status] || node.status}`);
+    setRing(entry.ring, node.budget);
+    setText(entry.role, roleLabel(node));
+    setText(entry.id, node.observed ? `pid ${node.pid || node.id.split("-").pop()}` : node.id);
+    setText(entry.status, STATUS[node.status] || node.status);
+    // An observed session has no mission; when it last worked is the next best thing.
+    setText(entry.mission, node.mission || (node.observed && node.last_ts ? `Last turn ${since(node.last_ts, now)}` : ""));
+    setText(entry.model, node.model || (node.observed ? "no turns ingested yet" : ""));
+    setText(entry.metrics, metricsLine(node));
+    setText(entry.notes, notesLine(node, depth));
+  }
+
+  // A subagent and, nested under it, its own subagents.
+  function branch(node) {
+    const box = el("div", "branch");
+    box.append(card(node).button);
+    if (node.children && node.children.length) {
+      const kids = el("div", "kids");
+      kids.append(...node.children.map(branch));
+      box.append(kids);
+    }
+    return box;
+  }
+
+  function family(root) {
+    const box = el("div", "family");
+    const subs = el("div", "subs");
+    subs.append(...(root.children || []).map(branch));
+    box.classList.toggle("solo", !subs.childElementCount);
+    box.append(card(root).button, subs);
+    return box;
+  }
+
+  function skeleton(repo) {
+    sums.clear();
+    if (!repo || !repo.harnesses.length) return [empty()];
+    return repo.harnesses.map((lane) => {
+      const section = el("section", "lane");
+      const head = el("header", "lane-head");
+      const name = el("h3");
+      name.append(glyph(lane.harness), el("span", null, harnessName(lane.harness)));
+      const sum = el("span", "sum");
+      sums.set(lane.harness, sum);
+      head.append(name, sum);
+      const roots = el("div", "roots");
+      roots.append(...lane.roots.map(family));
+      section.append(head, roots);
+      return section;
+    });
+  }
+
+  // The skeleton is rebuilt only when the tree's shape changes; everything else is an
+  // in-place update.
+  function render(repo, selected) {
+    const nextShape = repo ? JSON.stringify(repo.harnesses.map((h) => [h.harness, ids(h.roots)])) : "";
+    if (nextShape !== shape || !container.childElementCount) {
+      shape = nextShape;
+      container.replaceChildren(...skeleton(repo));
+    }
+    const now = Date.now();
+    const seen = new Set();
+    for (const lane of repo ? repo.harnesses : []) {
+      let count = 0;
+      let active = 0;
+      let cost = 0;
+      walk(lane.roots, (node, depth) => {
+        seen.add(node.id);
+        if (depth === 0) count += 1;
+        if (depth === 0 && node.status === "active") active += 1;
+        cost += node.cost_usd || 0;
+        update(card(node), node, depth, selected, now);
+      });
+      const sum = sums.get(lane.harness);
+      if (sum) setText(sum, `${active} of ${count} working${cost ? ` · ${usd(cost)}` : ""}`);
+    }
+    for (const id of cards.keys()) if (!seen.has(id)) cards.delete(id);
+  }
+
+  return {
+    render,
+    // Where an agent sits, in the scroller's content coordinates: its mark's centre and
+    // left edge, and its card's right edge. Null when not shown.
+    anchor(id) {
+      const entry = cards.get(id);
+      if (!entry || !entry.button.isConnected || !entry.button.offsetParent) return null;
+      const origin = scroller.getBoundingClientRect();
+      const dx = scroller.scrollLeft - origin.left;
+      const dy = scroller.scrollTop - origin.top;
+      const ring = entry.ring.getBoundingClientRect();
+      const box = entry.button.getBoundingClientRect();
+      return {
+        x: ring.left + dx + ring.width / 2,
+        y: ring.top + dy + ring.height / 2,
+        left: ring.left + dx,
+        right: box.right + dx,
+      };
+    },
+    flash(id, kind) {
+      const entry = cards.get(id);
+      if (!entry) return;
+      entry.button.dataset.hit = kind;
+      entry.button.classList.remove("hit");
+      void entry.button.offsetWidth;
+      entry.button.classList.add("hit");
+    },
+  };
+}
+
+function roleLabel(node) {
+  const role = node.role || "agent";
+  // Two-letter roles are initialisms (QA, PM), not words.
+  return role.length <= 2 ? role.toUpperCase() : role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+// Tokens, price, memory the agent owns, and its budget: whatever is known, nothing padded.
+export function metricsLine(node) {
+  const parts = [`${tokens(node.tokens)} tok`];
+  if (node.cost_usd !== null && node.cost_usd !== undefined && !node.unpriced) parts.push(usd(node.cost_usd));
+  else if (node.unpriced && node.tokens) parts.push("unpriced");
+  if (node.rss) parts.push(bytes(node.rss));
+  if (node.budget) parts.push(`${Math.round(node.budget.used * 100)}% budget`);
+  return parts.join(" · ");
+}
+
+function notesLine(node, depth) {
+  const notes = [];
+  if (depth === 0 && node.branch && node.branch !== "main" && node.branch !== "master") notes.push(`on ${node.branch}`);
+  if (node.repo_badge) notes.push(`working in ${node.repo_badge.split("/").pop()}`);
+  return notes.join(" · ");
+}
+
+function ids(roots) {
+  return roots.map((n) => [n.id, ids(n.children || [])]);
+}
+
+function empty() {
+  const box = el("div", "empty-board");
+  box.append(
+    el("p", "empty-title", "Nothing is running here"),
+    el("p", null, "Sessions in this project closed more than 15 minutes ago. Start one in the repository and it appears within a few seconds."),
+  );
+  return box;
+}

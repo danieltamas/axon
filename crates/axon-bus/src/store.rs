@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS messages (
     needs_reply   INTEGER NOT NULL DEFAULT 0,
     deadline      INTEGER,
     default_reply TEXT,
+    sent_at       INTEGER,
     delivered_at  INTEGER,
     acked_at      INTEGER
 );
@@ -180,7 +181,11 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
 /// Columns added after their table first shipped; `CREATE TABLE IF NOT EXISTS`
 /// leaves an existing table as it was.
 fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
-    for (table, column, kind) in [("agents", "effort", "TEXT"), ("usage", "received_at", "INTEGER")] {
+    for (table, column, kind) in [
+        ("agents", "effort", "TEXT"),
+        ("usage", "received_at", "INTEGER"),
+        ("messages", "sent_at", "INTEGER"),
+    ] {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
             [table, column],

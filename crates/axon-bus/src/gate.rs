@@ -50,7 +50,11 @@ pub fn verdict(
                 Some(reason) => Ok(Some(reason)),
                 None => budget::check(conn, actor),
             })
-            .unwrap_or_else(|err| Some(format!("axon-bus could not check stops and budgets: {err:#}")));
+            .unwrap_or_else(|err| {
+                Some(format!(
+                    "axon-bus could not check stops and budgets: {err:#}"
+                ))
+            });
         if let Some(reason) = stopped.or_else(|| cli_guard::refusal(actor, payload)) {
             return Ok(Some(deny(harness, reason)));
         }

@@ -4,24 +4,38 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="axon-token" content="{{token}}">
-<title>Axon Bus</title>
+<meta name="color-scheme" content="light dark">
+<title>Axon</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%2334d399' stroke-width='2.2'%3E%3Ccircle cx='5' cy='12' r='2.6'/%3E%3Ccircle cx='19' cy='5' r='2.6'/%3E%3Ccircle cx='19' cy='19' r='2.6'/%3E%3Cpath d='M7.4 10.9 16.6 6.1M7.4 13.1l9.2 4.8'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="stylesheet" href="/style.css">
-<script src="/app.js" defer></script>
+<script type="module" src="/app.js"></script>
 </head>
 <body>
 <header class="bar">
-  <div class="brand">
-    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.2 11 16.8 6M7.2 13l9.6 5"/></svg>
-    <span>Axon Bus</span>
+  <a class="brand" href="#/" aria-label="Axon: all projects">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.6"/><circle cx="19" cy="5" r="2.6"/><circle cx="19" cy="19" r="2.6"/><path d="M7.4 10.9 16.6 6.1M7.4 13.1l9.2 4.8"/></svg>
+    <span class="wordmark">AXON</span>
+  </a>
+  <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
+  <div class="bar-end">
+    <span class="link" id="link" data-state="connecting">Connecting</span>
+    <button class="theme" id="theme" type="button" data-mode="auto" aria-label="Theme: auto">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path class="half" d="M12 4a8 8 0 0 1 0 16Z"/></svg>
+    </button>
   </div>
-  <div class="counts" id="counts"></div>
-  <div class="link" id="link" data-state="connecting">connecting</div>
 </header>
-<main class="layout">
-  <section class="tree" id="tree" aria-label="Agents by repository"></section>
-  <aside class="detail" id="detail" aria-live="polite">
-    <p class="empty">Select an agent to follow what it says and thinks.</p>
-  </aside>
+<nav class="tabs" role="tablist" aria-label="Views">
+  <button type="button" role="tab" data-tab="agents" aria-controls="board" aria-selected="true">Agents</button>
+  <button type="button" role="tab" data-tab="activity" aria-controls="context" aria-selected="false">Activity</button>
+</nav>
+<main class="layout" id="layout" data-level="overview" data-view="agents">
+  <section class="overview" id="overview" aria-label="Projects"></section>
+  <section class="board" id="board" aria-label="Project topology">
+    <header class="project-head" id="project-head"></header>
+    <svg class="arcs" id="arcs" aria-hidden="true"></svg>
+    <div class="tree" id="tree"></div>
+  </section>
+  <aside class="context" id="context" aria-label="Activity"></aside>
 </main>
 </body>
 </html>

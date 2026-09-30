@@ -24,11 +24,22 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
 
+use crate::memory::Sampler;
+use crate::observed::Observer;
 use crate::{msg, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
-const APP_JS: &str = include_str!("../ui/app.js");
-const STYLE_CSS: &str = include_str!("../ui/style.css");
+/// The page's static files, embedded: path, content type, body.
+const ASSETS: [(&str, &str, &str); 8] = [
+    ("/app.js", "text/javascript", include_str!("../ui/app.js")),
+    ("/arcs.js", "text/javascript", include_str!("../ui/arcs.js")),
+    ("/board.js", "text/javascript", include_str!("../ui/board.js")),
+    ("/context.js", "text/javascript", include_str!("../ui/context.js")),
+    ("/dom.js", "text/javascript", include_str!("../ui/dom.js")),
+    ("/overview.js", "text/javascript", include_str!("../ui/overview.js")),
+    ("/send.js", "text/javascript", include_str!("../ui/send.js")),
+    ("/style.css", "text/css", include_str!("../ui/style.css")),
+];
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
                    connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -40,6 +51,8 @@ const POLL: Duration = Duration::from_millis(100);
 /// How often the poller renews the capture lease and runs retention; well inside the
 /// lease, so capture stays on while `serve --content` runs.
 const RENEW_EVERY: Duration = Duration::from_secs(10);
+/// How often the agents' process memory is re-read.
+const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 
 struct App {
     db: PathBuf,
@@ -59,7 +72,12 @@ pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> an
     runtime.block_on(serve(db.to_owned(), port, ready_file, content))
 }
 
-async fn serve(db: PathBuf, port: u16, ready_file: Option<&Path>, content: bool) -> anyhow::Result<()> {
+async fn serve(
+    db: PathBuf,
+    port: u16,
+    ready_file: Option<&Path>,
+    content: bool,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     let address: SocketAddr = listener.local_addr()?;
     let origin = format!("http://{address}");
@@ -71,10 +89,11 @@ async fn serve(db: PathBuf, port: u16, ready_file: Option<&Path>, content: bool)
         token: token.clone(),
         snapshots: watch_database(db, content)?,
     });
-    let router = Router::new()
-        .route("/", get(index))
-        .route("/app.js", get(|| async { asset("text/javascript", APP_JS) }))
-        .route("/style.css", get(|| async { asset("text/css", STYLE_CSS) }))
+    let mut router = Router::new().route("/", get(index));
+    for (path, content_type, body) in ASSETS {
+        router = router.route(path, get(move || async move { asset(content_type, body) }));
+    }
+    let router = router
         .route("/api/snapshot", get(snapshot_json))
         .route("/api/stream", get(stream))
         .route("/api/msg", post(send))
@@ -121,11 +140,15 @@ fn write_ready(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
 fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<Arc<String>>> {
     let conn = store::open(&db)?;
     let mut cache = HashMap::new();
-    let first = snapshot::build(&conn, &mut cache)?.to_string();
+    let mut memory = Sampler::new();
+    let mut observer = Observer::default();
+    memory.sample(&conn)?;
+    let first = snapshot::build(&conn, &mut cache, &memory, &mut observer)?.to_string();
     let (sender, receiver) = watch::channel(Arc::new(first));
     std::thread::spawn(move || {
         let mut seen: Option<i64> = None;
         let mut renewed_at: Option<Instant> = None;
+        let mut sampled_at = Instant::now();
         loop {
             if renewed_at.map_or(true, |at| at.elapsed() >= RENEW_EVERY) {
                 let upkeep = transcript::set_capture(&conn, content)
@@ -137,11 +160,21 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
             }
             std::thread::sleep(POLL);
             let version = conn.query_row("PRAGMA data_version", [], |r| r.get(0)).ok();
-            if version == seen {
+            // Memory, open sessions and observed activity move without touching the
+            // database, so they rebuild on their own slower clock.
+            let mut sampled = false;
+            if sampled_at.elapsed() >= SAMPLE_EVERY {
+                sampled_at = Instant::now();
+                sampled = true;
+                if let Err(err) = memory.sample(&conn) {
+                    eprintln!("axon-bus: memory sample failed: {err:#}");
+                }
+            }
+            if version == seen && !sampled {
                 continue;
             }
             seen = version;
-            match snapshot::build(&conn, &mut cache) {
+            match snapshot::build(&conn, &mut cache, &memory, &mut observer) {
                 Ok(tree) => {
                     let tree = tree.to_string();
                     sender.send_if_modified(|current| {
@@ -167,7 +200,11 @@ fn loopback_host(headers: &HeaderMap, port: u16) -> bool {
 /// Compared in constant time, so response timing does not reveal the token.
 fn same_secret(given: &[u8], expected: &[u8]) -> bool {
     given.len() == expected.len()
-        && given.iter().zip(expected).fold(0u8, |diff, (a, b)| diff | (a ^ b)) == 0
+        && given
+            .iter()
+            .zip(expected)
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
 }
 
 async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
@@ -186,15 +223,26 @@ async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Res
         StatusCode::FORBIDDEN.into_response()
     };
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CSP),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     response
 }
 
+/// Revalidated on every load, so the page never runs modules from an older binary.
 fn asset(content_type: &'static str, body: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, content_type)], body).into_response()
+    let headers = [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")];
+    (headers, body).into_response()
 }
 
 /// The page carries the token in a meta tag; the Host check keeps other sites from reading it.
@@ -207,7 +255,9 @@ async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
     let db = app.db.clone();
     let built = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
         let conn = store::open(&db)?;
-        Ok(snapshot::build(&conn, &mut HashMap::new())?.to_string())
+        let mut memory = Sampler::new();
+        memory.sample(&conn)?;
+        Ok(snapshot::build(&conn, &mut HashMap::new(), &memory, &mut Observer::default())?.to_string())
     })
     .await;
     match built {
@@ -220,53 +270,78 @@ async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
 async fn stream(
     State(app): State<Arc<App>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let updates = futures_util::stream::unfold((app.snapshots.clone(), true), |(mut rx, first)| async move {
-        if !first {
-            rx.changed().await.ok()?;
-        }
-        let tree = rx.borrow_and_update().clone();
-        Some((Ok(Event::default().event("snapshot").data(tree.as_str())), (rx, false)))
-    });
+    let updates = futures_util::stream::unfold(
+        (app.snapshots.clone(), true),
+        |(mut rx, first)| async move {
+            if !first {
+                rx.changed().await.ok()?;
+            }
+            let tree = rx.borrow_and_update().clone();
+            Some((
+                Ok(Event::default().event("snapshot").data(tree.as_str())),
+                (rx, false),
+            ))
+        },
+    );
     Sse::new(updates).keep_alive(KeepAlive::default())
 }
 
 /// A message from the human node, sent as `from_id` along the same edges as any agent.
+/// `thread` continues an open thread; `reply_to` answers that question as `from_id`, its
+/// addressee, and `kind` is then ignored.
 #[derive(Deserialize)]
 struct Outgoing {
     from_id: String,
     to_id: String,
     kind: String,
     body: String,
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    reply_to: Option<String>,
 }
 
 async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Response {
     let db = app.db.clone();
-    let sent = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<(String, String), msg::Refused>> {
-        let mut conn = store::open(&db)?;
-        let tx = store::write_tx(&mut conn)?;
-        let outgoing = msg::Outgoing {
-            from: &request.from_id,
-            to: &request.to_id,
-            kind: &request.kind,
-            body: &request.body,
-            thread: None,
-            refs: &[],
-            wait: None,
-        };
-        let sent = msg::send(&tx, &outgoing)?;
-        if sent.is_ok() {
-            tx.commit()?;
-        }
-        Ok(sent)
-    })
+    let sent = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<Result<(String, String), msg::Refused>> {
+            let mut conn = store::open(&db)?;
+            let tx = store::write_tx(&mut conn)?;
+            let sent = match &request.reply_to {
+                Some(question) => msg::reply(&tx, question, &request.from_id, &request.body)?,
+                None => msg::send(
+                    &tx,
+                    &msg::Outgoing {
+                        from: &request.from_id,
+                        to: &request.to_id,
+                        kind: &request.kind,
+                        body: &request.body,
+                        thread: request.thread.as_deref(),
+                        refs: &[],
+                        wait: None,
+                    },
+                )?,
+            };
+            if sent.is_ok() {
+                tx.commit()?;
+            }
+            Ok(sent)
+        },
+    )
     .await;
     match sent {
-        Ok(Ok(Ok((id, thread)))) => {
-            (StatusCode::CREATED, Json(json!({"id": id, "thread": thread}))).into_response()
-        }
+        Ok(Ok(Ok((id, thread)))) => (
+            StatusCode::CREATED,
+            Json(json!({"id": id, "thread": thread})),
+        )
+            .into_response(),
         Ok(Ok(Err(refused))) => {
             let (code, why) = msg::refused_error(refused);
-            let status = if code == 3 { StatusCode::CONFLICT } else { StatusCode::UNPROCESSABLE_ENTITY };
+            let status = if code == 3 {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
             failure(status, why)
         }
         Ok(Err(err)) => failure(StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")),

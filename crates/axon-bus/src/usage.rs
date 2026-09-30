@@ -55,7 +55,11 @@ pub fn read_claude(
     let key = path.to_string_lossy().into_owned();
     let cursor = cursor(conn, agent, &key)?.unwrap_or(0);
     // A transcript shorter than the cursor was rewritten; read it again from the top.
-    let start = if file.metadata()?.len() < cursor as u64 { 0 } else { cursor };
+    let start = if file.metadata()?.len() < cursor as u64 {
+        0
+    } else {
+        cursor
+    };
     file.seek(SeekFrom::Start(start as u64))?;
     let mut appended = Vec::new();
     file.read_to_end(&mut appended)?;
@@ -85,7 +89,14 @@ fn cursor(conn: &Connection, agent: &str, path: &str) -> rusqlite::Result<Option
 /// Store what `read_claude` found. Call inside the hook's write transaction; a concurrent
 /// hook that already moved the cursor has stored the same lines, so they are skipped.
 pub fn store(conn: &Connection, pending: &Pending) -> anyhow::Result<()> {
-    let Pending { agent, child, path, start, end, text } = pending;
+    let Pending {
+        agent,
+        child,
+        path,
+        start,
+        end,
+        text,
+    } = pending;
     let current = cursor(conn, agent, path)?.unwrap_or(0);
     if current != *start && !(*start == 0 && current > *end) {
         return Ok(());
@@ -150,7 +161,13 @@ fn store_narrative(
         .filter(|record| record["agentId"].as_str() == child)
     {
         let ts = transcript::timestamp("claude", &record).unwrap_or_else(now_ms);
-        transcript::store_rows(conn, agent, "claude", ts, &transcript::rows("claude", &record, None))?;
+        transcript::store_rows(
+            conn,
+            agent,
+            "claude",
+            ts,
+            &transcript::rows("claude", &record, None),
+        )?;
     }
     Ok(())
 }

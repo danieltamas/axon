@@ -25,6 +25,8 @@ serde_json.workspace = true
 futures-util = "0.3"
 # The per-boot `serve` token needs OS randomness; already in the tree.
 getrandom = "0.2"
+# Resident memory of each agent's harness process (BUS-PLAN §2 dependency list).
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 # Only `serve` starts a runtime; hooks stay synchronous (BUS-PLAN §2 dependencies).
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
 toml.workspace = true

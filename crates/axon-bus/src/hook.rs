@@ -57,9 +57,12 @@ pub fn run(db: &Path, harness: &str, event: &str) {
                 Err(anyhow::anyhow!("the hub at {} was removed", db.display()))
             };
             reply.or_else(|err| {
-                let fallback = gate_only(db, harness, event, actor).or_else(|| rung_doorbell(db, harness, event, actor));
+                let fallback = gate_only(db, harness, event, actor)
+                    .or_else(|| rung_doorbell(db, harness, event, actor));
                 if fallback.is_some() {
-                    eprintln!("axon-bus: hook {harness} {event} answered by the gate alone: {err:#}");
+                    eprintln!(
+                        "axon-bus: hook {harness} {event} answered by the gate alone: {err:#}"
+                    );
                 }
                 fallback.ok_or(err)
             })
@@ -122,7 +125,12 @@ fn gate_only(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> Opti
 
 /// When the hub cannot answer, a stop already persisted as a doorbell still denies the
 /// actor's next tool call (fail closed); everything else is allowed.
-fn rung_doorbell(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> Option<Option<Value>> {
+fn rung_doorbell(
+    db: &Path,
+    harness: &str,
+    event: &str,
+    actor: Option<&str>,
+) -> Option<Option<Value>> {
     if !gate::is_pre_tool(harness, event) {
         return None;
     }
@@ -133,7 +141,9 @@ fn rung_doorbell(db: &Path, harness: &str, event: &str, actor: Option<&str>) -> 
 fn actor_of<'a>(change: &Change<'a>) -> Option<&'a str> {
     match change {
         Change::Ignored => None,
-        Change::SessionStart(node) | Change::Active(node) | Change::ChildStart(node) => Some(node.id),
+        Change::SessionStart(node) | Change::Active(node) | Change::ChildStart(node) => {
+            Some(node.id)
+        }
         Change::Idle(id) | Change::Closed(id) => Some(id),
     }
 }
@@ -278,7 +288,11 @@ fn apply(
         Change::Ignored => return Ok(None),
         Change::Idle(id) | Change::Closed(id) => {
             let id = resolve(id)?;
-            let status = if closing { Status::Closed } else { Status::Idle };
+            let status = if closing {
+                Status::Closed
+            } else {
+                Status::Idle
+            };
             registry::set_status(&tx, &id, status)?;
             if closing {
                 msg::ack_stops_on_close(&tx, &id)?;
@@ -287,7 +301,9 @@ fn apply(
             }
             (id, true)
         }
-        Change::SessionStart(ref node) | Change::Active(ref node) | Change::ChildStart(ref node) => {
+        Change::SessionStart(ref node)
+        | Change::Active(ref node)
+        | Change::ChildStart(ref node) => {
             let id = resolve(node.id)?;
             let parent = node.parent_id.map(resolve).transpose()?;
             let node = Node {
@@ -353,10 +369,18 @@ fn read_claude_transcript(
 /// Keep the model a spawn resolved for its child (raw, so an unknown model stays unpriced)
 /// and store the transcript lines read earlier. Failures are reported, never allowed to
 /// undo the hook's registry change or delivery.
-fn record_claude_usage(conn: &Connection, actor: &str, payload: &Value, transcript: Option<&usage::Pending>) {
+fn record_claude_usage(
+    conn: &Connection,
+    actor: &str,
+    payload: &Value,
+    transcript: Option<&usage::Pending>,
+) {
     let spawned = &payload["tool_response"];
     let recorded = (|| -> anyhow::Result<()> {
-        if let (Some(child), Some(model)) = (spawned["agentId"].as_str(), spawned["resolvedModel"].as_str()) {
+        if let (Some(child), Some(model)) = (
+            spawned["agentId"].as_str(),
+            spawned["resolvedModel"].as_str(),
+        ) {
             conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
         }
         if let Some(pending) = transcript {
@@ -408,9 +432,22 @@ fn upsert(conn: &Connection, harness: &str, node: &Node, status: Status) -> anyh
         parent_id,
         cwd: node.cwd,
         model: node.model,
+        pid: harness_pid(),
         ..Default::default()
     };
     registry::upsert(conn, &agent, status)
+}
+
+/// The hook's parent is the harness: a single-command hook line is exec'd by the shell,
+/// so no wrapper process sits in between.
+#[cfg(unix)]
+fn harness_pid() -> Option<i64> {
+    Some(i64::from(std::os::unix::process::parent_id()))
+}
+
+#[cfg(not(unix))]
+fn harness_pid() -> Option<i64> {
+    None
 }
 
 fn status_of(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {

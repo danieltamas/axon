@@ -240,7 +240,10 @@ pub enum BudgetCommand {
 }
 
 pub fn parse_ttl(text: &str) -> Result<std::time::Duration, String> {
-    let (digits, unit) = text.split_at(text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len()));
+    let (digits, unit) = text.split_at(
+        text.find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(text.len()),
+    );
     let count: u64 = digits.parse().map_err(|_| format!("invalid ttl {text}"))?;
     let seconds = match unit {
         "" | "s" => 1,
@@ -257,4 +260,3 @@ pub fn parse_ttl(text: &str) -> Result<std::time::Duration, String> {
 
 /// A grant is for a conversation, not a standing edge; that is what `link` is for.
 const MAX_TTL_SECS: u64 = 24 * 3600;
-

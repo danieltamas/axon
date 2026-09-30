@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::memory::Sampler;
 use crate::store::now_ms;
-use crate::transcript;
+use crate::observed::Observer;
+use crate::{budget, chatter, transcript};
 
 /// Rows of narrative per agent in a snapshot; the page asks for no more.
 const NARRATIVE_ROWS: i64 = 200;
@@ -72,13 +74,22 @@ struct Node {
     role: Option<String>,
     mission: Option<String>,
     status: String,
+    pid: Option<i64>,
     checkout: Checkout,
 }
 
-/// The whole tree as the page renders it. `cache` keeps cwd lookups across snapshots.
-pub fn build(conn: &Connection, cache: &mut HashMap<String, Checkout>) -> anyhow::Result<Value> {
+/// The whole tree as the page renders it. `cache` keeps cwd lookups across snapshots;
+/// `memory` holds the sampled resident memory and the open harness sessions, which
+/// `observer` matches to what Axon ingested.
+pub fn build(
+    conn: &Connection,
+    cache: &mut HashMap<String, Checkout>,
+    memory: &Sampler,
+    observer: &mut Observer,
+) -> anyhow::Result<Value> {
+    let rss = memory.rss();
     let mut stmt = conn.prepare(
-        "SELECT a.id,a.harness,a.parent_id,a.model,a.role,a.mission,a.status,a.cwd FROM agents a
+        "SELECT a.id,a.harness,a.parent_id,a.model,a.role,a.mission,a.status,a.cwd,a.pid FROM agents a
          WHERE a.root_id IN (SELECT root_id FROM agents
                              WHERE status<>'closed' OR ended_at>?1 OR ended_at IS NULL)
          ORDER BY a.started_at, a.id",
@@ -95,6 +106,7 @@ pub fn build(conn: &Connection, cache: &mut HashMap<String, Checkout>) -> anyhow
                     role: r.get(4)?,
                     mission: r.get(5)?,
                     status: r.get(6)?,
+                    pid: r.get(8)?,
                     checkout: Checkout::default(),
                 },
                 cwd,
@@ -112,8 +124,13 @@ pub fn build(conn: &Connection, cache: &mut HashMap<String, Checkout>) -> anyhow
             })
         })
         .collect::<rusqlite::Result<_>>()?;
-    let tokens = token_totals(conn)?;
-    let content = transcript::content_enabled(conn)?;
+    let facts = Facts {
+        tokens: token_totals(conn)?,
+        costs: budget::agent_costs(conn)?,
+        gauges: budget::gauges(conn)?,
+        content: transcript::content_enabled(conn)?,
+        rss,
+    };
     let mut children: HashMap<&str, Vec<&Node>> = HashMap::new();
     for node in nodes.iter().filter(|n| n.parent_id.is_some()) {
         children
@@ -126,13 +143,27 @@ pub fn build(conn: &Connection, cache: &mut HashMap<String, Checkout>) -> anyhow
         BTreeMap::new();
     for root in nodes.iter().filter(|n| n.parent_id.is_none()) {
         let repo = root.checkout.repo.clone();
-        let tree = render(conn, root, repo.as_deref(), &children, &tokens, content)?;
+        let tree = render(conn, root, None, repo.as_deref(), &children, &facts)?;
         groups
             .entry((repo.is_none(), repo))
             .or_default()
             .entry(root.harness.clone())
             .or_default()
             .push(tree);
+    }
+    let mut repo_of = |cwd: &Path| {
+        let found = cache
+            .entry(cwd.to_string_lossy().into_owned())
+            .or_insert_with(|| checkout(cwd));
+        (found.repo.clone(), found.branch.clone())
+    };
+    for root in observer.roots(conn, memory.sessions(), &mut repo_of)? {
+        groups
+            .entry((root.repo.is_none(), root.repo))
+            .or_default()
+            .entry(root.harness)
+            .or_default()
+            .push(root.tree);
     }
     let repos: Vec<Value> = groups
         .into_iter()
@@ -148,7 +179,12 @@ pub fn build(conn: &Connection, cache: &mut HashMap<String, Checkout>) -> anyhow
             json!({"repo": repo, "name": name, "harnesses": harnesses})
         })
         .collect();
-    Ok(json!({"repos": repos}))
+    Ok(json!({
+        "repos": repos,
+        "messages": chatter::messages(conn)?,
+        "links": chatter::links(conn)?,
+        "content": facts.content,
+    }))
 }
 
 fn token_totals(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
@@ -160,23 +196,36 @@ fn token_totals(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
     totals.collect()
 }
 
+/// Per-agent numbers gathered once per snapshot.
+struct Facts<'a> {
+    tokens: HashMap<String, i64>,
+    costs: HashMap<String, Option<f64>>,
+    gauges: HashMap<String, Value>,
+    content: bool,
+    rss: &'a HashMap<i64, u64>,
+}
+
 fn render(
     conn: &Connection,
     node: &Node,
+    parent_pid: Option<i64>,
     group_repo: Option<&Path>,
     children: &HashMap<&str, Vec<&Node>>,
-    tokens: &HashMap<String, i64>,
-    content: bool,
+    facts: &Facts,
 ) -> anyhow::Result<Value> {
     let kids = children
         .get(node.id.as_str())
         .map_or(&[][..], Vec::as_slice);
     let kids: Vec<Value> = kids
         .iter()
-        .map(|child| render(conn, child, group_repo, children, tokens, content))
+        .map(|child| render(conn, child, node.pid, group_repo, children, facts))
         .collect::<anyhow::Result<_>>()?;
     let repo = node.checkout.repo.as_deref();
     let repo_badge = repo.filter(|r| Some(*r) != group_repo);
+    // A subagent inside its parent's process (Claude's) shares that memory; only the
+    // process owner reports it, so sums never count a process twice.
+    let shares_process = node.pid.is_some() && node.pid == parent_pid;
+    let rss = node.pid.filter(|_| !shares_process).and_then(|pid| facts.rss.get(&pid));
     Ok(json!({
         "id": node.id,
         "harness": node.harness,
@@ -187,8 +236,13 @@ fn render(
         "repo": repo,
         "repo_badge": repo_badge,
         "branch": node.checkout.branch,
-        "tokens": tokens.get(&node.id).copied().unwrap_or(0),
-        "narrative": narrative(conn, &node.id, content)?,
+        "tokens": facts.tokens.get(&node.id).copied().unwrap_or(0),
+        "cost_usd": facts.costs.get(&node.id).copied().flatten(),
+        "unpriced": facts.costs.get(&node.id).is_some_and(Option::is_none),
+        "budget": facts.gauges.get(&node.id),
+        "rss": rss,
+        "shares_process": shares_process,
+        "narrative": narrative(conn, &node.id, facts.content)?,
         "children": kids,
     }))
 }

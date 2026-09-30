@@ -125,8 +125,8 @@ fn insert(conn: &Connection, msg: &Outgoing, stored: &Stored) -> anyhow::Result<
     )?;
     conn.execute(
         "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body,refs_json,needs_reply,
-                               deadline,default_reply)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                               deadline,default_reply,sent_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             id,
             thread,
@@ -139,6 +139,7 @@ fn insert(conn: &Connection, msg: &Outgoing, stored: &Stored) -> anyhow::Result<
             stored.needs_reply,
             stored.deadline,
             stored.default_reply,
+            now_ms(),
         ],
     )?;
     if msg.kind == "stop" {
@@ -150,7 +151,10 @@ fn insert(conn: &Connection, msg: &Outgoing, stored: &Stored) -> anyhow::Result<
             for member in subtree(conn, msg.to)? {
                 for name in doorbell_names(conn, &member)? {
                     if let Err(err) = doorbell::ring(Path::new(db), &name, &reason) {
-                        eprintln!("axon-bus: stop for {} stored, but its doorbell failed: {err:#}", msg.to);
+                        eprintln!(
+                            "axon-bus: stop for {} stored, but its doorbell failed: {err:#}",
+                            msg.to
+                        );
                     }
                 }
             }

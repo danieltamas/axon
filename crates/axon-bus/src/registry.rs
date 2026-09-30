@@ -34,6 +34,8 @@ pub struct Agent<'a> {
     pub role: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub mission: Option<&'a str>,
+    /// The harness process the hook ran under, for its memory (§7.1).
+    pub pid: Option<i64>,
 }
 
 /// Register `agent` with `status`, or, when it is already known, move it to `status`
@@ -48,8 +50,8 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
     if let Some(previous) = known {
         conn.execute(
             "UPDATE agents SET status=?2, last_seen_at=?3, model=coalesce(?4, model),
-             cwd=coalesce(cwd, ?5) WHERE id=?1",
-            params![agent.id, status.as_str(), now, agent.model, agent.cwd],
+             cwd=coalesce(cwd, ?5), pid=coalesce(?6, pid) WHERE id=?1",
+            params![agent.id, status.as_str(), now, agent.model, agent.cwd, agent.pid],
         )?;
         if previous != status.as_str() {
             record_status(conn, agent.id, status)?;
@@ -64,8 +66,8 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
     };
     conn.execute(
         "INSERT INTO agents (id,harness,session_id,parent_id,root_id,model,cwd,status,
-                             started_at,last_seen_at,role,effort,mission)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12)",
+                             started_at,last_seen_at,role,effort,mission,pid)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,?10,?11,?12,?13)",
         params![
             agent.id,
             agent.harness,
@@ -78,7 +80,8 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
             now,
             agent.role,
             agent.effort,
-            agent.mission
+            agent.mission,
+            agent.pid
         ],
     )?;
     let payload = json!({"harness": agent.harness, "session_id": agent.session_id,

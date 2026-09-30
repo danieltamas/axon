@@ -4,13 +4,16 @@
 //! stay near the process-spawn floor (BUS-PLAN §00, spike Q4).
 
 mod budget;
-mod cli;
+mod chatter;
 mod claims;
+mod cli;
 mod cli_guard;
 mod doorbell;
 mod gate;
 mod hook;
 mod install;
+mod memory;
+mod observed;
 mod msg;
 mod registry;
 mod replay;
@@ -29,8 +32,8 @@ use std::process::ExitCode;
 use anyhow::Context;
 use clap::Parser;
 
-use cli::{BudgetCommand, Cli, Command};
 pub use cli::Harness;
+use cli::{BudgetCommand, Cli, Command};
 
 /// A request the CLI rejects as invalid (exit 2), as opposed to a failure (exit 1).
 #[derive(Debug)]
@@ -104,6 +107,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
                 role: role.as_deref(),
                 effort: effort.as_deref(),
                 mission: None,
+                pid: None,
             };
             registry::register(&tx, &agent).map_err(|e| Invalid(e.to_string()))?;
             tx.commit()?;
@@ -316,7 +320,11 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             port,
             ready_file,
             content,
-        } => serve::run(&db, port, ready_file.as_deref(), content)?,
+        } => {
+            // The dashboard may be the first bus tool run on an Axon-only database.
+            store::init(&db)?;
+            serve::run(&db, port, ready_file.as_deref(), content)?;
+        }
         Command::Replay { file, speed } => replay::run(&db, &file, speed)?,
         Command::Doctor => {
             if !install::doctor(&db)? {
