@@ -8,7 +8,7 @@
 # Unknown models => "unpriced" (cost is a FLOOR, surfaced loudly, never a silent zero).
 # Local models => free.
 
-priced_as_of = "2026-06-15"  # shown in the UI; bump when you update rates
+priced_as_of = "2026-09-30"  # shown in the UI; bump when you update rates
 display_currency = "EUR"
 # Rates below are in USD; this converts them to the display currency (EUR).
 # NOTE: this is an approximate USD->EUR rate — confirm/update it for accurate cost.
@@ -53,12 +53,61 @@ cache_read = 0.1
 cache_write_5m = 1.25
 cache_write_1h = 2.0
 
+# Claude 5 family, from platform.claude.com/docs/en/about-claude/pricing (Sep 2026).
+# Cache reads break the 0.10x rule: 0.05x on Opus 5.5, 0.025x on Fable 5.1.
+[models."claude-opus-5.5"]
+input = 4.0
+output = 20.0
+cache_read = 0.2
+cache_write_5m = 5.0
+cache_write_1h = 8.0
+
+[models."claude-opus-5"]
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write_5m = 6.25
+cache_write_1h = 10.0
+
+[models."claude-sonnet-5.5"]
+input = 2.0
+output = 10.0
+cache_read = 0.2
+cache_write_5m = 2.5
+cache_write_1h = 4.0
+
+# $2/$10 was launch pricing and is now standard (same source).
+[models."claude-sonnet-5"]
+input = 2.0
+output = 10.0
+cache_read = 0.2
+cache_write_5m = 2.5
+cache_write_1h = 4.0
+
+[models."claude-fable-5.1"]
+input = 10.0
+output = 50.0
+cache_read = 0.25
+cache_write_5m = 12.5
+cache_write_1h = 20.0
+
 [models."claude-fable-5"]
 input = 10.0
 output = 50.0
 cache_read = 1.0
 cache_write_5m = 12.5
 cache_write_1h = 20.0
+
+# OpenAI (Codex). gpt-6-astra short-context rates: $10 input / $1 cached / $12.50 cache
+# write / $50 output per 1M. Long-context requests bill 2x input and 1.5x output; Axon
+# has no per-request context size, so those turns are under-counted.
+# Source: developers.openai.com/api/docs/pricing, Sep 2026.
+[models."gpt-6-astra"]
+input = 10.0
+output = 50.0
+cache_read = 1.0
+cache_write_5m = 12.5
+cache_write_1h = 12.5
 
 # OpenAI (Codex). gpt-5.5: $5 input / $0.50 cached / $30 output per 1M (no cache-write fee).
 # Source: OpenAI API pricing / model docs, Jun 2026.
