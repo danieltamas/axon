@@ -144,18 +144,6 @@ fn binary_name(exe: &str) -> &str {
     file.strip_suffix(".exe").unwrap_or(file)
 }
 
-/// Whether a Codex hook entry (inline or `[[hooks.Event]]` table) runs this bus hook.
-pub(crate) fn is_codex_bus_entry(
-    entry: &dyn toml_edit::TableLike,
-    harness: Harness,
-    event: &str,
-) -> bool {
-    entry
-        .get("command")
-        .and_then(|c| c.as_str())
-        .is_some_and(|c| is_bus_command(c, harness, event))
-}
-
 /// The config text with the bus hooks added to `original` (None: no config yet).
 pub(crate) fn wire(
     harness: Harness,
@@ -201,55 +189,7 @@ pub(crate) fn wire(
             }
             Ok(serde_json::to_string_pretty(&settings)? + "\n")
         }
-        Harness::Codex => {
-            let mut doc: toml_edit::DocumentMut = original.unwrap_or("").parse()?;
-            let hooks = doc
-                .entry("hooks")
-                .or_insert(toml_edit::table())
-                .as_table_like_mut()
-                .context("config.toml `hooks` is not a table")?;
-            for event in CODEX_EVENTS {
-                let cmd = command(exe, harness, event);
-                let item = hooks
-                    .entry(event)
-                    .or_insert(toml_edit::value(toml_edit::Array::new()));
-                // A config editor may rewrite inline entries as `[[hooks.Event]]` tables.
-                if let Some(tables) = item.as_array_of_tables_mut() {
-                    let mut wired = false;
-                    for entry in tables
-                        .iter_mut()
-                        .filter(|t| is_codex_bus_entry(*t, harness, event))
-                    {
-                        entry.insert("command", toml_edit::value(cmd.as_str()));
-                        wired = true;
-                    }
-                    if !wired {
-                        let mut entry = toml_edit::Table::new();
-                        entry.insert("command", toml_edit::value(cmd));
-                        tables.push(entry);
-                    }
-                    continue;
-                }
-                let entries = item
-                    .as_array_mut()
-                    .with_context(|| format!("config.toml `hooks.{event}` is not an array"))?;
-                let mut wired = false;
-                for entry in entries
-                    .iter_mut()
-                    .filter_map(|e| e.as_inline_table_mut())
-                    .filter(|t| is_codex_bus_entry(*t, harness, event))
-                {
-                    entry.insert("command", cmd.as_str().into());
-                    wired = true;
-                }
-                if !wired {
-                    let mut entry = toml_edit::InlineTable::new();
-                    entry.insert("command", cmd.into());
-                    entries.push(entry);
-                }
-            }
-            Ok(doc.to_string())
-        }
+        Harness::Codex => crate::codex_hooks::wire(original, exe),
         Harness::Opencode => {
             let mut config: Value = serde_json::from_str(original.unwrap_or("{}"))
                 .context("opencode.json must be plain JSON (no comments) to be edited")?;

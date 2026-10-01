@@ -9,6 +9,7 @@ mod chatter;
 mod claims;
 mod cli;
 mod cli_guard;
+mod codex_hooks;
 mod doctor;
 mod doorbell;
 mod end;

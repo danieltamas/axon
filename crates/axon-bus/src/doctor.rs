@@ -5,8 +5,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::install::{
-    command, current_exe, detected, layout, read_optional, CLAUDE_EVENTS, CODEX_EVENTS,
-    HERMES_EVENTS,
+    command, current_exe, detected, layout, read_optional, CLAUDE_EVENTS, HERMES_EVENTS,
 };
 use crate::opencode_plugin::plugin_source;
 use crate::Harness;
@@ -32,26 +31,7 @@ pub fn is_wired(harness: Harness, exe: &str) -> anyhow::Result<bool> {
                 })
             })
         }),
-        Harness::Codex => config.parse::<toml_edit::DocumentMut>().is_ok_and(|doc| {
-            CODEX_EVENTS.iter().all(|event| {
-                let cmd = runs(event);
-                let runs_cmd = |entry: &dyn toml_edit::TableLike| {
-                    entry.get("command").and_then(|c| c.as_str()) == Some(cmd.as_str())
-                };
-                match doc.get("hooks").and_then(|h| h.get(event)) {
-                    Some(toml_edit::Item::ArrayOfTables(tables)) => {
-                        tables.iter().any(|t| runs_cmd(t))
-                    }
-                    Some(item) => item.as_array().is_some_and(|entries| {
-                        entries
-                            .iter()
-                            .filter_map(|e| e.as_inline_table())
-                            .any(|t| runs_cmd(t))
-                    }),
-                    None => false,
-                }
-            })
-        }),
+        Harness::Codex => crate::codex_hooks::is_wired(&config, exe),
         Harness::Opencode => {
             let plugin = layout.plugin.as_ref().expect("opencode has a plugin shim");
             let url = format!("file://{}", plugin.display());
@@ -95,6 +75,12 @@ pub fn doctor(db: &Path) -> anyhow::Result<bool> {
         );
         if harness == Harness::Hermes && state == "ok" {
             println!("note    hermes    Hermes asks to approve each hook command on first use");
+        }
+        if harness == Harness::Codex && state == "ok" {
+            println!(
+                "note    codex     Codex skips hooks it has not been told to trust: run `/hooks` in codex \
+                 and trust the axon entries (or start it with --dangerously-bypass-hook-trust)"
+            );
         }
     }
     match crate::store::open(db)

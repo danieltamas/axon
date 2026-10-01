@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 
 use crate::hermes_hooks::HERMES_MARKER;
 use crate::install::{
-    backup_path, current_exe, edited_since_install, is_bus_command, is_codex_bus_entry, layout,
-    read_optional, wire, Layout, CLAUDE_EVENTS, CODEX_EVENTS,
+    backup_path, current_exe, edited_since_install, is_bus_command, layout, read_optional, wire,
+    Layout, CLAUDE_EVENTS,
 };
 use crate::Harness;
 
@@ -77,36 +77,7 @@ pub(crate) fn unwire(harness: Harness, current: &str, layout: &Layout) -> anyhow
             }
             Ok(serde_json::to_string_pretty(&settings)? + "\n")
         }
-        Harness::Codex => {
-            let mut doc: toml_edit::DocumentMut = current.parse()?;
-            if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut()) {
-                for event in CODEX_EVENTS {
-                    let Some(item) = hooks.get_mut(event) else {
-                        continue;
-                    };
-                    let emptied = if let Some(tables) = item.as_array_of_tables_mut() {
-                        tables.retain(|t| !is_codex_bus_entry(t, harness, event));
-                        tables.is_empty()
-                    } else if let Some(entries) = item.as_array_mut() {
-                        let before = entries.len();
-                        entries.retain(|e| {
-                            !e.as_inline_table()
-                                .is_some_and(|t| is_codex_bus_entry(t, harness, event))
-                        });
-                        entries.is_empty() && before > 0
-                    } else {
-                        false
-                    };
-                    if emptied {
-                        hooks.remove(event);
-                    }
-                }
-                if hooks.is_empty() {
-                    doc.remove("hooks");
-                }
-            }
-            Ok(doc.to_string())
-        }
+        Harness::Codex => crate::codex_hooks::unwire(current),
         Harness::Opencode => {
             let mut config: Value = serde_json::from_str(current)?;
             let plugin = layout.plugin.as_ref().expect("opencode has a plugin shim");

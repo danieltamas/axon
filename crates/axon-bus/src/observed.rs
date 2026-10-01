@@ -618,4 +618,33 @@ mod tests {
         let mut matched = HashMap::new();
         assert!(assign(&[&a], &ingested, &mut matched).is_empty());
     }
+
+    #[test]
+    fn assign_matches_codex_process_by_its_cd_flag() {
+        let os_cwd = PathBuf::from("/axon");
+        let cwd = crate::memory::codex_cwd(&["codex", "exec", "-C", "/axon-wt-fed"], os_cwd);
+        let mut a = process(101, "codex", "/axon", T0);
+        a.cwd = cwd;
+        let ingested = HashMap::from([(
+            "s1".to_owned(),
+            transcript("codex", "/axon-wt-fed", T0 + MINUTE_MS, T0 + 20 * MINUTE_MS),
+        )]);
+        let mut matched = HashMap::new();
+        assert_eq!(
+            assign(&[&a], &ingested, &mut matched),
+            HashMap::from([(a.pid, "s1")])
+        );
+    }
+
+    #[test]
+    fn assign_rejects_a_codex_session_outside_its_cd_flag() {
+        let mut a = process(101, "codex", "/axon", T0);
+        a.cwd = crate::memory::codex_cwd(&["codex", "exec", "-C", "/axon-wt-fed"], a.cwd.clone());
+        let ingested = HashMap::from([(
+            "s1".to_owned(),
+            transcript("codex", "/axon", T0 + MINUTE_MS, T0 + 20 * MINUTE_MS),
+        )]);
+        let mut matched = HashMap::new();
+        assert!(assign(&[&a], &ingested, &mut matched).is_empty());
+    }
 }
