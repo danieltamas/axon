@@ -4,7 +4,8 @@
 
 import { activityChart, activityFacts } from "./activity.js";
 import { doingNow, harnessName, metricsLine } from "./board.js";
-import { bytes, clock, el, isProcess, mark, oneLine, prose, setRing, since, STATUS, tokens, money } from "./dom.js";
+import { bytes, clock, el, isProcess, mark, oneLine, setRing, since, STATUS, tokens, money } from "./dom.js";
+import { prose } from "./md.js";
 import { createComposer, createEnder } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };

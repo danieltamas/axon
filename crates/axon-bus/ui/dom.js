@@ -179,15 +179,6 @@ function fieldLabel(key) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-// Text as a paragraph, or a JSON object as the list of its fields.
-export function prose(text, className = null) {
-  const fields = jsonFields(text);
-  if (!fields) return el("p", className, text);
-  const list = el("dl", className ? `${className} fields` : "fields");
-  for (const [label, value] of fields) list.append(el("dt", null, label), el("dd", null, value));
-  return list;
-}
-
 // Text on one line: a JSON object reads as its fields.
 export function oneLine(text) {
   const fields = jsonFields(text);

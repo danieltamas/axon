@@ -19,6 +19,10 @@ A fix release on 0.3.0, found by running the bus on a real machine for a day.
 - **Structured replies read as fields.** An agent message, or a line an agent said, that is
   one JSON object (a verdict, a status) shows as labelled fields in the detail pane and as
   `Label: value` pairs on one line in the topology and thread lists.
+- **Agent text reads as markdown.** What an agent said, and the messages agents send, render
+  their code blocks, headings, lists, quotes, tables, inline code, bold and links instead of
+  showing the raw markup. It is built as plain DOM nodes, so agent text can never inject
+  HTML into the dashboard.
 
 ## Agents know more about Axon
 

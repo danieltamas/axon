@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 
-pub(crate) const ASSETS: [(&str, &str, &str); 19] = [
+pub(crate) const ASSETS: [(&str, &str, &str); 20] = [
     (
         "/activity.js",
         "text/javascript",
@@ -45,6 +45,7 @@ pub(crate) const ASSETS: [(&str, &str, &str); 19] = [
         include_str!("../ui/context.js"),
     ),
     ("/dom.js", "text/javascript", include_str!("../ui/dom.js")),
+    ("/md.js", "text/javascript", include_str!("../ui/md.js")),
     (
         "/overview.js",
         "text/javascript",
