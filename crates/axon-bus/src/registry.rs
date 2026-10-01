@@ -137,7 +137,8 @@ pub fn touch(conn: &Connection, id: &str) -> anyhow::Result<()> {
 
 /// Close the roots whose harness process exited without saying so (a crash, a killed
 /// terminal), then every open agent under a closed root. `running` answers for a pid last
-/// heard from at a time, or None when it cannot tell, which closes nothing.
+/// heard from at a time, or None when it cannot tell. When it cannot tell even for this
+/// process, the sample saw no processes and nothing is closed.
 pub fn reap(conn: &Connection, running: impl Fn(i64, i64) -> Option<bool>) -> anyhow::Result<()> {
     let mut stmt = conn.prepare(
         "SELECT id,pid,last_seen_at FROM agents
@@ -146,6 +147,11 @@ pub fn reap(conn: &Connection, running: impl Fn(i64, i64) -> Option<bool>) -> an
     let roots: Vec<(String, i64, i64)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
+    // Asked after the read above, so a hook that commits from here on fails this
+    // transaction's first write instead of being overwritten.
+    if running(i64::from(std::process::id()), i64::MIN).is_none() {
+        return Ok(());
+    }
     for (id, pid, last_seen) in roots {
         if running(pid, last_seen) == Some(false) {
             set_status(conn, &id, Status::Closed)?;
