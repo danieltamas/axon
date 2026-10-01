@@ -29,7 +29,7 @@ pub struct Checkout {
 /// Resolve a cwd to its main repository and branch by reading `.git` directly, so a
 /// snapshot never spawns `git`.
 fn checkout(cwd: &Path) -> Checkout {
-    let Ok(cwd) = cwd.canonicalize() else {
+    let Some(cwd) = resolve(cwd) else {
         return Checkout::default();
     };
     let top = crate::claims::checkout_of(&cwd);
@@ -58,12 +58,24 @@ fn checkout(cwd: &Path) -> Checkout {
                 .map(str::to_owned)
         });
     Checkout {
-        repo: common
-            .canonicalize()
-            .ok()
-            .and_then(|c| c.parent().map(Path::to_path_buf)),
+        repo: resolve(&common).and_then(|c| c.parent().map(Path::to_path_buf)),
         branch,
     }
+}
+
+/// `path` with links resolved, spelled as harnesses report cwds: on Windows without the
+/// `\\?\` prefix `canonicalize` puts on drive paths, so repo keys match session paths.
+fn resolve(path: &Path) -> Option<PathBuf> {
+    let resolved = path.canonicalize().ok()?;
+    #[cfg(windows)]
+    if let Some(plain) = resolved
+        .to_str()
+        .and_then(|p| p.strip_prefix(r"\\?\"))
+        .filter(|p| p.as_bytes().get(1) == Some(&b':'))
+    {
+        return Some(PathBuf::from(plain));
+    }
+    Some(resolved)
 }
 
 struct Node {

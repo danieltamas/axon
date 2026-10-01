@@ -37,7 +37,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os != 'Windows'
         run: cargo test --workspace --all-targets --no-fail-fast
-      # Process launches are slow on Windows runners; fewer tests at once keeps each
+      # Process launches are slow on Windows runners; one test at a time keeps each
       # acceptance test's launches inside its own time budget.
       - if: runner.os == 'Windows'
-        run: cargo test --workspace --all-targets --no-fail-fast -- --test-threads=2
+        run: cargo test --workspace --all-targets --no-fail-fast -- --test-threads=1
