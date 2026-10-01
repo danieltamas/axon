@@ -109,6 +109,28 @@ function peerCard(refresh) {
   const status = el("div", "peer-status");
   status.append(health, traffic, error);
 
+  const remote = el("p", "peer-remote");
+  remote.setAttribute("role", "status");
+  status.prepend(remote);
+
+  const gone = el("div", "peer-gone");
+  const goneText = el("p", null);
+  const forgetNote = el("output", "set-status");
+  const forget = el("button", "btn", "Forget this peer");
+  forget.type = "button";
+  forget.addEventListener("click", async () => {
+    forget.disabled = true;
+    const res = await request("DELETE", `/api/fed/peers/${current.peer_id}`);
+    forget.disabled = false;
+    if (!res.ok) {
+      forgetNote.dataset.tone = "bad";
+      forgetNote.textContent = reason(res);
+    }
+    refresh(true);
+  });
+  gone.append(goneText, forget, forgetNote);
+  gone.hidden = true;
+
   const list = el("ul", "share-list");
   const none = el("p", "set-note", "No project shared yet. Pairing alone lets nothing through.");
   const add = addShare({ peer, refresh });
@@ -148,7 +170,7 @@ function peerCard(refresh) {
   const actions = el("div", "peer-actions");
   actions.append(pause, resume, disconnect.root, note);
 
-  root.append(head, pending.root, status, shares, actions);
+  root.append(head, pending.root, gone, status, shares, actions);
   return {
     root,
     update(next) {
@@ -157,11 +179,16 @@ function peerCard(refresh) {
       root.dataset.state = next.state;
       label.textContent = next.label || "Unnamed peer";
       print.textContent = next.fingerprint || next.peer_id;
-      state.textContent = waitingOnYou && confirmedIds().has(next.peer_id) ? "Waiting for them" : STATE[next.state] || next.state;
+      const removedByThem = next.state === "removed" && next.removed_reason === "remote_removed";
+      state.textContent = removedByThem ? "Removed by them" : waitingOnYou && confirmedIds().has(next.peer_id) ? "Waiting for them" : STATE[next.state] || next.state;
       pending.root.hidden = !waitingOnYou;
       if (waitingOnYou) pending.update(next);
-      status.hidden = waitingOnYou;
-      shares.hidden = waitingOnYou;
+      status.hidden = waitingOnYou || removedByThem;
+      shares.hidden = waitingOnYou || removedByThem;
+      gone.hidden = !removedByThem;
+      goneText.textContent = `${next.label || "This peer"} removed the pairing from their side. Nothing is shared any more. To connect again, send a new invite (Invite a machine, below) or join with a link they send.`;
+      remote.hidden = !next.remote_paused || removedByThem;
+      remote.textContent = `Paused by ${next.label || "this peer"}. What you send waits, or is refused, until they resume.`;
       health.textContent = healthFacts(next);
       traffic.textContent = trafficFacts(next);
       error.textContent = next.last_error || "";
@@ -182,7 +209,7 @@ function peerCard(refresh) {
       add.root.hidden = next.state === "paused" || next.state === "incompatible";
       pause.hidden = !PAUSABLE.includes(next.state);
       resume.hidden = next.state !== "paused";
-      actions.hidden = waitingOnYou;
+      actions.hidden = waitingOnYou || removedByThem;
     },
   };
 }
@@ -209,7 +236,7 @@ export function peersPanel() {
     if (!fed.enabled) return out.replaceChildren(el("p", "set-note", "Federation is off, so no peers are connected."));
     connect.sync(fed);
     identityValue.textContent = fed.fingerprint || fed.node_id || "No identity yet";
-    const peers = fed.peers.filter((peer) => peer.state !== "removed");
+    const peers = fed.peers.filter((peer) => peer.state !== "removed" || peer.removed_reason === "remote_removed");
     const live = new Set(peers.map((peer) => peer.peer_id));
     for (const [id, card] of cards)
       if (!live.has(id)) {

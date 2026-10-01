@@ -3,7 +3,7 @@
 // that cannot be undone. Nothing here shows a value the server has not confirmed.
 
 import { el } from "./dom.js";
-import { showSignIn } from "./signin.js";
+import { authFetch, showSignIn } from "./signin.js";
 
 const REASONS = {
   busy: "The database is busy. Nothing was changed; try again in a moment.",
@@ -31,7 +31,7 @@ export async function request(method, path, body) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
   }
-  const response = await fetch(path, options).catch(() => null);
+  const response = await authFetch(path, options).catch(() => null);
   if (!response) return { ok: false, status: 0, data: { error: "The dashboard lost its server. Nothing was changed." } };
   if (response.status === 401) showSignIn();
   const data = await response.json().catch(() => ({}));
@@ -117,7 +117,9 @@ export function textInput(placeholder) {
 
 // A checkbox that reads as a switch. Its position is set by `set` only, so a click that the
 // server refuses leaves it where it was.
-export function switchRow({ label, hint, onToggle }) {
+// A form switch (default) changes at once and the form saves it. An `async` switch acts on
+// the server straight away, so the box stays put until `set` says the server agreed.
+export function switchRow({ label, hint, onToggle, async = false }) {
   const id = uid("sw");
   const root = el("div", "fld sw");
   const input = el("input");
@@ -140,10 +142,9 @@ export function switchRow({ label, hint, onToggle }) {
   wrap.append(input, track, text);
   root.append(wrap, status);
   input.addEventListener("click", (event) => {
-    // By now the browser has flipped the box; that is the state asked for. preventDefault
-    // puts the box back, and only `set` moves it, once the server has agreed.
+    // By now the browser has flipped the box; that is the state asked for.
     const wanted = input.checked;
-    event.preventDefault();
+    if (async) event.preventDefault();
     onToggle(wanted);
   });
   return {

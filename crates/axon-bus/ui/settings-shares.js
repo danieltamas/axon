@@ -185,8 +185,8 @@ export function shareRow({ peer, refresh }) {
     if (!res.ok) (key === "outbound" ? send : receive).say(reason(res));
     refresh();
   };
-  const send = switchRow({ label: "Send", onToggle: (on) => change("outbound", on) });
-  const receive = switchRow({ label: "Receive", onToggle: (on) => change("inbound", on) });
+  const send = switchRow({ label: "Send", async: true, onToggle: (on) => change("outbound", on) });
+  const receive = switchRow({ label: "Receive", async: true, onToggle: (on) => change("inbound", on) });
   flags.append(send.root, receive.root);
   const drop = async () => {
     const res = await request("DELETE", `/api/fed/shares/${current.share_id}`);

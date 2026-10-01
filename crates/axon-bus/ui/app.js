@@ -12,7 +12,7 @@ import { createOverview, projectKey, summarize } from "./overview.js";
 import { offerInstall, onServerLost, registerWorker } from "./pwa.js";
 import { createEnder } from "./send.js";
 import { createSettings } from "./settings.js";
-import { exchangeLogin, showSignIn } from "./signin.js";
+import { authFetch, exchangeLogin, hasSession, showSignIn, streamUrl } from "./signin.js";
 import { createUsage } from "./usage.js";
 
 const $ = (id) => document.getElementById(id);
@@ -173,7 +173,7 @@ function render() {
 
 function connect() {
   const link = $("link");
-  const source = new EventSource("/api/stream");
+  const source = new EventSource(streamUrl());
   source.addEventListener("open", () => {
     link.dataset.state = "live";
     setText(link, "Live");
@@ -188,7 +188,7 @@ function connect() {
     link.dataset.state = "down";
     setText(link, "Reconnecting");
     // An EventSource error carries no status; a plain request tells a lost session from a lost server.
-    const probe = await fetch("/api/snapshot", { cache: "no-store" }).catch(() => null);
+    const probe = await authFetch("/api/snapshot", { cache: "no-store" }).catch(() => null);
     if (probe && probe.status === 401) {
       source.close();
       showSignIn();
@@ -222,7 +222,8 @@ applyTheme(THEMES.includes(saved) ? saved : "auto");
 new ResizeObserver(() => arcs.redraw()).observe($("tree"));
 exchangeLogin().then(() => {
   route();
-  connect();
+  if (hasSession()) connect();
+  else showSignIn();
 });
 registerWorker();
 offerInstall();

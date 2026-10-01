@@ -3,7 +3,7 @@
 // absent and the view reports itself unavailable.
 
 import { createBrain, modelHarness } from "./brain.js";
-import { showSignIn } from "./signin.js";
+import { authFetch, showSignIn } from "./signin.js";
 import { clock, displayMoney, el, glyph, setText, tokens } from "./dom.js";
 
 const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All time"]];
@@ -91,7 +91,7 @@ export function createUsage(container, { onUnavailable }) {
     const asked = range;
     let response;
     try {
-      response = await fetch(`/api/summary?range=${asked}`);
+      response = await authFetch(`/api/summary?range=${asked}`);
     } catch {
       return; // The server is restarting; the next poll retries.
     }

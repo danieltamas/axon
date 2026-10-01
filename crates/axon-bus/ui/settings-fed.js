@@ -10,6 +10,7 @@ export function federationSection({ apply }) {
   const toggle = switchRow({
     label: "Federation",
     hint: "When off, no connection is made or accepted.",
+    async: true,
     onToggle: async (on) => {
       toggle.lock(true);
       toggle.say("");

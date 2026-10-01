@@ -4,7 +4,7 @@
 // `question` is a pending question the operator may answer on its addressee's behalf.
 
 import { el } from "./dom.js";
-import { showSignIn } from "./signin.js";
+import { authFetch, showSignIn } from "./signin.js";
 
 const MAX = 400;
 const CONFIRM_MS = 4000;
@@ -71,7 +71,7 @@ export function createComposer({ routes, thread = null, question = null, drafts,
       ? { from_id: r.from, to_id: r.to, kind, body: text, reply_to: question.id }
       : { from_id: r.from, to_id: r.to, kind, body: text, thread };
     send.disabled = true;
-    const response = await fetch("/api/msg", {
+    const response = await authFetch("/api/msg", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -164,7 +164,7 @@ export function createEnder({ sessions, label, confirm, compact = false }) {
     }
     disarm();
     button.disabled = true;
-    const response = await fetch("/api/end", {
+    const response = await authFetch("/api/end", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // The start time pins each process, so a pid reused since the page drew is refused.
