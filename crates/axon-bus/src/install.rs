@@ -264,6 +264,11 @@ pub(crate) fn wire(
                 if let Some(merged) = crate::hermes_hooks::wire(original, &hooks) {
                     return Ok(merged);
                 }
+                anyhow::ensure!(
+                    !crate::hermes_hooks::has_unmergeable_hooks(original),
+                    "config.yaml has a `hooks:` value this installer cannot merge into; \
+                     write it as a block mapping (`hooks:` on its own line) and run install again"
+                );
             }
             let mut text = original.to_owned();
             if !text.is_empty() && !text.ends_with('\n') {

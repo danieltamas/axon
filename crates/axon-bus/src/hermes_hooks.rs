@@ -5,13 +5,46 @@
 use crate::install::is_bus_command;
 use crate::Harness;
 
+/// `line` without a trailing ` # comment`, for matching keys; item lines are matched whole.
+fn code(line: &str) -> &str {
+    if line.trim_start().starts_with('#') {
+        return "";
+    }
+    line.find(" #").map_or(line, |at| &line[..at]).trim_end()
+}
+
+/// Whether `line` holds YAML content rather than blank space or a comment.
+fn content(line: &str) -> bool {
+    !code(line).trim().is_empty()
+}
+
 /// The line range of the top-level `hooks:` block's body, if the config has one.
 fn block(lines: &[&str]) -> Option<(usize, usize)> {
-    let head = lines.iter().position(|l| l.trim_end() == "hooks:")?;
+    let head = lines.iter().position(|l| code(l) == "hooks:")?;
     let end = (head + 1..lines.len())
-        .find(|&i| !lines[i].trim().is_empty() && !lines[i].starts_with([' ', '\t']))
+        .find(|&i| content(lines[i]) && !lines[i].starts_with([' ', '\t']))
         .unwrap_or(lines.len());
     Some((head + 1, end))
+}
+
+/// Whether the config has a top-level `hooks` key in a form this editor does not merge
+/// into (`hooks: {}`, a flow mapping, an anchor), where appending a block would duplicate it.
+pub fn has_unmergeable_hooks(config: &str) -> bool {
+    config
+        .lines()
+        .any(|l| l.starts_with("hooks:") && code(l) != "hooks:")
+}
+
+/// Whether the first content line after `at` holds items of the key on `at`, indented
+/// deeper or as an indentless sequence at the key's own indent.
+fn has_items(lines: &[&str], at: usize) -> bool {
+    lines[at + 1..]
+        .iter()
+        .find(|l| content(l))
+        .is_some_and(|next| {
+            indent(next) > indent(lines[at])
+                || (indent(next) == indent(lines[at]) && next.trim_start().starts_with("- "))
+        })
 }
 
 fn indent(line: &str) -> usize {
@@ -42,14 +75,8 @@ pub fn unwire(config: &str) -> String {
         .filter(|l| !is_bus_item(l))
         .collect();
     for (i, line) in body.iter().enumerate() {
-        let is_key = !line.trim().is_empty()
-            && line.trim_end().ends_with(':')
-            && !line.trim().starts_with('-');
-        let has_items = body[i + 1..]
-            .iter()
-            .find(|l| !l.trim().is_empty())
-            .is_some_and(|next| indent(next) > indent(line));
-        if !is_key || has_items {
+        let is_key = code(line).ends_with(':') && !line.trim().starts_with('-');
+        if !is_key || has_items(&body, i) {
             kept.push(line);
         }
     }
@@ -80,11 +107,18 @@ pub fn wire(config: &str, hooks: &[(&str, String)]) -> Option<String> {
     for (event, command) in hooks {
         let item = format!("{items}- command: '{}'\n", command.replace('\'', "''"));
         let key = format!("{keys}{event}:");
-        match (start..end).find(|&i| lines[i].trim_end() == key) {
+        match (start..end).find(|&i| code(&lines[i]) == key) {
             Some(at) => {
-                // After the key's last item: the next line at or above the key's indent.
+                // After the key's last item: the next content line that is not one of its
+                // items (shallower, or a sibling key at the same indent).
                 let after = (at + 1..end)
-                    .find(|&i| !lines[i].trim().is_empty() && indent(&lines[i]) <= key_indent)
+                    .find(|&i| {
+                        let line = &lines[i];
+                        content(line)
+                            && (indent(line) < key_indent
+                                || (indent(line) == key_indent
+                                    && !line.trim_start().starts_with("- ")))
+                    })
                     .unwrap_or(end);
                 lines.insert(after, item);
                 end += 1;
