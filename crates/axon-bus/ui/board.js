@@ -4,7 +4,7 @@
 // and updated in place, so a snapshot at 50 events a second changes text, not DOM.
 
 import { activityChart } from "./activity.js";
-import { bytes, el, glyph, isProcess, mark, setRing, setText, since, STATUS, tokens, money, walk } from "./dom.js";
+import { bytes, el, glyph, isProcess, mark, oneLine, setRing, setText, since, STATUS, tokens, money, walk } from "./dom.js";
 import { createEnder } from "./send.js";
 
 const HARNESS_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", hermes: "Hermes" };
@@ -289,7 +289,7 @@ export function doingNow(rows) {
       const text = tool.detail ? `${tool.name} ${tool.detail}` : `${tool.name}${row.count > 1 ? ` · ${row.count} tools in this run` : ""}`;
       return { verb: "Ran", text };
     }
-    if (row.text) return { verb: "Said", text: row.text };
+    if (row.text) return { verb: "Said", text: oneLine(row.text) };
   }
   return null;
 }

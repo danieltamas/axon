@@ -363,6 +363,9 @@ a.crumb:hover { color: var(--ink-strong); }
 .row-kind { font-size: 12px; font-weight: 500; color: var(--faint); }
 .row-tok { font: 12px var(--mono); color: var(--faint); }
 .row p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
+.fields dt { color: var(--muted); }
+.fields dd { margin: 0; color: var(--ink-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
 .row.assistant p, .row.text p { color: var(--ink-strong); }
 .row.reasoning p { color: var(--muted); padding-left: 12px; border-left: 1px solid var(--line-strong); }
 .row.progress .row-kind { color: var(--signal); }

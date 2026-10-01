@@ -156,3 +156,40 @@ export function agents(snapshot) {
       walk(lane.roots, (node, depth, parent) => all.push({ node, depth, parent: parent && parent.id }));
   return all;
 }
+
+// A text that is one JSON object (a structured verdict an agent printed) as [label, value]
+// pairs; null for anything else.
+export function jsonFields(text) {
+  const trimmed = (text || "").trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  let value;
+  try {
+    value = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const fields = Object.entries(value).map(([key, v]) => [fieldLabel(key), typeof v === "string" ? v : JSON.stringify(v)]);
+  return fields.length ? fields : null;
+}
+
+// `risk_level` and `riskLevel` read as "Risk level".
+function fieldLabel(key) {
+  const words = key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Text as a paragraph, or a JSON object as the list of its fields.
+export function prose(text, className = null) {
+  const fields = jsonFields(text);
+  if (!fields) return el("p", className, text);
+  const list = el("dl", className ? `${className} fields` : "fields");
+  for (const [label, value] of fields) list.append(el("dt", null, label), el("dd", null, value));
+  return list;
+}
+
+// Text on one line: a JSON object reads as its fields.
+export function oneLine(text) {
+  const fields = jsonFields(text);
+  return fields ? fields.map(([label, value]) => `${label}: ${value}`).join(" · ") : text;
+}

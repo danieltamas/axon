@@ -4,7 +4,7 @@
 
 import { activityChart, activityFacts } from "./activity.js";
 import { doingNow, harnessName, metricsLine } from "./board.js";
-import { bytes, clock, el, isProcess, mark, setRing, since, STATUS, tokens, money } from "./dom.js";
+import { bytes, clock, el, isProcess, mark, oneLine, prose, setRing, since, STATUS, tokens, money } from "./dom.js";
 import { createComposer, createEnder } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };
@@ -64,7 +64,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
           top.append(el("span", "ti-people", [...t.people].join(" ↔ ")), el("span", "ti-when", since(m.sent_at, now)));
           const meta = el("span", "ti-meta", `${t.messages.length} ${t.messages.length === 1 ? "message" : "messages"}`);
           if (pending(t)) item.dataset.waiting = "true";
-          item.append(top, el("span", "ti-body", m.body ?? "Message text is withheld: content capture is off."), meta);
+          item.append(top, el("span", "ti-body", m.body == null ? "Message text is withheld: content capture is off." : oneLine(m.body)), meta);
           if (pending(t)) meta.append(el("b", "waiting", ` · ${pending(t).to} owes an answer`));
           return item;
         }),
@@ -145,7 +145,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
     const top = el("header");
     top.append(el("span", "m-kind", KIND_LABELS[m.kind] || m.kind), el("span", "m-route", `${m.from} → ${m.to}`), el("time", null, clock(m.sent_at)));
     const state = m.acked_at ? (m.needs_reply ? `answered ${since(m.acked_at, now)}` : `acknowledged ${since(m.acked_at, now)}`) : m.delivered_at ? (m.needs_reply ? "delivered · awaiting an answer" : "delivered") : "not delivered yet";
-    item.append(top, el("p", m.body == null ? "withheld" : null, m.body ?? "Message text is withheld: content capture is off."), el("span", "m-state", state));
+    item.append(top, m.body == null ? el("p", "withheld", "Message text is withheld: content capture is off.") : prose(m.body), el("span", "m-state", state));
     // A reference to a message already on screen (an answer's question) says nothing new.
     const refs = (m.refs || []).filter((ref) => !shown.has(ref));
     if (refs.length) {
@@ -258,7 +258,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
     top.append(el("span", "row-kind", recorded ? (row.kind === "assistant" ? "Says" : cap(row.kind)) : row.label));
     if (row.tokens) top.append(el("span", "row-tok", `${tokens(row.tokens)} tok`));
     item.append(top);
-    if (row.text) item.append(el("p", null, row.text));
+    if (row.text) item.append(prose(row.text));
     else if (recorded) item.append(el("p", "structure", "Text withheld: content capture is off."));
     return item;
   }

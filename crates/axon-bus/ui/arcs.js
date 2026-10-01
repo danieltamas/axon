@@ -1,5 +1,6 @@
 // Messages on the tree (BUS-PLAN §7.2): each recent message is an arc between its sender
-// and receiver, and a new one travels as a pulse. The open thread stays lit; the rest fade.
+// and receiver, and a new one travels as a pulse. The open thread stays lit; every other
+// arc fades out within FADE_MS.
 
 import { svg } from "./dom.js";
 
@@ -47,11 +48,13 @@ export function createArcs({ board, boardEl, overlay }) {
     const now = Date.now();
     const recent = messages.filter((m) => visible.has(m.from) && visible.has(m.to) && m.from !== m.to);
     for (const m of recent.slice(-ARCS)) {
+      const age = m.sent_at ? now - m.sent_at : FADE_MS;
+      // An arc is a message in flight: it fades out, unless its thread is open.
+      const strength = thread === m.thread ? 1 : Math.max(0, 1 - age / FADE_MS) * (thread ? 0.08 : 1);
+      if (strength <= 0) continue;
       const d = arcPath(m.from, m.to);
       if (!d) continue;
       const path = svg("path", { d, class: `arc said k-${m.kind}` });
-      const age = m.sent_at ? now - m.sent_at : FADE_MS / 2;
-      const strength = thread ? (m.thread === thread ? 1 : 0.08) : Math.max(0.25, 1 - age / FADE_MS);
       path.style.setProperty("--strength", strength.toFixed(2));
       paths.push(path);
     }
