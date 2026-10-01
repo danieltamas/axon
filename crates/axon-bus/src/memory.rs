@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use rusqlite::Connection;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
@@ -124,7 +124,10 @@ impl Sampler {
                 {
                     return None;
                 }
-                let cwd = process.cwd()?.to_path_buf();
+                let mut cwd = process.cwd()?.to_path_buf();
+                if harness == "codex" {
+                    cwd = codex_cwd(process.cmd(), cwd);
+                }
                 // The filesystem root is no one's project.
                 cwd.parent()?;
                 Some(Session {
@@ -181,6 +184,45 @@ fn start_ms(start_secs: u64) -> i64 {
     i64::try_from(start_secs).unwrap_or(0) * 1000
 }
 
+/// Where a Codex process works: `codex exec -C <dir>` keeps the OS cwd and records the
+/// session under `<dir>`, so the flag (last one wins, relative to the OS cwd) is the
+/// directory its transcript names. Only the flags before a bare `--` are read.
+pub fn codex_cwd(argv: &[impl AsRef<OsStr>], os_cwd: PathBuf) -> PathBuf {
+    let mut dir: Option<&str> = None;
+    let mut args = argv.iter().skip(1).filter_map(|a| a.as_ref().to_str());
+    while let Some(arg) = args.next() {
+        dir = match arg {
+            "--" => break,
+            "-C" | "--cd" => args.next().or(dir),
+            // `--cd=<v>` takes <v> verbatim; only the attached short form drops an `=`.
+            _ => match (arg.strip_prefix("--cd="), arg.strip_prefix("-C")) {
+                (Some(attached), _) => Some(attached),
+                (None, Some(attached)) if !arg.starts_with("--") => {
+                    Some(attached.strip_prefix('=').unwrap_or(attached))
+                }
+                _ => dir,
+            },
+        };
+    }
+    dir.filter(|d| !d.is_empty())
+        .map_or(os_cwd.clone(), |d| lexically_clean(&os_cwd.join(d)))
+}
+
+/// `..` and `.` folded away without touching the filesystem, as a transcript records it.
+fn lexically_clean(path: &Path) -> PathBuf {
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                clean.pop();
+            }
+            Component::CurDir => {}
+            other => clean.push(other),
+        }
+    }
+    clean
+}
+
 fn helper_arg(arg: &OsStr) -> bool {
     arg.to_str().is_some_and(|a| a.starts_with("bg-"))
 }
@@ -188,6 +230,50 @@ fn helper_arg(arg: &OsStr) -> bool {
 /// Whole MiB, so a few pages of churn do not republish the snapshot.
 fn whole_mib(bytes: u64) -> u64 {
     bytes >> 20 << 20
+}
+
+#[cfg(test)]
+mod codex_cwd_tests {
+    use super::*;
+
+    fn cwd_of(argv: &[&str]) -> PathBuf {
+        codex_cwd(argv, PathBuf::from("/repo"))
+    }
+
+    #[test]
+    fn codex_cwd_follows_the_cd_flag_in_every_spelling() {
+        for flag in [
+            &["codex", "exec", "-C", "/wt"][..],
+            &["codex", "exec", "--cd", "/wt"],
+            &["codex", "exec", "--cd=/wt"],
+            &["codex", "exec", "-C/wt"],
+            &["codex", "exec", "-C=/wt", "do it"],
+        ] {
+            assert_eq!(cwd_of(flag), PathBuf::from("/wt"), "{flag:?}");
+        }
+    }
+
+    #[test]
+    fn codex_cwd_takes_a_long_form_value_verbatim() {
+        assert_eq!(
+            cwd_of(&["codex", "exec", "--cd==work", "inspect"]),
+            PathBuf::from("/repo/=work")
+        );
+    }
+
+    #[test]
+    fn codex_cwd_resolves_a_relative_dir_and_ignores_the_prompt_after_dashes() {
+        assert_eq!(cwd_of(&["codex", "-C", "../wt"]), PathBuf::from("/wt"));
+        assert_eq!(
+            cwd_of(&["codex", "exec", "--", "-C", "/x"]),
+            PathBuf::from("/repo")
+        );
+        assert_eq!(
+            cwd_of(&["codex", "exec", "--model", "o3"]),
+            PathBuf::from("/repo")
+        );
+        assert_eq!(cwd_of(&["codex", "-C"]), PathBuf::from("/repo"));
+    }
 }
 
 #[cfg(test)]
