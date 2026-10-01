@@ -39,10 +39,26 @@ pub enum Outcome {
 
 /// Send to a remote target; `None` when `request.to` is not one and the local path applies.
 pub fn send(conn: &mut Connection, request: &Request) -> anyhow::Result<Option<Outcome>> {
+    send_via(conn, request, None)
+}
+
+/// What an answer to a received message is tied to: the peer by its immutable id (a label can
+/// be changed, or reused by another peer after a removal) and the share the message came in
+/// under. The discovery cache is only eventually consistent, so an answer never depends on it.
+struct Pinned<'a> {
+    peer_id: &'a str,
+    share_id: &'a str,
+}
+
+fn send_via(
+    conn: &mut Connection,
+    request: &Request,
+    pinned: Option<Pinned>,
+) -> anyhow::Result<Option<Outcome>> {
     let Some(target) = request.to.strip_prefix(TARGET_PREFIX) else {
         return Ok(None);
     };
-    Ok(Some(match enqueue(conn, request, target)? {
+    Ok(Some(match enqueue(conn, request, target, pinned)? {
         Ok(id) => Outcome::Queued {
             id,
             to: request.to.to_owned(),
@@ -59,19 +75,23 @@ pub fn reply(
     from: &str,
     body: &str,
 ) -> anyhow::Result<Option<Outcome>> {
-    let asked: Option<(String, String, String)> = conn
+    let asked: Option<(String, String, String, String, Option<String>)> = conn
         .query_row(
-            "SELECT m.from_id, m.thread, i.message_id FROM messages m
+            "SELECT m.from_id, m.thread, i.message_id, i.peer_id,
+                    (SELECT a.share_id FROM fed_audit a
+                     WHERE a.message_id=i.message_id AND a.generation=i.generation
+                       AND a.direction='in' AND a.decision='accepted')
+             FROM messages m
              JOIN fed_inbox i ON i.local_message_id=m.id
              WHERE m.id=?1 AND m.needs_reply=1 AND m.to_id=?2",
             params![question, from],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((asker, thread, remote_id)) = asked else {
+    let Some((asker, thread, remote_id, peer_id, share_id)) = asked else {
         return Ok(None);
     };
-    let outcome = send(
+    let outcome = send_via(
         conn,
         &Request {
             from,
@@ -82,6 +102,10 @@ pub fn reply(
             refs: &[],
             reply_to: Some(&remote_id),
         },
+        Some(Pinned {
+            peer_id: &peer_id,
+            share_id: share_id.as_deref().unwrap_or(""),
+        }),
     )?;
     if matches!(outcome, Some(Outcome::Queued { .. })) {
         conn.execute(
@@ -106,16 +130,31 @@ fn peer_by_label(
     .optional()
 }
 
+/// The row of a peer id, in the shape `peer_by_label` returns.
+fn peer_by_id(conn: &Connection, peer_id: &str) -> rusqlite::Result<Option<(String, String, i64)>> {
+    conn.query_row(
+        "SELECT peer_id, state, generation FROM peers WHERE peer_id=?1",
+        [peer_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .optional()
+}
+
 fn enqueue(
     conn: &mut Connection,
     request: &Request,
     target: &str,
+    pinned: Option<Pinned>,
 ) -> anyhow::Result<Result<String, &'static str>> {
     if !enabled(conn) {
         return Ok(Err("federation_off"));
     }
     let (label, session) = target.split_once('/').unwrap_or((target, ""));
-    let (peer_id, generation) = match peer_by_label(conn, label)? {
+    let found = match &pinned {
+        Some(pin) => peer_by_id(conn, pin.peer_id)?,
+        None => peer_by_label(conn, label)?,
+    };
+    let (peer_id, generation) = match found {
         None => return Ok(Err("unknown_peer")),
         Some((_, state, _)) if state == "removed" => return Ok(Err("peer_removed")),
         Some((_, state, _)) if state == "paused" => return Ok(Err("peer_paused")),
@@ -123,13 +162,16 @@ fn enqueue(
         Some((peer_id, _, generation)) => (peer_id, generation),
     };
     let tx = store::write_tx(conn)?;
-    let share_id: Option<String> = tx
-        .query_row(
-            "SELECT share_id FROM fed_remote_sessions WHERE peer_id=?1 AND session=?2",
-            params![peer_id, session],
-            |r| r.get(0),
-        )
-        .optional()?;
+    let share_id: Option<String> = match &pinned {
+        Some(pin) => Some(pin.share_id.to_owned()),
+        None => tx
+            .query_row(
+                "SELECT share_id FROM fed_remote_sessions WHERE peer_id=?1 AND session=?2",
+                params![peer_id, session],
+                |r| r.get(0),
+            )
+            .optional()?,
+    };
     let share = match share_id {
         Some(id) => shares::get(&tx, &id)?,
         None => None,

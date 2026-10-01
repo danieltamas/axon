@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id            TEXT PRIMARY KEY,
     thread        TEXT NOT NULL,
     seq           INTEGER NOT NULL,
-    from_id       TEXT NOT NULL REFERENCES agents(id),
+    from_id       TEXT NOT NULL,
     to_id         TEXT NOT NULL REFERENCES agents(id),
     kind          TEXT NOT NULL,
     body          TEXT NOT NULL,
@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(to_id, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread, seq);
+-- from_id has no foreign key: a remote sender, `peer:<label>/<session>`, has no agents row
+-- (docs/P2P-SPEC.md §5). These triggers keep the key for every local sender.
+CREATE TRIGGER IF NOT EXISTS messages_local_sender_insert BEFORE INSERT ON messages
+WHEN NEW.from_id NOT LIKE 'peer:%' AND NOT EXISTS (SELECT 1 FROM agents WHERE id=NEW.from_id)
+BEGIN SELECT RAISE(ABORT, 'FOREIGN KEY constraint failed'); END;
+CREATE TRIGGER IF NOT EXISTS messages_local_sender_update BEFORE UPDATE OF from_id ON messages
+WHEN NEW.from_id NOT LIKE 'peer:%' AND NOT EXISTS (SELECT 1 FROM agents WHERE id=NEW.from_id)
+BEGIN SELECT RAISE(ABORT, 'FOREIGN KEY constraint failed'); END;
 
 -- cache_write_tokens are 5-minute writes; 1-hour writes are priced differently.
 -- source_key dedupes transcript turns (one row per message id); source_offset is the
@@ -235,7 +243,45 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
     let conn = open(path)?;
     conn.execute_batch(SCHEMA)?;
     add_missing_columns(&conn)?;
+    drop_sender_foreign_key(&conn)?;
     Ok(conn)
+}
+
+/// A database made before federation has `messages.from_id REFERENCES agents(id)`, which a remote
+/// sender cannot satisfy. SQLite cannot drop a constraint, so the table is rebuilt once; the
+/// triggers in `SCHEMA` take over the check.
+fn drop_sender_foreign_key(conn: &Connection) -> rusqlite::Result<()> {
+    let keyed: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('messages') WHERE \"from\"='from_id')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !keyed {
+        return Ok(());
+    }
+    // The pragma is a no-op inside a transaction.
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let rebuilt = conn.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE messages_new (
+             id TEXT PRIMARY KEY, thread TEXT NOT NULL, seq INTEGER NOT NULL, from_id TEXT NOT NULL,
+             to_id TEXT NOT NULL REFERENCES agents(id), kind TEXT NOT NULL, body TEXT NOT NULL,
+             refs_json TEXT NOT NULL DEFAULT '[]', needs_reply INTEGER NOT NULL DEFAULT 0,
+             deadline INTEGER, default_reply TEXT, sent_at INTEGER, delivered_at INTEGER, acked_at INTEGER
+         );
+         INSERT INTO messages_new (id,thread,seq,from_id,to_id,kind,body,refs_json,needs_reply,
+                                   deadline,default_reply,sent_at,delivered_at,acked_at)
+             SELECT id,thread,seq,from_id,to_id,kind,body,refs_json,needs_reply,
+                    deadline,default_reply,sent_at,delivered_at,acked_at FROM messages;
+         DROP TABLE messages;
+         ALTER TABLE messages_new RENAME TO messages;
+         COMMIT;",
+    )
+    .inspect_err(|_| drop(conn.execute_batch("ROLLBACK")));
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    rebuilt?;
+    // Indexes and triggers went with the old table.
+    conn.execute_batch(SCHEMA)
 }
 
 /// Columns added after their table first shipped; `CREATE TABLE IF NOT EXISTS`

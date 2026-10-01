@@ -143,8 +143,6 @@ struct Sender {
 fn receive(conn: &mut Connection, limits: &Limits, node: &str, msg: Msg) -> anyhow::Result<Value> {
     // Durable before the acknowledgement leaves; hook transactions keep NORMAL (§5).
     conn.pragma_update(None, "synchronous", "FULL")?;
-    // The messages table refers to registered agents; a remote principal is none (§5).
-    conn.pragma_update(None, "foreign_keys", "OFF")?;
     let tx = store::write_tx(conn)?;
     let fingerprint = node
         .parse::<EndpointId>()
@@ -269,7 +267,11 @@ fn check(tx: &Connection, limits: &Limits, node: &str, msg: &Msg) -> anyhow::Res
         [&recipient],
         |r| r.get(0),
     )?;
-    if !limits.allow(&peer_id, &recipient) || pending >= PENDING_PER_RECIPIENT {
+    // A full inbox does not clear by waiting, so unlike a rate limit the sender must not retry.
+    if pending >= PENDING_PER_RECIPIENT {
+        return reject("recipient_full");
+    }
+    if !limits.allow(&peer_id, &recipient) {
         return reject("rate_limited");
     }
     // 9. The same message again is acknowledged, not stored; the same id with other content

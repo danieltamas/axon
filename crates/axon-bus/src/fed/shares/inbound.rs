@@ -190,7 +190,12 @@ fn flagged(tx: &Connection, peer_id: &str, flags: &Flags, accept: bool) -> anyho
     if !fits {
         return Ok(error("wrong_state"));
     }
-    if flags.revision <= share.revision && !(accept && share.state == "offered_out") {
+    // Both owners bump the one revision, so two changes can cross: an equal revision still
+    // carries news when the flags differ, an older one never does.
+    let known = (flags.inbound, flags.outbound) == (share.remote_inbound, share.remote_outbound);
+    let news = flags.revision > share.revision || (flags.revision == share.revision && !known);
+    let first_accept = accept && share.state == "offered_out";
+    if !(news || first_accept) {
         return Ok(ack("duplicate"));
     }
     let state = if accept {

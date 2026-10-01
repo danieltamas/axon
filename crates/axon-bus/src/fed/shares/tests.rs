@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 use serde_json::json;
 
 use super::*;
-use crate::fed::testkit::{agent, fixture, node, repo, share};
+use crate::fed::testkit::{agent, fixture, node, repo, share, Fixture};
 use crate::store;
 
 fn share_row(conn: &Connection, id: &str, peer: &str, state: &str, revision: i64) {
@@ -47,6 +47,7 @@ fn unshare_cancels_queued_rows_and_deletes_only_undelivered_inbound() {
             [&share],
         )
         .unwrap();
+    agent(&fx.conn, "agent", std::path::Path::new("/repo"), "active");
     for (local, delivered) in [("pending", None), ("shown", Some(5))] {
         fx.conn
             .execute(
@@ -124,13 +125,21 @@ fn revisions_only_move_forward_and_the_generation_must_match() {
     let mut fx = fixture();
     let share = id('c');
     share_row(&fx.conn, &share, "p1", "active", 5);
-    let old = apply_frame(
-        &mut fx.conn,
-        &node(1),
-        frame("share_update", &share, 5, false),
-    )
-    .unwrap();
-    assert_eq!(old["status"], "duplicate");
+    let flags = |fx: &mut Fixture, revision, inbound| {
+        let frame = frame("share_update", &share, revision, inbound);
+        apply_frame(&mut fx.conn, &node(1), frame).unwrap()
+    };
+    // The row's remote flags are inbound on: the same flags at the same revision are a repeat.
+    assert_eq!(flags(&mut fx, 5, true)["status"], "duplicate");
+    assert_eq!(
+        flags(&mut fx, 4, false)["status"],
+        "duplicate",
+        "older never wins"
+    );
+    assert_eq!(count(&fx.conn, "SELECT remote_inbound FROM peer_shares"), 1);
+    // Two changes that crossed share a revision; the other owner's flags still arrive.
+    assert_eq!(flags(&mut fx, 5, false)["status"], "accepted");
+    assert_eq!(count(&fx.conn, "SELECT remote_inbound FROM peer_shares"), 0);
     let mut stale = frame("share_update", &share, 6, false);
     stale["generation"] = json!(6);
     let reply = apply_frame(&mut fx.conn, &node(1), stale).unwrap();
@@ -138,7 +147,7 @@ fn revisions_only_move_forward_and_the_generation_must_match() {
     assert_eq!(
         count(&fx.conn, "SELECT revision FROM peer_shares"),
         5,
-        "neither frame changed the share"
+        "a wrong generation changed nothing"
     );
 }
 

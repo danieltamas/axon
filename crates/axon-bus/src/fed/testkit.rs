@@ -26,7 +26,6 @@ pub fn node(seed: u8) -> String {
 pub fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let conn = store::init(&dir.path().join("axon.db")).unwrap();
-    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     store::put_setting(&conn, "fed_enabled", Some("1")).unwrap();
     for (id, seed) in [("p1", 1u8), ("p2", 2)] {
         conn.execute(

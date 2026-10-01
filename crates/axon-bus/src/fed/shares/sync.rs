@@ -28,21 +28,30 @@ pub fn install(handle: &Handle, db: &Path) {
         "share_update",
         "share_remove",
     ] {
-        handle.on_frame(kind, frame_handler(db.to_owned()));
+        handle.on_frame(kind, frame_handler(handle.clone(), db.to_owned()));
     }
     tokio::spawn(resend_on_connect(handle.clone(), db.to_owned()));
 }
 
-fn frame_handler(db: PathBuf) -> FrameHandler {
+fn frame_handler(handle: Handle, db: PathBuf) -> FrameHandler {
     Arc::new(move |node: String, frame: Value| {
-        let db = db.clone();
+        let (handle, db) = (handle.clone(), db.clone());
         Box::pin(async move {
-            let applied = tokio::task::spawn_blocking(move || {
-                apply_frame(&mut store::open(&db)?, &node, frame)
+            let applied = tokio::task::spawn_blocking({
+                let db = db.clone();
+                move || apply_counting(&db, &node, frame)
             })
             .await;
             match applied {
-                Ok(Ok(reply)) => reply,
+                Ok(Ok((reply, answer_back))) => {
+                    // A change that moved our revision may have crossed one of ours still in
+                    // flight, which the sender then dropped as older: say it again at the new
+                    // revision. An equal revision with other flags is accepted, so this ends.
+                    if let Some(share_id) = answer_back {
+                        tokio::spawn(push(handle, db, share_id, true));
+                    }
+                    reply
+                }
                 other => {
                     if let Ok(Err(err)) = other {
                         eprintln!("axon-bus: a share frame could not be applied: {err:#}");
@@ -52,6 +61,20 @@ fn frame_handler(db: PathBuf) -> FrameHandler {
             }
         })
     })
+}
+
+/// Apply a share frame; the share to re-send when a `share_update` moved its revision forward.
+fn apply_counting(db: &Path, node: &str, frame: Value) -> anyhow::Result<(Value, Option<String>)> {
+    let mut conn = store::open(db)?;
+    let share_id = frame["share_id"].as_str().map(str::to_owned);
+    let is_update = frame["type"] == "share_update";
+    let revision = |conn: &rusqlite::Connection| -> Option<i64> {
+        get(conn, share_id.as_deref()?).ok()?.map(|s| s.revision)
+    };
+    let before = revision(&conn);
+    let reply = apply_frame(&mut conn, node, frame)?;
+    let moved = matches!((before, revision(&conn)), (Some(old), Some(new)) if new > old);
+    Ok((reply, share_id.filter(|_| is_update && moved)))
 }
 
 /// The peer a share belongs to and the frame that brings it up to date.

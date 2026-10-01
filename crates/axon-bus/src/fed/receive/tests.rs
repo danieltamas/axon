@@ -189,3 +189,81 @@ fn rates_refill_slowly_and_a_burst_is_bounded() {
         "another recipient is unaffected"
     );
 }
+
+#[test]
+fn an_old_database_is_rebuilt_once_and_keeps_its_rows_and_the_local_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axon.db");
+    {
+        let old = rusqlite::Connection::open(&path).unwrap();
+        old.execute_batch(
+                "CREATE TABLE agents (id TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
+                    agent_ref TEXT, pid INTEGER, parent_id TEXT, root_id TEXT NOT NULL, role TEXT,
+                    mission TEXT, model TEXT, repo TEXT, cwd TEXT, worktree TEXT,
+                    status TEXT NOT NULL, started_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+                    ended_at INTEGER);
+                 INSERT INTO agents (id,harness,session_id,root_id,status,started_at,last_seen_at)
+                     VALUES ('a1','claude','s','a1','active',1,1);
+                 CREATE TABLE messages (id TEXT PRIMARY KEY, thread TEXT NOT NULL, seq INTEGER NOT NULL,
+                    from_id TEXT NOT NULL REFERENCES agents(id), to_id TEXT NOT NULL REFERENCES agents(id),
+                    kind TEXT NOT NULL, body TEXT NOT NULL, refs_json TEXT NOT NULL DEFAULT '[]',
+                    needs_reply INTEGER NOT NULL DEFAULT 0, deadline INTEGER, default_reply TEXT,
+                    delivered_at INTEGER, acked_at INTEGER);
+                 INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body) VALUES ('m1','t',1,'a1','a1','note','hi');",
+            )
+            .unwrap();
+    }
+    let conn = crate::store::init(&path).unwrap();
+    let keyed: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_foreign_key_list('messages') WHERE \"from\"='from_id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(keyed, 0);
+    let insert = |from: &str| {
+        conn.execute(
+                "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body) VALUES (?1,'t',2,?2,'a1','note','x')",
+                [from, from],
+            )
+    };
+    assert!(
+        insert("peer:bob/k3j9x2pq7m4a").is_ok(),
+        "a remote sender needs no agents row"
+    );
+    assert!(
+        insert("nobody").is_err(),
+        "a local sender must still be a registered agent"
+    );
+    assert_eq!(
+        conn.query_row("SELECT body FROM messages WHERE id='m1'", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "hi"
+    );
+    drop(conn);
+    assert!(
+        crate::store::init(&path).is_ok(),
+        "a second init finds nothing to rebuild"
+    );
+}
+
+#[test]
+fn a_full_inbox_is_a_final_rejection_unlike_a_busy_receiver() {
+    let mut fx = ready();
+    for n in 0..PENDING_PER_RECIPIENT {
+        fx.conn
+            .execute(
+                "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body)
+                 VALUES (?1,'t',?2,'peer:p1/alicesessio1','bob','sync','x')",
+                rusqlite::params![format!("old-{n}"), n],
+            )
+            .unwrap();
+    }
+    let reply = run(&mut fx.conn, &Limits::default(), message());
+    assert_eq!(
+        (reply["status"].as_str(), reply["reason"].as_str()),
+        (Some("rejected"), Some("recipient_full"))
+    );
+}
