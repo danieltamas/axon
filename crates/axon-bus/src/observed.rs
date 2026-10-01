@@ -41,6 +41,9 @@ pub struct Observer {
     refreshed: Option<Instant>,
     ingested: HashMap<String, Ingested>,
     tails: Tails,
+    /// The session each process (pid, start) was last matched to, so a match the evidence
+    /// can no longer separate is kept rather than re-guessed.
+    matched: HashMap<(i64, i64), String>,
 }
 
 /// Resolves a working directory to its main repository and branch.
@@ -58,6 +61,7 @@ struct Usage {
     model: String,
     buckets: Buckets,
     cost: Option<f64>,
+    first_ts: i64,
     last_ts: i64,
 }
 
@@ -102,6 +106,7 @@ impl Observer {
             sessions,
             &self.ingested,
             &mut self.tails,
+            &mut self.matched,
             repo_of,
             content,
         )
@@ -113,6 +118,7 @@ fn roots(
     sessions: &[Session],
     ingested: &HashMap<String, Ingested>,
     tails: &mut Tails,
+    matched: &mut HashMap<(i64, i64), String>,
     repo_of: &mut Locate<'_>,
     content: bool,
 ) -> anyhow::Result<Vec<Root>> {
@@ -125,30 +131,17 @@ fn roots(
         .prepare("SELECT pid FROM agents WHERE pid IS NOT NULL AND status<>'closed'")?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
-    let mut taken: HashSet<&str> = HashSet::new();
-    // Newest process first, so a restarted session in the same directory claims the
-    // newest transcript and an older process keeps the one it has been writing.
-    let mut open: Vec<&Session> = sessions
+    let open: Vec<&Session> = sessions
         .iter()
         .filter(|s| !registered.contains(&s.pid))
         .collect();
-    open.sort_by_key(|s| std::cmp::Reverse(s.started_ms));
+    let assigned = assign(&open, ingested, matched);
     let now = now_ms();
     let mut roots = Vec::new();
     for session in open {
-        let cwd = session.cwd.to_string_lossy();
-        let found = ingested
-            .iter()
-            .filter(|(id, i)| {
-                !taken.contains(id.as_str())
-                    && i.harness == session.harness
-                    && i.main.last_ts >= session.started_ms - START_SLACK_MS
-                    && i.projects.iter().any(|p| Path::new(p).starts_with(&*cwd))
-            })
-            .max_by_key(|(_, i)| i.main.last_ts);
-        if let Some((id, _)) = found {
-            taken.insert(id);
-        }
+        let found = assigned
+            .get(&session.pid)
+            .and_then(|id| ingested.get_key_value(*id));
         let (repo, branch) = repo_of(&session.cwd);
         let said = found.and_then(|(id, _)| tails.read(session.harness, id, content));
         let tree = render(session, found.map(|(_, i)| i), said, branch, now);
@@ -159,6 +152,98 @@ fn roots(
         });
     }
     Ok(roots)
+}
+
+/// Which ingested session each open process is writing, on evidence only. A session that
+/// began after a process started, and before any other candidate process did, can only be
+/// that process's; once matched, a process drops out as an owner for the rest. A session
+/// the evidence cannot place stays unmatched, unless it was this process's match before:
+/// a wrong transcript under a session is worse than none.
+fn assign<'a>(
+    open: &[&Session],
+    ingested: &'a HashMap<String, Ingested>,
+    matched: &mut HashMap<(i64, i64), String>,
+) -> HashMap<i64, &'a str> {
+    let candidates: Vec<Vec<&'a str>> = open
+        .iter()
+        .map(|session| {
+            let cwd = session.cwd.to_string_lossy();
+            ingested
+                .iter()
+                .filter(|(_, i)| {
+                    i.harness == session.harness
+                        && i.main.last_ts >= session.started_ms - START_SLACK_MS
+                        && i.projects.iter().any(|p| Path::new(p).starts_with(&*cwd))
+                })
+                .map(|(id, _)| id.as_str())
+                .collect()
+        })
+        .collect();
+    // The processes that could have written `id`: those that had started when it began,
+    // or, for a session resumed from before any of them, every candidate process.
+    let owners = |id: &str| -> Vec<usize> {
+        let first = ingested[id].main.first_ts;
+        let all: Vec<usize> = (0..open.len())
+            .filter(|&p| candidates[p].contains(&id))
+            .collect();
+        let started: Vec<usize> = all
+            .iter()
+            .copied()
+            .filter(|&p| open[p].started_ms - START_SLACK_MS <= first)
+            .collect();
+        if started.is_empty() {
+            all
+        } else {
+            started
+        }
+    };
+    let mut by_process: HashMap<usize, &'a str> = HashMap::new();
+    let mut taken: HashSet<&str> = HashSet::new();
+    loop {
+        let mut progressed = false;
+        for (p, mine) in candidates.iter().enumerate() {
+            if by_process.contains_key(&p) {
+                continue;
+            }
+            let only_mine = mine
+                .iter()
+                .copied()
+                .filter(|id| !taken.contains(id))
+                .filter(|id| {
+                    owners(id)
+                        .iter()
+                        .all(|&q| q == p || by_process.contains_key(&q))
+                })
+                .max_by_key(|id| ingested[*id].main.last_ts);
+            if let Some(id) = only_mine {
+                by_process.insert(p, id);
+                taken.insert(id);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    for (p, session) in open.iter().enumerate() {
+        if by_process.contains_key(&p) {
+            continue;
+        }
+        let before = matched.get(&(session.pid, session.started_ms));
+        if let Some(&id) = before.and_then(|id| candidates[p].iter().find(|c| **c == id.as_str())) {
+            if taken.insert(id) {
+                by_process.insert(p, id);
+            }
+        }
+    }
+    matched.clear();
+    for (&p, &id) in &by_process {
+        matched.insert((open[p].pid, open[p].started_ms), id.to_owned());
+    }
+    by_process
+        .into_iter()
+        .map(|(p, id)| (open[p].pid, id))
+        .collect()
 }
 
 fn render(
@@ -286,7 +371,7 @@ fn ingested(conn: &Connection) -> anyhow::Result<HashMap<String, Ingested>> {
     let mut stmt = conn.prepare(
         "SELECT session_id, harness, project, is_subagent, agent, model,
                 sum(tokens_in), sum(tokens_out), sum(cache_read), sum(cache_write_5m),
-                sum(cache_write_1h), max(ts)
+                sum(cache_write_1h), min(ts), max(ts)
          FROM usage_events WHERE ts > ?1
          GROUP BY session_id, harness, project, is_subagent, agent, model
          ORDER BY max(ts)",
@@ -308,7 +393,8 @@ fn ingested(conn: &Connection) -> anyhow::Result<HashMap<String, Ingested>> {
             model,
             buckets,
             cost: (!unpriced).then_some(cost),
-            last_ts: r.get(11)?,
+            first_ts: r.get(11)?,
+            last_ts: r.get(12)?,
         };
         let session = sessions.entry(r.get(0)?).or_default();
         session.harness = harness_name(&r.get::<_, String>(1)?).to_owned();
@@ -339,6 +425,7 @@ fn merge(into: &mut Usage, part: Usage) {
     into.buckets.cache_write_5m += part.buckets.cache_write_5m;
     into.buckets.cache_write_1h += part.buckets.cache_write_1h;
     into.cost = into.cost.zip(part.cost).map(|(a, b)| a + b);
+    into.first_ts = into.first_ts.min(part.first_ts);
     if part.last_ts >= into.last_ts {
         into.model = part.model;
         into.last_ts = part.last_ts;
