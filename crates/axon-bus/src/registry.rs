@@ -50,7 +50,8 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
     if let Some(previous) = known {
         conn.execute(
             "UPDATE agents SET status=?2, last_seen_at=?3, model=coalesce(?4, model),
-             cwd=coalesce(cwd, ?5), pid=coalesce(?6, pid) WHERE id=?1",
+             cwd=coalesce(cwd, ?5), pid=coalesce(?6, pid),
+             ended_at=CASE WHEN ?2='closed' THEN ended_at END WHERE id=?1",
             params![
                 agent.id,
                 status.as_str(),
@@ -131,6 +132,35 @@ pub fn touch(conn: &Connection, id: &str) -> anyhow::Result<()> {
         "UPDATE agents SET last_seen_at=?2 WHERE id=?1",
         params![id, now_ms()],
     )?;
+    Ok(())
+}
+
+/// Close the roots whose harness process exited without saying so (a crash, a killed
+/// terminal), then every open agent under a closed root. `running` answers for a pid last
+/// heard from at a time, or None when it cannot tell, which closes nothing.
+pub fn reap(conn: &Connection, running: impl Fn(i64, i64) -> Option<bool>) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id,pid,last_seen_at FROM agents
+         WHERE parent_id IS NULL AND pid IS NOT NULL AND status IN ('active','idle')",
+    )?;
+    let roots: Vec<(String, i64, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (id, pid, last_seen) in roots {
+        if running(pid, last_seen) == Some(false) {
+            set_status(conn, &id, Status::Closed)?;
+        }
+    }
+    let orphans: Vec<String> = conn
+        .prepare(
+            "SELECT a.id FROM agents a JOIN agents r ON r.id=a.root_id
+             WHERE a.id<>a.root_id AND a.status IN ('active','idle') AND r.status='closed'",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for id in orphans {
+        set_status(conn, &id, Status::Closed)?;
+    }
     Ok(())
 }
 

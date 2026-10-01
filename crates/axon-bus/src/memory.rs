@@ -31,6 +31,10 @@ pub struct Session {
 pub struct Sampler {
     system: System,
     rss: HashMap<i64, u64>,
+    /// Start time, in unix milliseconds, of each registered pid still running.
+    started: HashMap<i64, i64>,
+    /// Whether this sample saw this very process; a sandbox can hide the process table.
+    sees_processes: bool,
     sessions: Vec<Session>,
 }
 
@@ -39,6 +43,8 @@ impl Sampler {
         Self {
             system: System::new(),
             rss: HashMap::new(),
+            started: HashMap::new(),
+            sees_processes: false,
             sessions: Vec::new(),
         }
     }
@@ -61,18 +67,42 @@ impl Sampler {
                 .with_cwd(UpdateKind::OnlyIfNotSet)
                 .with_cmd(UpdateKind::OnlyIfNotSet),
         );
-        let rss: HashMap<i64, u64> = pids
+        let running: Vec<(i64, &sysinfo::Process)> = pids
             .into_iter()
             .filter_map(|pid| {
                 let process = self
                     .system
                     .process(Pid::from_u32(u32::try_from(pid).ok()?))?;
-                Some((pid, whole_mib(process.memory())))
+                Some((pid, process))
             })
             .collect();
+        let rss = running
+            .iter()
+            .map(|(pid, process)| (*pid, whole_mib(process.memory())))
+            .collect();
+        let started = running
+            .iter()
+            .map(|(pid, process)| (*pid, start_ms(process.start_time())))
+            .collect();
+        self.sees_processes = self
+            .system
+            .process(Pid::from_u32(std::process::id()))
+            .is_some();
         self.sessions = self.open_sessions();
         self.rss = rss;
+        self.started = started;
         Ok(())
+    }
+
+    /// Whether the harness process `pid`, last heard from at `last_seen_ms`, still runs. A
+    /// process started after that is another one that reused the pid. None when this sample
+    /// could not see processes at all.
+    pub fn running(&self, pid: i64, last_seen_ms: i64) -> Option<bool> {
+        self.sees_processes.then(|| {
+            self.started
+                .get(&pid)
+                .is_some_and(|started| *started <= last_seen_ms)
+        })
     }
 
     fn open_sessions(&self) -> Vec<Session> {

@@ -131,11 +131,14 @@ fn write_ready(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
 /// One thread watches `PRAGMA data_version` and publishes a new snapshot when another
 /// connection changed the database. It also renews the capture lease and runs retention.
 fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<Arc<String>>> {
-    let conn = store::open(&db)?;
+    let mut conn = store::open(&db)?;
     let mut cache = HashMap::new();
     let mut memory = Sampler::new();
     let mut observer = Observer::default();
     memory.sample(&conn)?;
+    if let Err(err) = reap(&mut conn, &memory) {
+        eprintln!("axon-bus: closing exited sessions failed: {err:#}");
+    }
     let first = snapshot::build(&conn, &mut cache, &memory, &mut observer, content)?.to_string();
     let (sender, receiver) = watch::channel(Arc::new(first));
     std::thread::spawn(move || {
@@ -161,6 +164,8 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
                 sampled = true;
                 if let Err(err) = memory.sample(&conn) {
                     eprintln!("axon-bus: memory sample failed: {err:#}");
+                } else if let Err(err) = reap(&mut conn, &memory) {
+                    eprintln!("axon-bus: closing exited sessions failed: {err:#}");
                 }
             }
             if version == seen && !sampled {
@@ -183,6 +188,17 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
         }
     });
     Ok(receiver)
+}
+
+/// Sessions whose harness exited without a SessionEnd stay open until a sample finds the
+/// process gone.
+fn reap(conn: &mut rusqlite::Connection, memory: &Sampler) -> anyhow::Result<()> {
+    // Deferred: a sample with nothing to close never takes the write lock hooks wait on.
+    // A hook that writes in between makes the commit fail, and the next sample retries.
+    let tx = conn.transaction()?;
+    crate::registry::reap(&tx, |pid, last_seen| memory.running(pid, last_seen))?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn loopback_host(headers: &HeaderMap, port: u16) -> bool {
