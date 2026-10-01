@@ -1,10 +1,14 @@
 //! Federation between Axon installs (docs/P2P-SPEC.md): identity, the transport service,
 //! and its health. Off unless the owner turns it on; nothing here runs otherwise.
 
+pub mod api;
 pub mod codec;
 mod health;
 pub mod identity;
+mod invite;
 mod lock;
+pub mod pairing;
+pub mod remote;
 pub mod service;
 mod transport;
 
@@ -78,6 +82,13 @@ pub fn now_ms() -> i64 {
         + seam("AXON_TEST_NOW_OFFSET_MS")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
+}
+
+/// 16 random bytes as 32 hex characters: the id of an invite or a peer row.
+fn random_id() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// A test seam (docs/P2P-SPEC.md §0): read only in debug builds, ignored in release.

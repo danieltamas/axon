@@ -28,7 +28,7 @@ use tokio::sync::watch;
 use crate::memory::Sampler;
 use crate::observed::Observer;
 use crate::settings::{self, Federation};
-use crate::{assets, end, msg, session, snapshot, store, transcript};
+use crate::{assets, end, fed, msg, session, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
@@ -102,6 +102,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federat
         .route("/api/end", post(end_sessions))
         .with_state(app.clone())
         .merge(settings::routes(db, content, federation.clone()))
+        .merge(fed::api::routes(db, federation.clone()))
         .layer(middleware::from_fn_with_state(app, guard));
     Ok((router, federation))
 }

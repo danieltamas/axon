@@ -22,7 +22,7 @@ const PORT_KEY: &str = "dashboard_port";
 const DEFAULT_PORT: u16 = 7777;
 
 /// The digest of `input` as 64 lowercase hex characters.
-fn sha256_hex(input: &[u8]) -> String {
+pub(crate) fn sha256_hex(input: &[u8]) -> String {
     Sha256::digest(input)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -30,14 +30,16 @@ fn sha256_hex(input: &[u8]) -> String {
 }
 
 /// 32 bytes from the OS, base64url without padding: 43 characters.
-fn random_secret() -> anyhow::Result<String> {
+pub(crate) fn random_secret() -> anyhow::Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
     Ok(base64url(&bytes))
 }
 
-fn base64url(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+pub(crate) const BASE64URL_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+pub(crate) fn base64url(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let n = chunk
@@ -45,7 +47,7 @@ fn base64url(bytes: &[u8]) -> String {
             .enumerate()
             .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
         for i in 0..=chunk.len() {
-            out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            out.push(BASE64URL_ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
         }
     }
     out

@@ -11,12 +11,13 @@ use iroh::endpoint::{AfterHandshakeOutcome, Connection, EndpointHooks, VarInt};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{EndpointAddr, EndpointId};
 use serde_json::{json, Value};
+use tokio::sync::Semaphore;
 use tokio::time::{interval, sleep, timeout, MissedTickBehavior};
 
 use super::codec::{read_frame, write_frame};
 use super::health::Path;
 use super::service::{Access, Shared};
-use super::{now_ms, FED_ALPN};
+use super::{now_ms, FED_ALPN, PAIR_ALPN};
 
 /// Close codes, so a peer's log says why it was dropped.
 const CLOSE_NOT_A_PEER: u32 = 1;
@@ -95,9 +96,27 @@ impl ProtocolHandler for FedProtocol {
     }
 }
 
-/// `axon/pair/1` is advertised so the endpoint matches the spec, but pairing (U4) is not
-/// built yet: callers are told so rather than left hanging.
-pub struct PairProtocol;
+/// Pairing connections served at once. The listener cannot know the joiner beforehand, so
+/// this bounds what an unknown dialer can hold open.
+const PAIR_CONCURRENCY: usize = 8;
+/// A pairing exchange that is not whole in this time is dropped.
+const PAIR_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Serves `axon/pair/1`: one request, one response, then the connection ends. The handler
+/// (see `Handle::on_pair`) decides; with none registered the connection is refused.
+pub struct PairProtocol {
+    shared: Arc<Shared>,
+    busy: Arc<Semaphore>,
+}
+
+impl PairProtocol {
+    pub fn new(shared: Arc<Shared>) -> Self {
+        Self {
+            shared,
+            busy: Arc::new(Semaphore::new(PAIR_CONCURRENCY)),
+        }
+    }
+}
 
 impl fmt::Debug for PairProtocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -107,12 +126,52 @@ impl fmt::Debug for PairProtocol {
 
 impl ProtocolHandler for PairProtocol {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
-        conn.close(
-            VarInt::from_u32(CLOSE_PAIR_UNAVAILABLE),
-            b"pairing unavailable",
+        let (Ok(_slot), Some(handler)) = (
+            self.busy.clone().try_acquire_owned(),
+            self.shared.pair_handler(),
+        ) else {
+            conn.close(
+                VarInt::from_u32(CLOSE_PAIR_UNAVAILABLE),
+                b"pairing unavailable",
+            );
+            return Ok(());
+        };
+        // What the joiner's connection arrived on, so the inviter can dial back.
+        let remote = EndpointAddr::from_parts(
+            conn.remote_id(),
+            conn.paths().iter().map(|p| p.remote_addr().clone()),
         );
+        let served = async {
+            let (mut send, mut recv) = conn.accept_bi().await.ok()?;
+            let request = read_frame(&mut recv).await.ok()?;
+            write_frame(&mut send, &handler(remote, request).await)
+                .await
+                .ok()?;
+            send.finish().ok()?;
+            // Hold the connection until the joiner has read the answer.
+            let _ = send.stopped().await;
+            Some(())
+        };
+        if !matches!(timeout(PAIR_TIMEOUT, served).await, Ok(Some(()))) {
+            conn.close(VarInt::from_u32(CLOSE_BAD_FRAME), b"bad frame");
+        }
         Ok(())
     }
+}
+
+/// Dial `addr` on `axon/pair/1`, send `frame` and read the one answer.
+pub async fn pair_request(
+    shared: &Shared,
+    addr: EndpointAddr,
+    frame: &Value,
+) -> anyhow::Result<Value> {
+    let conn = timeout(CONNECT_TIMEOUT, shared.endpoint.connect(addr, PAIR_ALPN))
+        .await
+        .map_err(|_| anyhow!("connect timed out"))?
+        .context("connect")?;
+    let reply = request(&conn, frame).await;
+    conn.close(VarInt::from_u32(0), b"done");
+    reply
 }
 
 /// One request and its single response on a fresh stream of `conn`.

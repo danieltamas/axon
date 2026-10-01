@@ -34,6 +34,11 @@ const PUSH_EVERY: Duration = Duration::from_secs(5);
 pub type FrameHandler =
     Arc<dyn Fn(String, Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
 
+/// The inviter's handler for the one request of `axon/pair/1`: gets the joiner's observed
+/// address (its id plus the paths the connection arrived on) and the request.
+pub type PairHandler =
+    Arc<dyn Fn(EndpointAddr, Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
+
 /// What the gate and the dispatcher need to know about a peer row.
 #[derive(Clone, Debug)]
 pub struct Access {
@@ -80,6 +85,7 @@ pub struct Shared {
     health: Mutex<HashMap<EndpointId, PeerHealth>>,
     connections: Mutex<HashMap<EndpointId, Connection>>,
     handlers: RwLock<HashMap<String, FrameHandler>>,
+    pair_handler: RwLock<Option<PairHandler>>,
     changed: watch::Sender<u64>,
     reload: Notify,
 }
@@ -112,6 +118,16 @@ impl Shared {
             change(peer);
         }
         self.changed.send_modify(|version| *version += 1);
+    }
+
+    pub(super) fn pair_handler(&self) -> Option<PairHandler> {
+        let handler = self.pair_handler.read();
+        handler.unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    fn add_addr(&self, addr: EndpointAddr) {
+        self.lookup.add_endpoint_info(addr);
+        self.reload.notify_one();
     }
 
     pub(super) fn set_connection(&self, node: EndpointId, conn: Connection) {
@@ -338,10 +354,32 @@ impl Handle {
         transport::request(&conn, frame).await
     }
 
+    /// Register the handler of `axon/pair/1`; without one every pairing connection is closed.
+    pub fn on_pair(&self, handler: PairHandler) {
+        let slot = self.shared.pair_handler.write();
+        *slot.unwrap_or_else(|p| p.into_inner()) = Some(handler);
+    }
+
+    /// Dial `addr` on `axon/pair/1` and exchange one request for one response. iroh checks
+    /// the remote key against `addr.id` before a byte is sent, so the pin is verified first.
+    pub async fn pair_request(&self, addr: EndpointAddr, frame: &Value) -> anyhow::Result<Value> {
+        transport::pair_request(&self.shared, addr, frame).await
+    }
+
+    /// A view for handlers stored inside the service: a `Handle` there would keep the
+    /// service alive through its own handler table.
+    pub fn link(&self) -> Link {
+        Link(Arc::downgrade(&self.shared))
+    }
+
+    /// True once `shutdown` ran; background work tied to this service ends then.
+    pub fn stopped(&self) -> bool {
+        locked(&self.stop.manager).is_none()
+    }
+
     /// Where `node` may be dialed besides discovery, e.g. the addresses in an invite.
     pub fn add_addr(&self, addr: EndpointAddr) {
-        self.shared.lookup.add_endpoint_info(addr);
-        self.reload();
+        self.shared.add_addr(addr);
     }
 
     pub async fn shutdown(&self) {
@@ -425,11 +463,12 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         health: Mutex::default(),
         connections: Mutex::default(),
         handlers: RwLock::default(),
+        pair_handler: RwLock::default(),
         changed,
         reload: Notify::new(),
     });
     let router = Router::builder(endpoint)
-        .accept(PAIR_ALPN, PairProtocol)
+        .accept(PAIR_ALPN, PairProtocol::new(shared.clone()))
         .accept(FED_ALPN, FedProtocol(shared.clone()))
         .spawn();
     shared.reload.notify_one();
@@ -445,5 +484,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
     }))
 }
 
+mod link;
+pub use link::Link;
 #[cfg(test)]
 mod tests;

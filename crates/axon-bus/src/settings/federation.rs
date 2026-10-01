@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use crate::fed::pairing;
 use crate::fed::service::{self, Handle};
 
 #[derive(Clone)]
@@ -34,6 +35,14 @@ impl Federation {
             Some(data_dir) => service::start(data_dir, &self.db).await,
             None => None,
         };
+        if let Some(handle) = running.as_ref() {
+            pairing::install(handle, &self.db);
+        }
+    }
+
+    /// The running service, or `None` when federation is off or did not start.
+    pub async fn handle(&self) -> Option<Handle> {
+        self.running.lock().await.clone()
     }
 
     pub async fn shutdown(&self) {

@@ -185,6 +185,10 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             refs,
         } => {
             let mut conn = hub(&db)?;
+            if let Some(reason) = fed::remote::refusal(&conn, &to)? {
+                println!("refused: {reason}");
+                return Ok(ExitCode::FAILURE);
+            }
             let tx = store::write_tx(&mut conn)?;
             let outgoing = msg::Outgoing {
                 from: &from,

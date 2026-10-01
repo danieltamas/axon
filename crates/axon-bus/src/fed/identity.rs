@@ -25,6 +25,10 @@ pub fn load_or_create(data_dir: &Path, peers_exist: bool) -> anyhow::Result<Secr
     let dir = fed_dir(data_dir);
     let path = dir.join(KEY_FILE);
     ensure_private_dir(&dir)?;
+    // A link could point the key anywhere; it is neither used nor replaced, peers or not.
+    if is_symlink(&path) {
+        bail!("{KEY_LOST}: {} is a symlink", path.display());
+    }
     match read_key(&path) {
         Ok(Some(key)) => return Ok(key),
         Ok(None) if !peers_exist => {}
@@ -41,6 +45,9 @@ pub fn load_or_create(data_dir: &Path, peers_exist: bool) -> anyhow::Result<Secr
 
 /// Read the key; `None` when there is no file. Refuses a file others can read.
 pub fn read_key(path: &Path) -> anyhow::Result<Option<SecretKey>> {
+    if is_symlink(path) {
+        bail!("{} is a symlink", path.display());
+    }
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -51,6 +58,10 @@ pub fn read_key(path: &Path) -> anyhow::Result<Option<SecretKey>> {
         .try_into()
         .map_err(|_| anyhow::anyhow!("{} is not a {KEY_LEN}-byte key", path.display()))?;
     Ok(Some(SecretKey::from_bytes(&bytes)))
+}
+
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 fn create_key(path: &Path) -> anyhow::Result<SecretKey> {
@@ -204,6 +215,25 @@ mod tests {
         fs::write(&path, b"short").unwrap();
         assert!(load_or_create(dir.path(), true).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"short", "the file is left alone");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_key_is_refused_and_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let fed = fed_dir(dir.path());
+        ensure_private_dir(&fed).unwrap();
+        let target = dir.path().join("elsewhere");
+        fs::write(&target, [7u8; KEY_LEN]).unwrap();
+        let link = fed.join(KEY_FILE);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(load_or_create(dir.path(), false).is_err());
+        assert!(read_key(&link).is_err());
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&target).unwrap(), [7u8; KEY_LEN]);
     }
 
     #[test]
