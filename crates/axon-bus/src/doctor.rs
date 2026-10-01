@@ -110,3 +110,93 @@ pub fn doctor(db: &Path) -> anyhow::Result<bool> {
     }
     Ok(healthy)
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+    use std::{ffi::OsString, fs, sync::Mutex};
+
+    static ENV: Mutex<()> = Mutex::new(());
+
+    struct IsolatedEnv {
+        saved: Vec<(&'static str, Option<OsString>)>,
+        _temp: tempfile::TempDir,
+    }
+
+    impl IsolatedEnv {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let mut saved = Vec::new();
+            for name in [
+                "CLAUDE_CONFIG_DIR",
+                "XDG_CONFIG_HOME",
+                "CODEX_HOME",
+                "HERMES_HOME",
+            ] {
+                let path = temp.path().join(name);
+                fs::create_dir(&path).unwrap();
+                saved.push((name, std::env::var_os(name)));
+                std::env::set_var(name, path);
+            }
+            Self { saved, _temp: temp }
+        }
+    }
+
+    impl Drop for IsolatedEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn r9_claude_missing_pretooluse_is_not_wired() {
+        let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = IsolatedEnv::new();
+        let layout = layout(Harness::Claude);
+        let text = crate::install::wire(Harness::Claude, None, "axon", &layout).unwrap();
+        fs::write(&layout.config, &text).unwrap();
+        assert!(is_wired(Harness::Claude, "axon").unwrap());
+        let mut config: Value = serde_json::from_str(&text).unwrap();
+        config["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("PreToolUse");
+        assert!(config["hooks"]["SessionStart"].is_array());
+        fs::write(&layout.config, config.to_string()).unwrap();
+        assert!(!is_wired(Harness::Claude, "axon").unwrap());
+    }
+
+    #[test]
+    fn r9_opencode_unregistered_shim_is_not_wired() {
+        let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = IsolatedEnv::new();
+        let layout = layout(Harness::Opencode);
+        let plugin = layout.plugin.as_ref().unwrap();
+        fs::create_dir_all(plugin.parent().unwrap()).unwrap();
+        fs::write(plugin, plugin_source("axon")).unwrap();
+        fs::write(&layout.config, "{}").unwrap();
+        assert!(!is_wired(Harness::Opencode, "axon").unwrap());
+        let text = crate::install::wire(Harness::Opencode, Some("{}"), "axon", &layout).unwrap();
+        fs::write(&layout.config, text).unwrap();
+        assert!(is_wired(Harness::Opencode, "axon").unwrap());
+    }
+
+    #[test]
+    fn r9_commented_hermes_hooks_are_not_wired() {
+        let _lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = IsolatedEnv::new();
+        let layout = layout(Harness::Hermes);
+        let hooks = crate::install::wire(Harness::Hermes, None, "axon", &layout).unwrap();
+        let commented = hooks
+            .lines()
+            .map(|line| format!("# {line}\n"))
+            .collect::<String>();
+        fs::write(&layout.config, commented).unwrap();
+        assert!(!is_wired(Harness::Hermes, "axon").unwrap());
+    }
+}

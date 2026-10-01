@@ -44,3 +44,45 @@ pub fn end(db: &Path, targets: &[Target]) -> anyhow::Result<Value> {
     }
     Ok(json!({"ended": ended, "refused": refused}))
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+
+    #[test]
+    fn r1_request_requires_process_generation() {
+        assert!(serde_json::from_value::<Target>(json!({"id": "claude-123"})).is_err());
+        let target: Target = serde_json::from_value(json!({
+            "id": "claude-123", "started_ms": -1
+        }))
+        .unwrap();
+        assert_eq!(target.id, "claude-123");
+        assert_eq!(target.started_ms, -1);
+    }
+
+    #[test]
+    fn r1_end_refuses_impossible_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("hub.db");
+        let conn = store::init(&db).unwrap();
+        let mut sampler = Sampler::new();
+        sampler.sample(&conn).unwrap();
+        let id = sampler
+            .sessions()
+            .first()
+            .map(|s| format!("{}-{}", s.harness, s.pid))
+            .unwrap_or_else(|| format!("claude-{}", std::process::id()));
+        // Negative epoch milliseconds cannot match any sysinfo start time.
+        let result = end(
+            &db,
+            &[Target {
+                id: id.clone(),
+                started_ms: -1,
+            }],
+        )
+        .unwrap();
+        assert_eq!(result["ended"], json!([]));
+        assert_eq!(result["refused"].as_array().unwrap().len(), 1);
+        assert_eq!(result["refused"][0]["id"], id);
+    }
+}

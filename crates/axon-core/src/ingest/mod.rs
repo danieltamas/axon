@@ -193,3 +193,92 @@ fn subagent_sources(dir: &Path, sources: &mut Vec<Source>) {
         }
     }
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "axon-review2-{}-{time}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn r6_missing_sources_are_failures() {
+        let temp = Scratch::new();
+        for kind in [
+            SourceKind::ClaudeMain,
+            SourceKind::ClaudeSubagent,
+            SourceKind::Codex,
+            SourceKind::OpenCode,
+            SourceKind::Ccflare,
+        ] {
+            let source = Source {
+                kind,
+                path: temp.0.join("missing"),
+            };
+            assert!(
+                source.parse().is_none(),
+                "{kind:?} must not cache a failed read"
+            );
+            assert!(
+                !source.path.exists(),
+                "read must not create a missing source"
+            );
+        }
+    }
+
+    #[test]
+    fn r6_unreadable_sqlite_sources_are_failures() {
+        let temp = Scratch::new();
+        let path = temp.0.join("broken.db");
+        std::fs::write(&path, b"This is not a SQLite database").unwrap();
+        for kind in [SourceKind::OpenCode, SourceKind::Ccflare] {
+            assert!(
+                Source {
+                    kind,
+                    path: path.clone()
+                }
+                .parse()
+                .is_none(),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn r6_readable_foreign_ccflare_schema_is_successful_empty_parse() {
+        let temp = Scratch::new();
+        let path = temp.0.join("foreign.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE foreign_data (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO foreign_data VALUES (1, 'readable');").unwrap();
+        drop(conn);
+        let turns = Source {
+            kind: SourceKind::Ccflare,
+            path,
+        }
+        .parse()
+        .expect("read succeeded");
+        assert!(turns.is_empty());
+    }
+}

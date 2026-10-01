@@ -449,3 +449,51 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::redact;
+
+    #[test]
+    fn r10_numeric_access_token_is_masked() {
+        assert_eq!(
+            redact(r#"{"access_token":"12345678"}"#),
+            r#"{"access_token":"[redacted]"}"#
+        );
+    }
+
+    #[test]
+    fn r10_numeric_id_token_is_masked() {
+        assert_eq!(redact("id_token=987654"), "id_token=[redacted]");
+    }
+
+    #[test]
+    fn r10_numeric_refresh_token_is_masked() {
+        assert_eq!(redact("refresh_token: 555555"), "refresh_token: [redacted]");
+    }
+
+    #[test]
+    fn r10_explicit_usage_counts_remain_readable() {
+        for text in [
+            r#""input_tokens": 1234"#,
+            "max_tokens=4096",
+            "token_count: 99",
+            r#""input_tokens": 12345678"#,
+            "max_tokens=12345678",
+            "token_count: 12345678",
+        ] {
+            assert_eq!(redact(text), text);
+        }
+    }
+
+    #[test]
+    fn r10_secret_named_fields_are_not_usage_counts() {
+        for key in ["password_tokens", "secret_token_count", "access_tokens"] {
+            assert_eq!(
+                redact(&format!("{key}=12345678")),
+                format!("{key}=[redacted]"),
+                "{key}"
+            );
+        }
+    }
+}

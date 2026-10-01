@@ -171,3 +171,75 @@ mod tests {
         assert_eq!(wire("model: x\n", &hooks()), None);
     }
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+
+    const INDENTLESS: &str = "model: x\nhooks: # owner hooks\n  on_session_start:\n  - command: 'beacon start'\n  pre_tool_call:\n  - command: 'beacon check'\nother: 1\n";
+
+    fn hooks() -> Vec<(&'static str, String)> {
+        ["on_session_start", "pre_tool_call", "on_session_end"]
+            .iter()
+            .map(|event| (*event, format!("axon bus hook hermes {event}")))
+            .collect()
+    }
+
+    #[test]
+    fn r4_commented_hooks_merge_once() {
+        let wired = wire(INDENTLESS, &hooks()).expect("commented hooks must be mergeable");
+        assert_eq!(
+            wired
+                .lines()
+                .filter(|line| line.starts_with("hooks:"))
+                .count(),
+            1
+        );
+        assert!(wired.contains("hooks: # owner hooks"));
+        for (event, command) in hooks() {
+            assert_eq!(wired.matches(&format!("  {event}:\n")).count(), 1);
+            assert!(wired.contains(&command));
+        }
+    }
+
+    #[test]
+    fn r4_unwire_retains_indentless_event_keys() {
+        let wired = "hooks:\n  pre_tool_call:\n  - command: 'beacon check'\n  - command: 'axon bus hook hermes pre_tool_call'\nother: 1\n";
+        assert_eq!(
+            unwire(wired),
+            "hooks:\n  pre_tool_call:\n  - command: 'beacon check'\nother: 1\n"
+        );
+    }
+
+    #[test]
+    fn r4_indentless_wire_unwire_restores_original() {
+        assert_eq!(unwire(&wire(INDENTLESS, &hooks()).unwrap()), INDENTLESS);
+    }
+
+    #[test]
+    fn r4_top_level_comment_inside_hooks_preserves_mapping_and_roundtrip() {
+        let original = "hooks: # owner hooks\n# Owner documentation\n  on_session_start:\n  - command: 'beacon start'\nother: 1\n";
+        let wired = wire(original, &hooks()).unwrap();
+        assert!(
+            wired.contains("  pre_tool_call:\n"),
+            "event escaped hooks mapping:\n{wired}"
+        );
+        assert_eq!(unwire(&wired), original);
+    }
+
+    #[test]
+    fn r4_plain_hooks_comment_preserves_existing_owner_event() {
+        let original =
+            "hooks:\n# Owner documentation\n  owner_event:\n    - command: 'beacon'\nother: 1\n";
+        let hooks = [(
+            "pre_tool_call",
+            "axon bus hook hermes pre_tool_call".to_owned(),
+        )];
+        let wired = wire(original, &hooks).unwrap();
+        assert!(
+            wired.contains("  pre_tool_call:\n"),
+            "event escaped hooks mapping:\n{wired}"
+        );
+        assert_eq!(unwire(&wired), original);
+    }
+}

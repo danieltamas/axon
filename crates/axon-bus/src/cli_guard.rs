@@ -228,3 +228,65 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn guard_assignment_is_not_an_invocation() {
+        assert_eq!(
+            refusal(
+                "worker",
+                &json!({"tool_input":{"command":"D=/tmp/x/axon && ls"}})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn guard_assignment_prefix_does_not_hide_dashboard() {
+        assert!(refusal(
+            "worker",
+            &json!({"tool_input":{"command":"FOO=1 axon --port 7777"}})
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn r5_invocation_recognizes_windows_binary_names() {
+        for exe in [
+            "axon.exe",
+            r"C:\Users\Alice\axon.exe",
+            r"C:\Users\Alice\axon",
+        ] {
+            let words = vec![exe.to_owned(), "bus".into(), "serve".into()];
+            assert!(invocation(&words, 0) == Some(Invocation::Bus(2)), "{exe}");
+        }
+        for exe in ["axon-bus.exe", r"C:\Users\Alice\axon-bus.exe"] {
+            let words = vec![exe.to_owned(), "serve".into()];
+            assert!(invocation(&words, 0) == Some(Invocation::Bus(1)), "{exe}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn r5_windows_backslash_command_is_guarded() {
+        for command in [
+            r"C:\Users\Alice\axon.exe --port 7777",
+            r#""C:\Program Files\Axon\axon.exe" --port 7777"#,
+        ] {
+            assert!(
+                refusal("worker", &json!({"tool_input":{"command":command}})).is_some(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn guard_equals_in_executable_path_is_still_an_invocation() {
+        let payload = json!({"tool_input":{"command":"'/tmp/a=b/axon' --port 7777"}});
+        assert!(refusal("worker", &payload).is_some());
+    }
+}

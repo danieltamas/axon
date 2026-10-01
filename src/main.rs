@@ -392,3 +392,114 @@ fn ccflare_watch_dirs() -> Vec<std::path::PathBuf> {
 fn db_path() -> std::path::PathBuf {
     axon_core::store::default_path()
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "axon-review2-{}-{time}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_at(path: &std::path::Path, body: &str, seconds: u64) {
+        std::fs::write(path, body).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            .unwrap();
+    }
+
+    #[test]
+    fn r7_subagent_meta_change_invalidates_stamp() {
+        let temp = Scratch::new();
+        let source = Source {
+            kind: SourceKind::ClaudeSubagent,
+            path: temp.0.join("agent.jsonl"),
+        };
+        write_at(&source.path, "{}\n", 1_700_000_000);
+        let meta = source.path.with_extension("meta.json");
+        write_at(&meta, r#"{"agentType":"reviewer"}"#, 1_700_000_001);
+        let before = stamp(&source).unwrap();
+        write_at(&meta, r#"{"agentType":"engineer"}"#, 1_700_000_002);
+        assert_ne!(stamp(&source).unwrap(), before);
+    }
+
+    #[test]
+    fn r7_meta_change_older_than_transcript_invalidates_stamp() {
+        let temp = Scratch::new();
+        let source = Source {
+            kind: SourceKind::ClaudeSubagent,
+            path: temp.0.join("agent.jsonl"),
+        };
+        write_at(&source.path, "{}\n", 1_700_000_100);
+        let meta = source.path.with_extension("meta.json");
+        write_at(&meta, r#"{"agentType":"reviewer"}"#, 1_700_000_001);
+        let before = stamp(&source).unwrap();
+        write_at(&meta, r#"{"agentType":"engineer"}"#, 1_700_000_002);
+        assert_ne!(
+            stamp(&source).unwrap(),
+            before,
+            "sidecar changed although transcript mtime is greater"
+        );
+    }
+
+    #[test]
+    fn r7_metadata_preserving_rewrite_invalidates_stamp() {
+        let temp = Scratch::new();
+        let source = Source {
+            kind: SourceKind::ClaudeMain,
+            path: temp.0.join("session.jsonl"),
+        };
+        write_at(&source.path, "{\"tokens\":1}\n", 1_700_000_000);
+        let before = stamp(&source).unwrap();
+        write_at(&source.path, "{\"tokens\":2}\n", 1_700_000_000);
+        assert_ne!(
+            stamp(&source).unwrap(),
+            before,
+            "same size and mtime do not imply same content"
+        );
+    }
+
+    #[test]
+    fn r7_wal_and_db_size_changes_do_not_cancel() {
+        let temp = Scratch::new();
+        let source = Source {
+            kind: SourceKind::Ccflare,
+            path: temp.0.join("source.db"),
+        };
+        let wal = temp.0.join("source.db-wal");
+        write_at(&source.path, "AAAA", 1_700_000_010);
+        write_at(&wal, "BBBBBBBB", 1_700_000_009);
+        let before = stamp(&source).unwrap();
+        write_at(&source.path, "AAAAAAAA", 1_700_000_010);
+        write_at(&wal, "BBBB", 1_700_000_010);
+        assert_ne!(
+            stamp(&source).unwrap(),
+            before,
+            "each file's identity must contribute independently"
+        );
+    }
+}

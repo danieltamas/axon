@@ -163,3 +163,36 @@ fn helper_arg(arg: &OsStr) -> bool {
 fn whole_mib(bytes: u64) -> u64 {
     bytes >> 20 << 20
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+
+    fn session(pid: i64, started_ms: i64) -> Session {
+        Session {
+            pid,
+            started_ms,
+            harness: "claude",
+            cwd: std::env::temp_dir(),
+            rss: 0,
+        }
+    }
+
+    #[test]
+    fn r1_terminate_refuses_generation_different_from_sample() {
+        let mut sampler = Sampler::new();
+        let pid = i64::from(std::process::id());
+        sampler.sessions.push(session(pid, 1_000));
+        assert!(!sampler.terminate(pid, -1));
+    }
+
+    #[test]
+    fn r1_terminate_refuses_generation_different_from_live_process() {
+        let mut sampler = Sampler::new();
+        let pid = i64::from(std::process::id());
+        // The cached identity passes, but no real process can have this start time.
+        // This exercises only refusal; no matching generation is ever supplied.
+        sampler.sessions.push(session(pid, -1));
+        assert!(!sampler.terminate(pid, -1));
+    }
+}

@@ -450,3 +450,97 @@ pub fn detected() -> Vec<Harness> {
         .filter(|h| layout(*h).config.parent().is_some_and(Path::exists))
         .collect()
 }
+
+#[cfg(test)]
+mod acceptance_review2 {
+    use super::*;
+
+    fn hermes_layout() -> Layout {
+        // wire is a pure text edit; these paths are never accessed.
+        Layout {
+            config: PathBuf::from("review2/config.yaml"),
+            plugin: None,
+        }
+    }
+
+    #[test]
+    fn r4_install_merges_commented_hooks_without_duplicate_mapping() {
+        let original = "hooks: # owner\n  pre_tool_call:\n  - command: 'beacon check'\n";
+        let wired = wire(Harness::Hermes, Some(original), "axon", &hermes_layout()).unwrap();
+        assert_eq!(
+            wired
+                .lines()
+                .filter(|line| line.starts_with("hooks:"))
+                .count(),
+            1
+        );
+        assert_eq!(crate::hermes_hooks::unwire(&wired), original);
+    }
+
+    #[test]
+    fn r4_install_refuses_flow_mapping() {
+        for original in ["hooks: {}\n", "hooks: {} # owner\n"] {
+            assert!(wire(Harness::Hermes, Some(original), "axon", &hermes_layout()).is_err());
+        }
+    }
+
+    #[test]
+    fn r5_windows_binary_names_keep_dispatch_and_are_recognized() {
+        for exe in [
+            "axon.exe",
+            r"C:\Users\Alice\bin\axon.exe",
+            r"C:\Users\Alice\bin\axon",
+            "C:/Program Files/Axon/axon.exe",
+        ] {
+            assert_eq!(bus_verb(exe), " bus", "{exe}");
+            let hook = command(exe, Harness::Claude, "PreToolUse");
+            assert!(hook.ends_with(" bus hook claude PreToolUse"), "{hook}");
+            assert!(
+                is_bus_command(&hook, Harness::Claude, "PreToolUse"),
+                "{hook}"
+            );
+        }
+        for exe in ["axon-bus.exe", r"C:\Users\Alice\bin\axon-bus.exe"] {
+            assert_eq!(bus_verb(exe), "", "{exe}");
+            let hook = command(exe, Harness::Claude, "PreToolUse");
+            assert!(
+                is_bus_command(&hook, Harness::Claude, "PreToolUse"),
+                "{hook}"
+            );
+        }
+    }
+
+    #[test]
+    fn r5_recognizes_existing_quoted_windows_hooks() {
+        for hook in [
+            r#""C:\Program Files\Axon\axon.exe" bus hook claude PreToolUse"#,
+            r#""C:\Program Files\Axon\axon-bus.exe" hook claude PreToolUse"#,
+        ] {
+            assert!(
+                is_bus_command(hook, Harness::Claude, "PreToolUse"),
+                "{hook}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn r5_windows_command_uses_cmd_compatible_quotes() {
+        assert_eq!(
+            command(
+                r"C:\Program Files\Axon\axon.exe",
+                Harness::Claude,
+                "PreToolUse"
+            ),
+            r#""C:/Program Files/Axon/axon.exe" bus hook claude PreToolUse"#
+        );
+        assert_eq!(
+            command(
+                r"C:\Program Files\Axon\axon-bus.exe",
+                Harness::Claude,
+                "PreToolUse"
+            ),
+            r#""C:/Program Files/Axon/axon-bus.exe" hook claude PreToolUse"#
+        );
+    }
+}
