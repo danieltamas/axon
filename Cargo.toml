@@ -4,7 +4,7 @@ members = [".", "crates/axon-core", "crates/axon-bus"]
 [workspace.package]
 version = "0.2.1"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.86"
 license = "MIT"
 repository = "https://github.com/danieltamas/axon"
 homepage = "https://github.com/danieltamas/axon"
