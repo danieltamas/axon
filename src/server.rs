@@ -6,8 +6,8 @@
 //! - reject any request whose `Host` is not loopback (anti-DNS-rebind);
 //! - reject any cross-origin `Origin`/`Referer` (anti-CSRF).
 //!
-//! Routes: `GET /api/summary`, `GET /api/health`, and the dashboard router from `axon-bus`
-//! (the page, its assets, `/api/session`, `/api/snapshot`, `/api/stream`, `POST /api/msg`),
+//! Routes: `GET /api/summary`, and the dashboard router from `axon-bus` (the page, its
+//! assets, `/api/health`, `/api/session`, `/api/snapshot`, `/api/stream`, `POST /api/msg`),
 //! which guards itself and adds the CSP. `/api/summary` is kept fresh by `main::spawn_refresher`.
 
 use std::net::SocketAddr;
@@ -40,7 +40,6 @@ pub struct AppState {
 /// The usage API merged with the dashboard, behind the loopback/Origin guard and gzip.
 pub fn build_router(state: Arc<AppState>, db: &std::path::Path, dashboard: Router) -> Router {
     let usage_api = Router::new()
-        .route("/api/health", get(api_health))
         .route("/api/summary", get(api_summary))
         .with_state(state);
     axon_bus::serve::require_owner(usage_api, db)
@@ -63,10 +62,6 @@ pub async fn serve(
         .await
         .context("axum serve")?;
     Ok(())
-}
-
-async fn api_health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok" }))
 }
 
 #[derive(serde::Deserialize)]
@@ -164,6 +159,23 @@ fn is_loopback(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// axum panics when two merged routers both claim a route; the root binary once did, on
+    /// `GET /api/health`, and no test started it.
+    #[tokio::test]
+    async fn usage_api_and_dashboard_routes_do_not_overlap() {
+        let dir = std::env::temp_dir().join(format!("axon-router-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("axon.db");
+        axon_bus::init(&db).unwrap();
+        let (dashboard, _federation) = axon_bus::serve::router(&db, 0, true).unwrap();
+        let state = Arc::new(AppState {
+            summary: std::sync::RwLock::new(build_summary(&[])),
+            events: std::sync::RwLock::new(Vec::new()),
+        });
+        build_router(state, &db, dashboard);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn loopback_hosts_accepted() {
