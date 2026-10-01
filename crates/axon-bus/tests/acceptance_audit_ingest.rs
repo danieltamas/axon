@@ -86,9 +86,9 @@ fn append(path: &Path, bytes: &[u8]) {
 fn test_4_usd_only_budget_denies_unpriced_captured_model() {
     let bus = bus_with_root();
     bus.ok(&["budget", "set", "root", "--usd", "3"]);
-    let captured = bus.fixture("claude", "PostToolUse");
     let mut record = turn(&bus, "unpriced-turn", None);
-    record["message"]["model"] = captured["tool_response"]["resolvedModel"].clone();
+    // Use a synthetic id so new rates for real models cannot invalidate the unpriced premise.
+    record["message"]["model"] = json!("claude-unreleased-test-model");
     let path = bus.root.join("unpriced.jsonl");
     write_jsonl(&path, &[record]);
     ingest(&bus, &path, None);
