@@ -8,7 +8,9 @@ use anyhow::Context;
 use axum::http::{header, HeaderMap};
 use rusqlite::{params, Connection};
 
-use crate::{sha256, store};
+use sha2::{Digest, Sha256};
+
+use crate::store;
 
 pub const COOKIE: &str = "axon_session";
 pub const SESSION_SECS: i64 = 30 * 24 * 3600;
@@ -18,6 +20,11 @@ const TOUCH_MS: i64 = 60_000;
 /// The port a running server bound, so `open` can name it.
 const PORT_KEY: &str = "dashboard_port";
 const DEFAULT_PORT: u16 = 7777;
+
+/// The digest of `input` as 64 lowercase hex characters.
+fn sha256_hex(input: &[u8]) -> String {
+    Sha256::digest(input).iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 /// 32 bytes from the OS, base64url without padding: 43 characters.
 fn random_secret() -> anyhow::Result<String> {
@@ -47,8 +54,8 @@ pub fn issue_nonce(conn: &Connection) -> anyhow::Result<String> {
     let now = store::now_ms();
     conn.execute("DELETE FROM login_nonces WHERE expires_at <= ?1", [now])?;
     conn.execute(
-        "INSERT INTO login_nonces (hash, created_at, expires_at) VALUES (?1, ?2, ?3)",
-        params![sha256::hex(nonce.as_bytes()), now, now + NONCE_MS],
+        "INSERT INTO login_nonces (nonce_hash, expires_at) VALUES (?1, ?2)",
+        params![sha256_hex(nonce.as_bytes()), now + NONCE_MS],
     )?;
     Ok(nonce)
 }
@@ -58,18 +65,18 @@ pub fn issue_nonce(conn: &Connection) -> anyhow::Result<String> {
 pub fn exchange(conn: &Connection, nonce: &str) -> anyhow::Result<Option<String>> {
     let now = store::now_ms();
     let spent = conn.execute(
-        "DELETE FROM login_nonces WHERE hash = ?1 AND expires_at > ?2",
-        params![sha256::hex(nonce.as_bytes()), now],
+        "DELETE FROM login_nonces WHERE nonce_hash = ?1 AND expires_at > ?2",
+        params![sha256_hex(nonce.as_bytes()), now],
     )?;
     if spent != 1 {
         return Ok(None);
     }
     let secret = random_secret()?;
     conn.execute(
-        "INSERT INTO dashboard_sessions (hash, created_at, last_used_at, expires_at)
+        "INSERT INTO dashboard_sessions (session_hash, created_at, last_used_at, expires_at)
          VALUES (?1, ?2, ?2, ?3)",
         params![
-            sha256::hex(secret.as_bytes()),
+            sha256_hex(secret.as_bytes()),
             now,
             now + SESSION_SECS * 1000
         ],
@@ -80,10 +87,10 @@ pub fn exchange(conn: &Connection, nonce: &str) -> anyhow::Result<Option<String>
 /// Whether `secret` names a live session; refreshes `last_used_at` when it is stale.
 pub fn valid(conn: &Connection, secret: &str) -> anyhow::Result<bool> {
     let now = store::now_ms();
-    let hash = sha256::hex(secret.as_bytes());
+    let hash = sha256_hex(secret.as_bytes());
     let last_used: Option<i64> = conn
         .query_row(
-            "SELECT last_used_at FROM dashboard_sessions WHERE hash = ?1 AND expires_at > ?2",
+            "SELECT last_used_at FROM dashboard_sessions WHERE session_hash = ?1 AND expires_at > ?2",
             params![hash, now],
             |row| row.get(0),
         )
@@ -97,7 +104,7 @@ pub fn valid(conn: &Connection, secret: &str) -> anyhow::Result<bool> {
     };
     if now - last_used >= TOUCH_MS {
         conn.execute(
-            "UPDATE dashboard_sessions SET last_used_at = ?2 WHERE hash = ?1",
+            "UPDATE dashboard_sessions SET last_used_at = ?2 WHERE session_hash = ?1",
             params![hash, now],
         )?;
     }
@@ -182,7 +189,7 @@ pub fn open_main(
     let cli = <OpenCli as clap::Parser>::parse_from(args);
     match open_link(db, &cli.args) {
         Ok(link) => {
-            println!("{link}");
+            println!("Dashboard: {link}");
             if !cli.args.print {
                 opener(&link);
             }
@@ -247,9 +254,9 @@ mod tests {
         let (_dir, conn) = hub();
         let nonce = issue_nonce(&conn).unwrap();
         let stored: String = conn
-            .query_row("SELECT hash FROM login_nonces", [], |r| r.get(0))
+            .query_row("SELECT nonce_hash FROM login_nonces", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(stored, sha256::hex(nonce.as_bytes()));
+        assert_eq!(stored, sha256_hex(nonce.as_bytes()));
         assert_ne!(stored, nonce);
     }
 
