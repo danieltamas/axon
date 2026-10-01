@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use rusqlite::Connection;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
@@ -202,7 +202,22 @@ pub fn codex_cwd(argv: &[impl AsRef<OsStr>], os_cwd: PathBuf) -> PathBuf {
         };
     }
     dir.filter(|d| !d.is_empty())
-        .map_or(os_cwd.clone(), |d| os_cwd.join(d))
+        .map_or(os_cwd.clone(), |d| lexically_clean(&os_cwd.join(d)))
+}
+
+/// `..` and `.` folded away without touching the filesystem, as a transcript records it.
+fn lexically_clean(path: &Path) -> PathBuf {
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                clean.pop();
+            }
+            Component::CurDir => {}
+            other => clean.push(other),
+        }
+    }
+    clean
 }
 
 fn helper_arg(arg: &OsStr) -> bool {
@@ -237,10 +252,7 @@ mod codex_cwd_tests {
 
     #[test]
     fn codex_cwd_resolves_a_relative_dir_and_ignores_the_prompt_after_dashes() {
-        assert_eq!(
-            cwd_of(&["codex", "-C", "../wt"]),
-            PathBuf::from("/repo/../wt")
-        );
+        assert_eq!(cwd_of(&["codex", "-C", "../wt"]), PathBuf::from("/wt"));
         assert_eq!(
             cwd_of(&["codex", "exec", "--", "-C", "/x"]),
             PathBuf::from("/repo")
