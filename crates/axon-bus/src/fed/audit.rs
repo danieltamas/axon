@@ -18,7 +18,7 @@ pub struct Decision<'a> {
     pub share_id: Option<&'a str>,
     pub message_id: Option<&'a str>,
     pub direction: &'a str,
-    /// `accepted`, `duplicate` or `rejected`.
+    /// `accepted`, `duplicate`, `rejected` or `expired`.
     pub decision: &'a str,
     pub reason: Option<&'a str>,
 }

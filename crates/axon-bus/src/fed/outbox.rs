@@ -10,7 +10,8 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use super::now_ms;
+use super::audit::{self, Decision};
+use super::{identity, now_ms};
 use crate::fed::service::Handle;
 use crate::store;
 
@@ -26,24 +27,54 @@ pub fn install(handle: &Handle, db: &Path) {
 struct Due {
     message_id: String,
     node: EndpointId,
+    generation: i64,
     frame: Value,
     attempts: i64,
+}
+
+/// Record what happened to an outbound message, under the peer's fingerprint.
+fn audit_outcome(
+    conn: &Connection,
+    node: &str,
+    generation: i64,
+    message_id: &str,
+    decision: &str,
+    reason: Option<&str>,
+) -> anyhow::Result<()> {
+    let fingerprint = node
+        .parse::<EndpointId>()
+        .map(|node| identity::fingerprint(&node))
+        .ok();
+    audit::record(
+        conn,
+        &Decision {
+            peer_fingerprint: fingerprint.as_deref(),
+            generation: Some(generation),
+            share_id: None,
+            message_id: Some(message_id),
+            direction: "out",
+            decision,
+            reason,
+        },
+    )
 }
 
 /// Housekeeping, then the rows ready to send. A row ends here when it expired, or when its
 /// peer was removed or paired again (a new generation is a new relationship).
 fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
     let mut stmt = conn.prepare(
-        "SELECT message_id, from_agent FROM fed_outbox WHERE state='queued' AND expires_at <= ?1",
+        "SELECT o.message_id, o.from_agent, o.generation, p.node_id FROM fed_outbox o
+         JOIN peers p ON p.peer_id=o.peer_id WHERE o.state='queued' AND o.expires_at <= ?1",
     )?;
-    let lapsed: Vec<(String, String)> = stmt
-        .query_map([now], |r| Ok((r.get(0)?, r.get(1)?)))?
+    let lapsed: Vec<(String, String, i64, String)> = stmt
+        .query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<Result<_, _>>()?;
-    for (message_id, sender) in lapsed {
+    for (message_id, sender, generation, node) in lapsed {
         conn.execute(
             "UPDATE fed_outbox SET state='expired' WHERE message_id=?1",
             [&message_id],
         )?;
+        audit_outcome(conn, &node, generation, &message_id, "expired", None)?;
         let text = format!("remote delivery of {message_id} expired");
         if let Err(err) = crate::msg::from_bus(conn, &sender, &sender, "sync", &text) {
             eprintln!("axon-bus: could not tell {sender} about an expired message: {err:#}");
@@ -85,6 +116,7 @@ fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
         ready.push(Due {
             message_id,
             node,
+            generation,
             frame,
             attempts,
         });
@@ -115,25 +147,48 @@ fn judge(answer: &anyhow::Result<Value>) -> Verdict {
 }
 
 fn settle(db: &Path, row: &Due, result: &Verdict) -> anyhow::Result<()> {
-    let conn = store::open(db)?;
+    let mut conn = store::open(db)?;
+    let tx = store::write_tx(&mut conn)?;
+    let node = row.node.to_string();
+    let audit = |decision, reason| {
+        audit_outcome(
+            &tx,
+            &node,
+            row.generation,
+            &row.message_id,
+            decision,
+            reason,
+        )
+    };
     match result {
-        Verdict::Accepted => conn.execute(
-            "UPDATE fed_outbox SET state='accepted', last_error=NULL WHERE message_id=?1 AND state='queued'",
-            [&row.message_id],
-        )?,
-        Verdict::Rejected(reason) => conn.execute(
-            "UPDATE fed_outbox SET state='rejected', last_error=?2 WHERE message_id=?1 AND state='queued'",
-            params![row.message_id, reason],
-        )?,
+        Verdict::Accepted => {
+            let changed = tx.execute(
+                "UPDATE fed_outbox SET state='accepted', last_error=NULL WHERE message_id=?1 AND state='queued'",
+                [&row.message_id],
+            )?;
+            if changed > 0 {
+                audit("accepted", None)?;
+            }
+        }
+        Verdict::Rejected(reason) => {
+            let changed = tx.execute(
+                "UPDATE fed_outbox SET state='rejected', last_error=?2 WHERE message_id=?1 AND state='queued'",
+                params![row.message_id, reason],
+            )?;
+            if changed > 0 {
+                audit("rejected", Some(reason))?;
+            }
+        }
         Verdict::Retry => {
             let wait = (1000i64 << row.attempts.clamp(0, 4)).min(MAX_BACKOFF_MS);
-            conn.execute(
+            tx.execute(
                 "UPDATE fed_outbox SET attempts=attempts+1, next_attempt_at=?2, last_error='unreachable'
                  WHERE message_id=?1 AND state='queued'",
                 params![row.message_id, now_ms() + wait],
-            )?
+            )?;
         }
-    };
+    }
+    tx.commit()?;
     Ok(())
 }
 

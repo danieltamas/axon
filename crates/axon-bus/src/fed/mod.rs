@@ -4,6 +4,7 @@
 pub mod api;
 mod audit;
 pub mod codec;
+pub mod delivery;
 pub mod discovery;
 mod envelope;
 mod health;
