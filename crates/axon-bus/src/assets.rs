@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 
-pub(crate) const ASSETS: [(&str, &str, &str); 27] = [
+pub(crate) const ASSETS: [(&str, &str, &str); 31] = [
     (
         "/activity.js",
         "text/javascript",
@@ -70,6 +70,26 @@ pub(crate) const ASSETS: [(&str, &str, &str); 27] = [
         "/settings-kit.js",
         "text/javascript",
         include_str!("../ui/settings-kit.js"),
+    ),
+    (
+        "/settings-pair.js",
+        "text/javascript",
+        include_str!("../ui/settings-pair.js"),
+    ),
+    (
+        "/settings-peer-facts.js",
+        "text/javascript",
+        include_str!("../ui/settings-peer-facts.js"),
+    ),
+    (
+        "/settings-peers.js",
+        "text/javascript",
+        include_str!("../ui/settings-peers.js"),
+    ),
+    (
+        "/settings-shares.js",
+        "text/javascript",
+        include_str!("../ui/settings-shares.js"),
     ),
     (
         "/settings-sections.js",

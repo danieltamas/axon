@@ -94,25 +94,63 @@
 .hook .act-ask { grid-column: 1 / -1; }
 .hook > .set-status { grid-column: 1 / -1; }
 
-/* peers */
-.peers { display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 1px solid var(--line); }
-.peers h3 { font-size: 13px; font-weight: 600; color: var(--ink-strong); }
-.peers-body { display: flex; flex-direction: column; gap: 12px; }
-.peer-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-.peer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+/* federation: connecting a machine, then one card per peer */
+#set-federation .set-body { max-width: 46rem; }
+.fld-hint:empty { display: none; }
+.settings select.sel { width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--raise); font: 13px var(--mono); color: var(--ink-strong); }
+.settings select.sel:focus { outline: none; border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-wash); }
+.settings input.txt[readonly] { background: var(--surface); text-overflow: ellipsis; }
+.connect, .peers { display: flex; flex-direction: column; gap: 14px; padding-top: 20px; border-top: 1px solid var(--line); }
+.peers[data-peers="true"] .connect { order: 3; }
+.connect h3, .peers h3 { font-size: 13px; font-weight: 600; color: var(--ink-strong); }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 20px 40px; }
+.pair-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pair-col h4, .peer-shares h4 { font-size: 12px; font-weight: 500; color: var(--muted); }
+.pair-block { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; }
+.pair-block .set-form { width: 100%; }
+.invite { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.invite-row { display: flex; gap: 8px; }
+.invite-row .txt { flex: 1; min-width: 0; font-size: 12px; }
+.invite-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.invite-left { font: 12px var(--mono); color: var(--warn); font-variant-numeric: tabular-nums; }
+.peers-body { display: flex; flex-direction: column; gap: 14px; }
+.peer-list, .share-list { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; list-style: none; }
+
+.peer { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raise); }
+.peer[data-state="paused"], .peer[data-state="pending_confirm"] { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.peer-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .peer-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
-.peer-who b { font-size: 14px; color: var(--ink-strong); }
+.peer-who b { font-size: 15px; color: var(--ink-strong); }
 .peer-who code, .peer-facts { font: 12px var(--mono); color: var(--faint); }
 .peer-state { padding: 1px 8px; border-radius: 999px; font: 12px var(--mono); color: var(--faint); }
 .peer[data-state="connected"] .peer-state { background: var(--signal-wash); color: var(--signal); }
-.peer[data-state="reconnecting"] .peer-state, .peer[data-state="pending_confirm"] .peer-state { background: var(--warn-wash); color: var(--warn); }
+.peer[data-state="reconnecting"] .peer-state, .peer[data-state="pending_confirm"] .peer-state, .peer[data-state="paused"] .peer-state { background: var(--warn-wash); color: var(--warn); }
 .peer[data-state="incompatible"] .peer-state { background: var(--stop-wash); color: var(--stop); }
-.peer[data-state="paused"] .peer-state { background: var(--warn-wash); color: var(--warn); }
-.peer-facts, .peer-error, .peer-actions { grid-column: 1 / -1; }
+.peer-status { display: flex; flex-direction: column; gap: 3px; }
 .peer-facts:empty, .peer-error:empty { display: none; }
-.peer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 6px; }
-.peer-actions .act { margin-left: auto; }
 .peer-error { font-size: 12px; color: var(--stop); overflow-wrap: anywhere; }
+.peer-shares { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+.peer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+.peer-actions .act { margin-left: auto; }
+
+.pending { display: flex; flex-direction: column; gap: 12px; }
+.pending-lede, .pending-wait { font-size: 13px; line-height: 1.5; color: var(--ink); max-width: 34rem; }
+.pair-code { padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); font: 600 22px/1.4 var(--mono); letter-spacing: 0.06em; color: var(--ink-strong); font-variant-numeric: tabular-nums; word-spacing: 0.4em; overflow-wrap: anywhere; }
+.pair-code:empty { display: none; }
+
+.fed-share { display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.fed-share:last-child { padding-bottom: 0; border-bottom: 0; }
+.share-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.share-head b { font-size: 14px; color: var(--ink-strong); }
+.share-tag { font: 12px var(--mono); color: var(--faint); }
+.fed-share[data-state="active"] .share-tag { color: var(--signal); }
+.fed-share[data-state="offered_in"] .share-tag, .fed-share[data-state="offered_out"] .share-tag { color: var(--warn); }
+.share-where { font: 12px var(--mono); color: var(--faint); overflow-wrap: anywhere; }
+.directions { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 12px 24px; }
+.fed-share .act { margin-top: 2px; }
+.share-add { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.share-add .set-form { width: 100%; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.picker { display: flex; flex-direction: column; gap: 12px; }
 
 @container (max-width: 720px) {
   .set { grid-template-columns: minmax(0, 1fr); padding: 22px 0 26px; }
