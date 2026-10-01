@@ -226,7 +226,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
           foot.replaceChildren(el("p", "foot-intro", node.observed ? "A subagent of a session the bus cannot reach; end the session to end it." : "Nothing on the bus connects to this agent yet, so there is no edge to message it along."));
           return;
         }
-        const ender = createEnder({ token, ids: [node.id], label: "End session…", confirm: `End pid ${node.pid}: click again` });
+        const ender = createEnder({ token, sessions: [node], label: "End session…", confirm: `End pid ${node.pid}: click again` });
         foot.replaceChildren(el("p", "foot-intro", "This session started before Axon's hooks, so it cannot be messaged. Ending it sends the terminate signal its terminal would."), ender);
         return;
       }

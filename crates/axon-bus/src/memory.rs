@@ -106,7 +106,7 @@ impl Sampler {
                     harness,
                     cwd,
                     rss: whole_mib(process.memory()),
-                    started_ms: i64::try_from(process.start_time()).unwrap_or(0) * 1000,
+                    started_ms: start_ms(process.start_time()),
                 })
             })
             .collect();
@@ -123,15 +123,36 @@ impl Sampler {
     }
 
     /// Ask one of the sampled sessions to exit (SIGTERM), as closing its terminal would.
-    /// Only a pid this sample found running a harness session qualifies; true once sent.
-    pub fn terminate(&self, pid: i64) -> bool {
-        self.sessions.iter().any(|s| s.pid == pid)
-            && u32::try_from(pid)
-                .ok()
-                .and_then(|pid| self.system.process(Pid::from_u32(pid)))
-                .and_then(|process| process.kill_with(Signal::Term))
-                .unwrap_or(false)
+    /// Only the process this sample found running a harness session, started at
+    /// `started_ms`, qualifies, and it is read again just before the signal: a pid the
+    /// system reused since is a different start time and is refused. True once sent.
+    pub fn terminate(&mut self, pid: i64, started_ms: i64) -> bool {
+        let Ok(raw) = u32::try_from(pid) else {
+            return false;
+        };
+        if !self
+            .sessions
+            .iter()
+            .any(|s| s.pid == pid && s.started_ms == started_ms)
+        {
+            return false;
+        }
+        let pid = Pid::from_u32(raw);
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        self.system
+            .process(pid)
+            .filter(|process| start_ms(process.start_time()) == started_ms)
+            .and_then(|process| process.kill_with(Signal::Term))
+            .unwrap_or(false)
     }
+}
+
+fn start_ms(start_secs: u64) -> i64 {
+    i64::try_from(start_secs).unwrap_or(0) * 1000
 }
 
 fn helper_arg(arg: &OsStr) -> bool {

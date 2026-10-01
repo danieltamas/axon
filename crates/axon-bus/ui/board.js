@@ -113,7 +113,7 @@ export function createBoard(container, scroller, token, onSelect) {
     // card's corner as a sibling, since a button cannot hold another.
     if (isProcess(root)) {
       box.classList.add("endable");
-      box.append(createEnder({ token, ids: [root.id], label: "End", confirm: "Click to end", compact: true }));
+      box.append(createEnder({ token, sessions: [root], label: "End", confirm: "Click to end", compact: true }));
     }
     if (subs.childElementCount) box.append(subs);
     return box;

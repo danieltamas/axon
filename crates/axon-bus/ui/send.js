@@ -140,7 +140,7 @@ function choice(name, legend, options, checked) {
 // Ends open harness sessions (their processes get a terminate signal), for sessions the
 // bus cannot reach. Two deliberate clicks, like a stop; the server re-checks every id.
 // `compact` drops the status line: the outcome shows on the button, the reason in its title.
-export function createEnder({ token, ids, label, confirm, compact = false }) {
+export function createEnder({ token, sessions, label, confirm, compact = false }) {
   const box = el("div", compact ? "card-end" : "ender");
   const button = el("button", "stop-button", label);
   button.type = "button";
@@ -165,7 +165,8 @@ export function createEnder({ token, ids, label, confirm, compact = false }) {
     const response = await fetch("/api/end", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Axon-Token": token },
-      body: JSON.stringify({ agents: ids }),
+      // The start time pins each process, so a pid reused since the page drew is refused.
+      body: JSON.stringify({ agents: sessions.map((s) => ({ id: s.id, started_ms: s.started_ms })) }),
     }).catch(() => null);
     button.disabled = false;
     const reply = response ? await response.json().catch(() => ({})) : {};

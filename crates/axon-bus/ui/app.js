@@ -102,8 +102,8 @@ function renderProjectHead(repo, s) {
   const roots = repo ? repo.harnesses.flatMap((h) => h.roots) : [];
   const hours = sumHours(roots.map((r) => r.activity));
   // Sessions left open at a prompt, which only a signal can close (see isProcess).
-  const idle = roots.filter((r) => isProcess(r) && r.status === "idle").map((r) => r.id);
-  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention, hours, idle]) : "";
+  const idle = roots.filter((r) => isProcess(r) && r.status === "idle");
+  const key = repo ? JSON.stringify([repo.name, repo.repo, s.facts, s.attention, hours, idle.map((r) => `${r.id}@${r.started_ms}`)]) : "";
   if (head.dataset.key === key) return;
   head.dataset.key = key;
   if (!repo) {
@@ -128,7 +128,7 @@ function renderProjectHead(repo, s) {
   if (roots.some((r) => r.activity)) head.append(activityChart(hours, "turns per hour"));
   if (idle.length) {
     const n = idle.length;
-    head.append(createEnder({ token, ids: idle, label: `End ${n} idle ${n === 1 ? "session" : "sessions"}…`, confirm: `End ${n} idle: click again` }));
+    head.append(createEnder({ token, sessions: idle, label: `End ${n} idle ${n === 1 ? "session" : "sessions"}…`, confirm: `End ${n} idle: click again` }));
   }
   if (!s.attention.length) return;
   const list = el("ul", "needs");

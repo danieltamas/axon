@@ -434,7 +434,7 @@ async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Res
 
 #[derive(Deserialize)]
 struct Ending {
-    agents: Vec<String>,
+    agents: Vec<end::Target>,
 }
 
 /// End open harness sessions by their snapshot ids; see `end`.

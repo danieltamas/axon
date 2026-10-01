@@ -314,6 +314,7 @@ fn render(
         "unpriced": main.is_some_and(|u| u.cost.is_none()),
         "rss": session.rss,
         "pid": session.pid,
+        "started_ms": session.started_ms,
         "last_ts": main.map(|u| u.last_ts.max(written)),
         "observed": true,
         "activity": found.map(|i| activity_json(&i.activity)),
