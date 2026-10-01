@@ -43,6 +43,14 @@ Windows-only tests run in CI. Report: `docs/audits/axon-bus-review2-2026-10-01.m
 - **Two versions, one database.** Each binary keys the scan cache on its own version, so a
   0.2.x and a 0.3.0 `axon` running at the same time clear each other's stamps and every scan
   becomes a full re-read (15.9 s observed against 0.7 s). Stop the old one after upgrading.
+- **`ask` cannot run through the hook**, since it waits for its answer. An agent is told to
+  `send --kind question` instead; the answer arrives in its context. `ask` still works from a
+  shell that can write the hub.
+- **Bus commands run through the hook only when typed alone**: a command chained with `;`,
+  `&&`, a redirection or a substitution runs in the agent's own shell, where a sandbox may
+  refuse the write.
+- **Agents learn the bus from 0.3.0 hooks.** An install whose hooks point at 0.2.x gets
+  none of it until upgraded.
 - **CLI guard in Git Bash on Windows** treats an unquoted backslash as a path separator, as
   cmd and PowerShell do, so a POSIX escape such as `a\ b` is read as two words there.
 
@@ -125,6 +133,11 @@ in a project at once. Each needs a two-click confirm. The server re-checks every
 the terminate signal only to a process it found in its latest scan.
 
 **Messaging between agents** (`send`, `ask`, `reply`).
+- Every session and subagent is told its bus id, its parent, subagents and linked sessions,
+  the other sessions in its repository, and the commands to reach them (`peers` repeats it);
+- a bare bus command an agent types runs through its hook as that agent, outside its
+  sandbox, and the result comes back in place of the command's output;
+- link proposals and acceptances notify the other session;
 - Routed along edges;
 - root-to-root `link` / `accept`;
 - temporary `grant`s per thread;

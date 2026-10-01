@@ -24,7 +24,7 @@ budget, stop or end them.
 | **Live topology**: every project, its sessions grouped as Needs you / Working / Idle / Closed, subagents beside their session, a 24 h activity chart | ✅ |
 | **Observed sessions**: harness processes started before Axon are found from the process table, with transcript narrative ("Now / Said / Ran"), model, tokens, cost and memory | ✅ |
 | **End sessions**: end one idle session from its card or every idle one in a project; two-click confirm, re-checked by the server | ✅ |
-| **Messages between agents**: `send` / `ask` / `reply` along edges, root-to-root `link`, per-thread `grant`, operator messages from the dashboard | ✅ |
+| **Messages between agents**: each agent is told its bus id, whom it can reach and which sessions in its repo it could link with; `send` / `reply` along edges, root-to-root `link` / `accept`, per-thread `grant`, `peers`, operator messages from the dashboard. An agent's bus commands run through its hook, so they work inside a sandbox | ✅ |
 | **Budgets and stops**: token and USD ceilings per tree or agent; warn at 80 %, a stop gate at 100 % | ✅ |
 | **Cross-harness cost**: exact per-subagent attribution, per model / agent / harness, today / week / month spend with budget alerts | ✅ |
 | **Coordination**: path `claim`s in a checkout, task routing from `routes.toml` | ✅ |
