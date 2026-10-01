@@ -2,14 +2,22 @@
 //! and its health. Off unless the owner turns it on; nothing here runs otherwise.
 
 pub mod api;
+mod audit;
 pub mod codec;
+pub mod discovery;
+mod envelope;
 mod health;
 pub mod identity;
 mod invite;
 mod lock;
+mod outbox;
 pub mod pairing;
+mod receive;
 pub mod remote;
 pub mod service;
+pub mod shares;
+#[cfg(test)]
+mod testkit;
 mod transport;
 
 use std::path::Path;
@@ -82,6 +90,16 @@ pub fn now_ms() -> i64 {
         + seam("AXON_TEST_NOW_OFFSET_MS")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
+}
+
+/// Wire a started service to everything that speaks on `axon/fed/1`: pairing, shares,
+/// discovery, and the delivery of messages both ways.
+pub fn install(handle: &service::Handle, db: &Path) {
+    pairing::install(handle, db);
+    shares::install(handle, db);
+    discovery::install(handle, db);
+    receive::install(handle, db);
+    outbox::install(handle, db);
 }
 
 /// 16 random bytes as 32 hex characters: the id of an invite or a peer row.

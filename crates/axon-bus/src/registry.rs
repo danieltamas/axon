@@ -50,7 +50,7 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
     if let Some(previous) = known {
         conn.execute(
             "UPDATE agents SET status=?2, last_seen_at=?3, model=coalesce(?4, model),
-             cwd=coalesce(cwd, ?5), pid=coalesce(?6, pid),
+             cwd=coalesce(?5, cwd), pid=coalesce(?6, pid),
              ended_at=CASE WHEN ?2='closed' THEN ended_at END WHERE id=?1",
             params![
                 agent.id,

@@ -75,6 +75,20 @@ fn refused(refused: msg::Refused) -> ExitCode {
     ExitCode::from(code)
 }
 
+/// Say what a send to another person's agent came to, in the words of P2P-SPEC §7.
+fn remote_outcome(outcome: &fed::remote::Outcome) -> ExitCode {
+    match outcome {
+        fed::remote::Outcome::Queued { id, to } => {
+            println!("queued {id} to {to} (delivers when connected; expires in 24h)");
+            ExitCode::SUCCESS
+        }
+        fed::remote::Outcome::Refused(reason) => {
+            println!("refused: {reason}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Create the bus tables in `db` if they are missing: schema only, no harness config.
 pub fn init(db: &std::path::Path) -> anyhow::Result<()> {
     store::init(db).map(drop)
@@ -185,9 +199,17 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             refs,
         } => {
             let mut conn = hub(&db)?;
-            if let Some(reason) = fed::remote::refusal(&conn, &to)? {
-                println!("refused: {reason}");
-                return Ok(ExitCode::FAILURE);
+            let remote = fed::remote::Request {
+                from: &from,
+                to: &to,
+                kind: &kind,
+                body: &body,
+                thread: thread.as_deref(),
+                refs: &refs,
+                reply_to: None,
+            };
+            if let Some(outcome) = fed::remote::send(&mut conn, &remote)? {
+                return Ok(remote_outcome(&outcome));
             }
             let tx = store::write_tx(&mut conn)?;
             let outgoing = msg::Outgoing {
@@ -242,6 +264,9 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             body,
         } => {
             let mut conn = hub(&db)?;
+            if let Some(outcome) = fed::remote::reply(&mut conn, &question, &from, &body)? {
+                return Ok(remote_outcome(&outcome));
+            }
             let tx = store::write_tx(&mut conn)?;
             match msg::reply(&tx, &question, &from, &body)? {
                 Ok((id, thread)) => {
@@ -264,6 +289,9 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             let peers = roster::peers(&conn, &agent)?
                 .ok_or_else(|| Invalid(format!("agent {agent} is not registered")))?;
             println!("{peers}");
+            if let Some(remote) = fed::discovery::remote_block(&conn, &agent)? {
+                print!("{remote}");
+            }
         }
         Command::Accept { from, to } => {
             let mut conn = hub(&db)?;

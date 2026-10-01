@@ -19,12 +19,15 @@ use serde_json::{json, Value};
 
 use super::pairing::{self, Confirm, JoinError, PeerRow};
 use super::service::Handle;
+use super::shares;
 use super::{identity, invite};
 use crate::settings::Federation;
 use crate::store;
 
 /// No body of these routes is larger than an invite blob.
 const MAX_BODY_BYTES: usize = 16 * 1024;
+
+mod share_routes;
 
 struct FedApi {
     db: PathBuf,
@@ -43,6 +46,7 @@ pub fn routes(db: &FsPath, federation: Federation) -> Router {
         .route("/api/fed/join", post(join))
         .route("/api/fed/peers/:peer_id/confirm", post(confirm))
         .route("/api/fed/peers/:peer_id/reject", post(reject))
+        .merge(share_routes::routes())
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
@@ -54,6 +58,12 @@ enum Fail {
     LabelTaken,
     AlreadyPaired,
     UnknownPeer,
+    UnknownShare,
+    PeerNotActive,
+    /// The share is not in a state this change applies to.
+    WrongState,
+    AlreadyShared,
+    TooManyShares,
     NotPending,
     PairCodeMismatch,
     /// Federation is off, or on but its service did not start (see `GET /api/fed`).
@@ -82,6 +92,11 @@ impl IntoResponse for Fail {
                 json!({"error": "federation_not_running"}),
             ),
             Self::UnknownPeer => (StatusCode::NOT_FOUND, json!({"error": "unknown_peer"})),
+            Self::UnknownShare => (StatusCode::NOT_FOUND, json!({"error": "unknown_share"})),
+            Self::PeerNotActive => (StatusCode::CONFLICT, json!({"error": "peer_not_active"})),
+            Self::WrongState => (StatusCode::CONFLICT, json!({"error": "wrong_state"})),
+            Self::AlreadyShared => (StatusCode::CONFLICT, json!({"error": "already_shared"})),
+            Self::TooManyShares => (StatusCode::CONFLICT, json!({"error": "too_many_shares"})),
             Self::Unreachable => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "peer_unreachable"}),
@@ -260,10 +275,15 @@ fn view(conn: &Connection, live: Option<Value>) -> anyhow::Result<Value> {
             )
         })
         .collect();
-    let peers = pairing::all_peers(conn)?
-        .iter()
-        .map(|row| peer_json(row, own.as_ref(), live_peers.remove(&row.peer_id)))
-        .collect::<Vec<_>>();
+    let mut peers = Vec::new();
+    for row in pairing::all_peers(conn)? {
+        let mut peer = peer_json(&row, own.as_ref(), live_peers.remove(&row.peer_id));
+        peer["shares"] = shares::of_peer(conn, &row.peer_id)?
+            .iter()
+            .map(shares::Share::to_json)
+            .collect();
+        peers.push(peer);
+    }
     body["invites"] = Value::Array(if running {
         invite::open(conn)?
     } else {
@@ -273,8 +293,8 @@ fn view(conn: &Connection, live: Option<Value>) -> anyhow::Result<Value> {
     Ok(body)
 }
 
-/// One peer of §10. Shares, queue and counters are the defaults of a peer that has none
-/// yet; the units that own those fill them in.
+/// One peer of §10. Queue and counters are the defaults of a peer that has none yet; the
+/// units that own those fill them in.
 fn peer_json(row: &PeerRow, own: Option<&EndpointId>, live: Option<Value>) -> Value {
     let mut peer = json!({
         "peer_id": row.peer_id,

@@ -1,0 +1,67 @@
+//! The federation audit (docs/P2P-SPEC.md §5): every decision about a peer's message is a
+//! `fed_audit` row and, in the same transaction, an `events` row chained like all others. Neither
+//! ever holds a key, a secret or a message body.
+
+use rusqlite::{params, Connection};
+use serde_json::json;
+
+use super::now_ms;
+use crate::store;
+
+/// Rejections written per peer per minute; past it they are not recorded, so a peer that
+/// floods us cannot also flood the audit.
+const REJECTIONS_PER_MINUTE: i64 = 10;
+
+pub struct Decision<'a> {
+    pub peer_fingerprint: Option<&'a str>,
+    pub generation: Option<i64>,
+    pub share_id: Option<&'a str>,
+    pub message_id: Option<&'a str>,
+    pub direction: &'a str,
+    /// `accepted`, `duplicate` or `rejected`.
+    pub decision: &'a str,
+    pub reason: Option<&'a str>,
+}
+
+/// Record `decision` in the caller's transaction. A rejection past the per-minute budget of
+/// its peer is dropped.
+pub fn record(conn: &Connection, d: &Decision) -> anyhow::Result<()> {
+    let ts = now_ms();
+    if d.decision == "rejected" {
+        let recent: i64 = conn.query_row(
+            "SELECT count(*) FROM fed_audit WHERE decision='rejected' AND ts > ?2
+               AND peer_fingerprint IS ?1",
+            params![d.peer_fingerprint, ts - 60_000],
+            |r| r.get(0),
+        )?;
+        if recent >= REJECTIONS_PER_MINUTE {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        "INSERT INTO fed_audit (ts,peer_fingerprint,generation,share_id,message_id,direction,decision,reason)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![
+            ts,
+            d.peer_fingerprint,
+            d.generation,
+            d.share_id,
+            d.message_id,
+            d.direction,
+            d.decision,
+            d.reason
+        ],
+    )?;
+    let row = json!({
+        "seq": conn.last_insert_rowid(), "ts": ts, "peer_fingerprint": d.peer_fingerprint,
+        "generation": d.generation, "share_id": d.share_id, "message_id": d.message_id,
+        "direction": d.direction, "decision": d.decision, "reason": d.reason,
+    });
+    store::append_event(
+        conn,
+        "fed",
+        d.decision,
+        d.message_id.or(d.share_id).unwrap_or("-"),
+        &row.to_string(),
+    )
+}

@@ -432,7 +432,8 @@ pub(crate) fn bus_command() -> String {
 pub fn deliver(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
     let mut stmt = conn.prepare(
         "SELECT id,thread,from_id,kind,body,needs_reply,refs_json FROM messages
-         WHERE to_id=?1 AND delivered_at IS NULL AND kind<>'stop' ORDER BY rowid",
+         WHERE to_id=?1 AND delivered_at IS NULL AND kind<>'stop'
+           AND from_id NOT LIKE 'peer:%' ORDER BY rowid",
     )?;
     let pending = stmt
         .query_map([agent], |r| {

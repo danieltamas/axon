@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::fed::pairing;
+use crate::fed;
 use crate::fed::service::{self, Handle};
 
 #[derive(Clone)]
@@ -36,7 +36,7 @@ impl Federation {
             None => None,
         };
         if let Some(handle) = running.as_ref() {
-            pairing::install(handle, &self.db);
+            fed::install(handle, &self.db);
         }
     }
 
