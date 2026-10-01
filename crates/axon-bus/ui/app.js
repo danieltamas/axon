@@ -11,6 +11,7 @@ import { agents, bytes, el, isProcess, money, setCurrency, setText, stats, token
 import { createOverview, projectKey, summarize } from "./overview.js";
 import { offerInstall, onServerLost, registerWorker } from "./pwa.js";
 import { createEnder } from "./send.js";
+import { createSettings } from "./settings.js";
 import { exchangeLogin, showSignIn } from "./signin.js";
 import { createUsage } from "./usage.js";
 
@@ -38,6 +39,8 @@ const usage = createUsage($("usage"), {
   },
 });
 
+const settings = createSettings($("settings"));
+
 function focus({ selected = null, thread = null }) {
   state.selected = selected;
   state.thread = thread;
@@ -53,7 +56,7 @@ function setView(view) {
 for (const tab of document.querySelectorAll("[data-tab]")) tab.addEventListener("click", () => setView(tab.dataset.tab));
 
 // The hash is the level: `#/` is every project, `#/p/<repo>` one project and `#/usage`
-// the spend record, so the back button walks out of a project.
+// the spend record, `#/settings` the settings, so the back button walks out of a project.
 function route() {
   const match = location.hash.match(/^#\/p\/(.+)$/);
   const project = match ? decodeURIComponent(match[1]) : null;
@@ -63,14 +66,17 @@ function route() {
     state.thread = null;
   }
   const onUsage = location.hash === "#/usage";
-  layout.dataset.level = onUsage ? "usage" : project ? "project" : "overview";
+  const onSettings = location.hash === "#/settings";
+  layout.dataset.level = onUsage ? "usage" : onSettings ? "settings" : project ? "project" : "overview";
   for (const link of document.querySelectorAll("[data-view]")) {
-    const here = link.dataset.view === (onUsage ? "usage" : "projects");
+    const here = link.dataset.view === (onUsage ? "usage" : onSettings ? "settings" : "projects");
     if (here) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
   if (onUsage) usage.show();
   else usage.hide();
+  if (onSettings) settings.show();
+  else settings.hide();
   document.body.dataset.level = layout.dataset.level;
   setView("agents");
   render();
@@ -147,7 +153,7 @@ function renderProjectHead(repo, s) {
 function render() {
   const repo = state.project ? currentRepo() : null;
   renderCrumbs(repo);
-  if (layout.dataset.level === "usage") return;
+  if (layout.dataset.level === "usage" || layout.dataset.level === "settings") return;
   if (!state.project) {
     overview.render(state.snapshot, Date.now());
     return;
