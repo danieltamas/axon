@@ -74,6 +74,7 @@ axon --scan-only          # headless: scan the logs, print a JSON summary, exit
 axon bus --help           # the control plane: send, ask, budget, claim, audit, doctor…
 axon bus budget set <root> 2Mtok --usd 20
 axon bus doctor           # which harnesses are wired
+axon bus guide            # the playbook every agent is pointed to
 ```
 
 Axon scans `~/.claude/projects/`, `~/.codex/sessions/`, OpenCode's `opencode.db` and

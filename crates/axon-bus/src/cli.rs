@@ -143,6 +143,8 @@ pub enum Command {
         #[arg(long)]
         to: String,
     },
+    /// The agent playbook: what Axon is and how to message, link, claim and stop.
+    Guide,
     /// Whom an agent can message now, and which sessions in its repo it could link with.
     Peers {
         #[arg(long)]

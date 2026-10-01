@@ -13,6 +13,7 @@ mod doctor;
 mod doorbell;
 mod end;
 mod gate;
+mod guide;
 mod hermes_hooks;
 mod hook;
 mod install;
@@ -250,6 +251,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             msg::link_notice(&tx, &from, &to)?;
             tx.commit()?;
         }
+        Command::Guide => print!("{}", guide::text(&msg::bus_command())),
         Command::Peers { agent } => {
             let conn = hub(&db)?;
             let peers = roster::peers(&conn, &agent)?
