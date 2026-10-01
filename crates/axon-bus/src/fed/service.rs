@@ -278,6 +278,9 @@ async fn sync_peers(shared: &Arc<Shared>, dialers: &mut HashMap<EndpointId, Join
         }
         keep
     });
+    // A peer that became active may have been seen while still pairing, when no address is kept:
+    // forget what was seen so the next connection records it.
+    locked(&shared.observed).clear();
     *shared.access.write().unwrap_or_else(|p| p.into_inner()) = access;
     shared.changed.send_modify(|version| *version += 1);
 }

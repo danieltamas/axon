@@ -27,6 +27,7 @@ use crate::store;
 /// No body of these routes is larger than an invite blob.
 const MAX_BODY_BYTES: usize = 16 * 1024;
 
+mod peer_routes;
 mod share_routes;
 
 struct FedApi {
@@ -46,6 +47,7 @@ pub fn routes(db: &FsPath, federation: Federation) -> Router {
         .route("/api/fed/join", post(join))
         .route("/api/fed/peers/:peer_id/confirm", post(confirm))
         .route("/api/fed/peers/:peer_id/reject", post(reject))
+        .merge(peer_routes::routes())
         .merge(share_routes::routes())
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)

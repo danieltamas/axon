@@ -116,18 +116,37 @@ fn remote_confirmed(conn: &mut Connection, node: &str, generation: i64) -> anyho
     Ok(reply)
 }
 
-/// The other side rejected or abandoned the pairing while it was pending.
+/// The other side rejected or abandoned the pairing while it was pending. A peer we are
+/// already paired with only informs us: ending a pairing is each owner's own decision.
 fn remote_removed(conn: &mut Connection, node: &str, generation: i64) -> anyhow::Result<Value> {
     let changed = conn.execute(
         "UPDATE peers SET state='removed', removed_at=?1, removed_reason='remote_rejected'
          WHERE node_id=?2 AND generation=?3 AND state='pending_confirm'",
         params![now_ms(), node, generation],
     )?;
-    Ok(if changed > 0 {
+    Ok(if changed > 0 || is_paired(conn, node, generation)? {
         json!({"type": "ack", "status": "accepted"})
     } else {
         error("not_pending")
     })
+}
+
+/// The other side paused the pairing. Nothing changes here; the answer says it was heard.
+fn remote_paused(conn: &mut Connection, node: &str, generation: i64) -> anyhow::Result<Value> {
+    Ok(if is_paired(conn, node, generation)? {
+        json!({"type": "ack", "status": "accepted"})
+    } else {
+        error("unknown_peer")
+    })
+}
+
+fn is_paired(conn: &Connection, node: &str, generation: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM peers WHERE node_id=?1 AND generation=?2
+                       AND state IN ('active','paused'))",
+        params![node, generation],
+        |r| r.get(0),
+    )
 }
 
 /// What a handler does to the database for one parsed frame: `(connection, sender's node id,
@@ -180,6 +199,7 @@ pub fn install(handle: &Handle, db: &Path) {
             link,
             |conn, node, generation, what| match what {
                 Some("removed") => remote_removed(conn, node, generation),
+                Some("paused") => remote_paused(conn, node, generation),
                 _ => Ok(error("unsupported_notice")),
             },
         ),
