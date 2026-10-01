@@ -60,7 +60,7 @@ fn test_10_different_event_chains_have_different_heads() {
 }
 
 #[test]
-fn test_11_localhost_origin_with_valid_token_returns_201() {
+fn test_11_localhost_origin_with_valid_session_returns_201() {
     let bus = Bus::new();
     bus.init();
     bus.register("root", "claude", None);
@@ -75,7 +75,7 @@ fn test_11_localhost_origin_with_valid_token_returns_201() {
         "/api/msg",
         &[
             ("Origin", &origin),
-            ("X-Axon-Token", &server.token),
+            ("Cookie", &server.cookie),
             ("Content-Type", "application/json"),
         ],
         &body,
@@ -121,7 +121,7 @@ fn test_11_localhost_origin_wrong_port_returns_403_without_inserting() {
         "/api/msg",
         &[
             ("Origin", &origin),
-            ("X-Axon-Token", &server.token),
+            ("Cookie", &server.cookie),
             ("Content-Type", "application/json"),
         ],
         &body,

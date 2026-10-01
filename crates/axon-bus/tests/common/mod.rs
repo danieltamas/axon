@@ -14,7 +14,16 @@
 
 #![allow(dead_code)] // Each integration-test crate uses a different subset of helpers.
 
+pub mod delivery;
+pub mod faults;
+pub mod fed;
 mod http;
+pub mod invite;
+pub mod limits;
+pub mod pairing_checks;
+pub mod settings;
+pub mod share_checks;
+pub mod sse;
 
 #[allow(unused_imports)] // Each integration-test crate uses a different subset of helpers.
 pub use http::{response_headers, Response, Server};
@@ -106,6 +115,8 @@ impl Bus {
             .env("TEMP", self.root.join("tmp"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", self.root.join("empty-gitconfig"))
+            .env("AXON_FED_RELAY", "disabled")
+            .env("AXON_FED_BIND", "127.0.0.1:0")
             .env("NO_COLOR", "1")
             .env("TZ", "UTC")
             .env("LANG", "C");

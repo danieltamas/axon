@@ -1,8 +1,8 @@
 //! Contract decisions
 //! - `serve --port 0 --ready-file PATH [--no-content]` binds an ephemeral loopback port and
-//!   atomically writes {url,token} after readiness; token changes on every boot.
+//!   atomically writes {url} after readiness (P2P-SPEC §1 removes the page token).
 //!   Content capture is on by default; --no-content is structure-only (--content is accepted).
-//! - POST /api/msg accepts {from_id,to_id,kind,body}, requires X-Axon-Token plus exact
+//! - POST /api/msg accepts {from_id,to_id,kind,body}, requires an owner session plus exact
 //!   Origin=url, and returns 201 JSON {id,thread}. Denied requests must not insert messages.
 //! - Snapshot: {repos:[{repo:MAIN_PATH|null,name,harnesses:[{harness,roots:[NODE]}]}]}.
 //!   NODE has id,children,repo,repo_badge,branch,narrative. No-repo name is `no repo`;
@@ -70,35 +70,43 @@ fn non_loopback_host_gets_403_while_loopback_host_succeeds() {
     );
 }
 
-// BUS-PLAN §7 Security: POST requires both exact same-origin and the current per-boot token.
+// P2P-SPEC §1: Origin remains required; a missing or wrong session gives sign_in.
 #[test]
-fn cross_origin_missing_origin_missing_token_and_wrong_token_posts_get_403() {
+fn origin_failures_get_403_and_session_failures_get_401() {
     let (bus, server) = server(false);
     bus.register("root", "claude", None);
     bus.register("child", "codex", Some("root"));
     let body = json!({"from_id":"root","to_id":"child","kind":"redirect","body":"http marker"})
         .to_string();
     let before = bus.count("SELECT count(*) FROM messages");
-    let cases = vec![
-        vec![
-            ("Origin", "https://attacker.invalid"),
-            ("X-Axon-Token", server.token.as_str()),
-        ],
-        vec![("X-Axon-Token", server.token.as_str())],
-        vec![("Origin", server.url.as_str())],
-        vec![
-            ("Origin", server.url.as_str()),
-            ("X-Axon-Token", "wrong-token"),
-        ],
+    let cases = [
+        (
+            vec![
+                ("Origin", "https://attacker.invalid"),
+                ("Cookie", server.cookie.as_str()),
+            ],
+            403,
+        ),
+        (vec![("Cookie", server.cookie.as_str())], 403),
+        (vec![("Origin", server.url.as_str())], 401),
+        (
+            vec![
+                ("Origin", server.url.as_str()),
+                ("Cookie", "axon_session=wrong"),
+            ],
+            401,
+        ),
     ];
-    for mut headers in cases {
+    for (mut headers, expected) in cases {
         headers.push(("Content-Type", "application/json"));
-        assert_eq!(
-            server
-                .request(&bus, "POST", "/api/msg", &headers, &body)
-                .status,
-            403
-        );
+        let response = server.raw_request(&bus, "POST", "/api/msg", &headers, &body);
+        assert_eq!(response.status, expected);
+        if expected == 401 {
+            assert_eq!(
+                parse_json(&response.body),
+                json!({"error":"sign_in","hint":"run axon open"})
+            );
+        }
         assert_eq!(bus.count("SELECT count(*) FROM messages"), before);
     }
     let accepted = server.request(
@@ -107,7 +115,7 @@ fn cross_origin_missing_origin_missing_token_and_wrong_token_posts_get_403() {
         "/api/msg",
         &[
             ("Origin", &server.url),
-            ("X-Axon-Token", &server.token),
+            ("Cookie", &server.cookie),
             ("Content-Type", "application/json"),
         ],
         &body,
@@ -242,8 +250,8 @@ fn new_registration_reaches_the_existing_sse_stream_within_one_second() {
     let mut socket = server.connect(Duration::from_millis(900));
     write!(
         socket,
-        "GET /api/stream HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\n\r\n",
-        server.address
+        "GET /api/stream HTTP/1.1\r\nHost: {}\r\nCookie: {}\r\nAccept: text/event-stream\r\n\r\n",
+        server.address, server.cookie
     )
     .unwrap();
     let mut reader = BufReader::new(socket);
@@ -477,24 +485,13 @@ fn content_off_keeps_structure_but_neither_exposes_nor_stores_assistant_text() {
     }
 }
 
-// BUS-PLAN §7 Security: a per-boot token cannot authorize a later server process.
+// P2P-SPEC §1 replaces per-boot token rotation: hashed sessions survive restart.
 #[test]
-fn restarting_serve_rotates_the_token_and_rejects_the_previous_token() {
+fn restarting_serve_preserves_the_owner_session() {
     let (bus, first) = server(false);
-    let old_token = first.token.clone();
+    let cookie = first.cookie.clone();
     drop(first);
     let second = Server::start(&bus, false);
-    assert_ne!(second.token, old_token);
-    let response = second.request(
-        &bus,
-        "POST",
-        "/api/msg",
-        &[
-            ("Origin", &second.url),
-            ("X-Axon-Token", &old_token),
-            ("Content-Type", "application/json"),
-        ],
-        "{}",
-    );
-    assert_eq!(response.status, 403);
+    let response = second.raw_request(&bus, "GET", "/api/snapshot", &[("Cookie", &cookie)], "");
+    assert_eq!(response.status, 200);
 }
