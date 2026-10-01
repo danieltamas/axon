@@ -91,6 +91,10 @@ enum Invocation {
 /// Whether `words[i]` runs a bus command: `axon-bus` anywhere (as before), `axon` only in
 /// command position, since a path ending in `/axon` is usually a directory.
 fn invocation(words: &[String], i: usize) -> Option<Invocation> {
+    // `DIR=/x/axon` assigns a variable; it runs nothing.
+    if words[i].contains('=') {
+        return None;
+    }
     let file = words[i].rsplit(['/', '\\']).next()?;
     match file.strip_suffix(".exe").unwrap_or(file) {
         "axon-bus" => Some(Invocation::Bus(i + 1)),
