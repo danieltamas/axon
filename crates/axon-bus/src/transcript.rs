@@ -362,12 +362,15 @@ pub fn redact(text: &str) -> String {
                 let whole = caps.get(0).expect("match");
                 let secret = caps.iter().flatten().last().expect("secret group");
                 let head = &out[whole.start()..secret.start()];
-                // A bare number after `tokens:` is a count; after `password=` it is a secret.
-                let key = head.to_ascii_lowercase();
-                let counts = key.contains("token")
-                    && !["password", "passwd", "secret", "key", "credential"]
-                        .iter()
-                        .any(|k| key.contains(k));
+                // A bare number after `input_tokens:` is a count; after `access_token=` or
+                // `password=` it is a secret, so only count-shaped key names are exempt.
+                let key = head
+                    .trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .rsplit(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let counts = key.ends_with("tokens") || key.contains("token_count");
                 if counts && secret.as_str().bytes().all(|b| b.is_ascii_digit()) {
                     return whole.as_str().to_owned();
                 }
