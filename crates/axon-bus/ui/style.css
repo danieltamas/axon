@@ -158,63 +158,77 @@ a.crumb:hover { color: var(--ink-strong); }
 .need b { min-width: 0; padding: 0; background: none; }
 @container (max-width: 700px) { .project-head { grid-template-columns: minmax(0, 1fr); } }
 
-/* ---- topology: sessions grouped by state, each with its subagents beside it ---- */
-.tree { --gap: 16px; --root-y: 29px; --sub-y: 18px; }
-.lane { margin-top: 28px; }
+/* ---- topology: one session per row, its subagents hanging under it as a tree ---- */
+.tree { --sub-y: 16px; }
+.lane { max-width: 1180px; margin-top: 28px; }
 .lane-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
 .lane-head h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--ink-strong); }
 .sum { font: 12px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
 .glyph { width: 12px; height: 12px; flex: none; }
 .glyph path { fill: none; stroke: var(--h); stroke-width: 2.4; stroke-linejoin: round; }
-.band + .band { margin-top: 20px; }
+.band + .band { margin-top: 22px; }
 .band-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
-/* A session with subagents takes two tracks, card and rail; dense flow lets single
-   sessions fill in around it instead of leaving the rest of its row empty. */
-.band-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); grid-auto-flow: row dense; gap: var(--gap); align-items: start; }
+.band-list { display: flex; flex-direction: column; gap: 10px; }
 .family { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
 .family > .node.root, .card-end { grid-area: 1 / 1; }
-@container (min-width: 700px) {
-  .family:not(.solo) { grid-column: span 2; grid-template-columns: subgrid; }
-}
-/* End sits in the card's bottom-right corner, over footer space kept free for it. */
-.card-end { position: relative; z-index: 1; align-self: end; justify-self: end; margin: 0 10px 10px 0; }
+/* End sits in the row's bottom-right corner, over space the row keeps free for it. */
+.card-end { position: relative; z-index: 1; align-self: end; justify-self: end; margin: 0 10px 8px 0; }
 .card-end .stop-button { padding: 3px 8px; font-size: 12px; color: var(--muted); }
 .card-end .stop-button:hover, .card-end .stop-button.armed { color: var(--stop); }
-.family.endable .n-foot { padding-right: 88px; }
 
 .node { position: relative; width: 100%; min-width: 0; border: 0; background: none; text-align: left; transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s; }
-.node.root { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raise); }
+/* A session row: who it is on the left, what it is doing in the middle, figures under. */
+.node.root {
+  display: grid; grid-template-columns: 28px minmax(11rem, 17rem) minmax(0, 1fr) auto;
+  grid-template-areas: "mark who doing state" ". foot spark end";
+  align-items: center; gap: 4px 14px; padding: 12px 14px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raise);
+}
 .node.root:hover { border-color: var(--wire); }
 .node.root[aria-pressed="true"] { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-wash); }
-.n-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.who { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; min-width: 0; }
+.root .mark { grid-area: mark; }
+.root .who { grid-area: who; }
+.root .state-word { grid-area: state; justify-self: end; }
+.root .doing { grid-area: doing; }
+.root .n-foot { grid-area: foot; }
+.root .spark { grid-area: spark; align-self: center; }
+.family.endable .node.root::after { content: ""; grid-area: end; width: 56px; }
+.who { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; min-width: 0; }
 .role { font-size: 14px; font-weight: 600; color: var(--ink-strong); white-space: nowrap; }
 .id { min-width: 0; font: 12px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fan { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
 .state-word { flex: none; padding: 1px 8px; border-radius: 999px; font: 12px var(--mono); color: var(--faint); white-space: nowrap; }
 [data-status="active"] .state-word, .state-word[data-status="active"] { background: var(--signal-wash); color: var(--signal); }
 [data-status="orphaned"] .state-word, .state-word[data-status="orphaned"] { background: var(--warn-wash); color: var(--warn); }
-.mission { color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.mission { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.root .mission { flex-basis: 100%; font-size: 13px; color: var(--ink); }
 .node.observed .mission { color: var(--muted); }
 .doing { font-size: 13px; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .doing[hidden] { display: none; }
 .doing b { margin-right: 6px; font: 500 11px var(--mono); color: var(--faint); }
 [data-status="active"] .doing b { color: var(--signal); }
-.spark { margin-top: 4px; }
 .spark .activity { margin: 0; }
-.n-foot { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--line); font: 12px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+.n-foot { display: flex; flex-wrap: wrap; gap: 2px 12px; min-width: 0; font: 12px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
 .n-foot > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .n-foot .model { color: var(--muted); }
 .node > :empty, .n-foot > :empty, .who > :empty { display: none; }
 .node[data-status="closed"] { opacity: 0.55; }
 
-.node.sub { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-areas: "mark who state" ". model metrics"; align-items: center; gap: 2px 10px; padding: 8px 10px; border-radius: 6px; }
+/* A subagent row: one line, the same columns at every depth so figures line up. */
+.node.sub {
+  display: grid; grid-template-columns: 20px calc(15rem - var(--depth, 0) * 36px) minmax(0, 1fr) minmax(0, 11rem) 9.5rem 5.5rem;
+  grid-template-areas: "mark who mission model metrics state";
+  align-items: center; gap: 2px 12px; padding: 6px 8px; border-radius: 6px;
+}
 .node.sub:hover { background: var(--surface); }
 .node.sub[aria-pressed="true"] { background: var(--signal-wash); }
-.node.sub[data-status="idle"]:not(:hover):not([aria-pressed="true"]) { opacity: 0.7; }
+.node.sub[data-status="idle"]:not(:hover):not([aria-pressed="true"]) { opacity: 0.75; }
 .sub .mark { grid-area: mark; width: 20px; height: 20px; }
-.sub .who { grid-area: who; display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline; }
-.sub .role { overflow: hidden; text-overflow: ellipsis; }
-.sub .mission { grid-column: 1 / -1; font-size: 12px; color: var(--muted); -webkit-line-clamp: 1; line-clamp: 1; }
+.sub .who { grid-area: who; flex-wrap: nowrap; }
+.sub .role { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.sub .task { grid-area: mission; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sub .fan { flex: none; }
+.sub .mission { min-width: 0; font-size: 12px; color: var(--muted); }
 .sub .model { grid-area: model; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub .metrics { grid-area: metrics; font: 12px var(--mono); color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sub .state-word { grid-area: state; justify-self: end; }
@@ -233,25 +247,28 @@ a.crumb:hover { color: var(--ink-strong); }
 .node.hit .mark { animation: hit 0.75s var(--ease); }
 @keyframes hit { 30% { transform: scale(1.18); filter: drop-shadow(0 0 6px var(--k)); } }
 
-/* Rails: the session's connector crosses the gap to a rail its subagents branch off;
-   deeper subagents nest under their parent. */
-.family:not(.solo) > .node::after { content: ""; position: absolute; left: 100%; top: var(--root-y); width: calc(var(--gap) + 8px); border-top: 1px solid var(--wire); }
-.subs { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 2px; margin-top: calc(var(--root-y) - var(--sub-y)); padding-left: 20px; }
-.kids { padding-left: 30px; display: flex; flex-direction: column; gap: 2px; }
-.branch { position: relative; }
-.branch::before { content: ""; position: absolute; left: -12px; top: 0; bottom: -2px; border-left: 1px solid var(--wire); }
-.branch:first-child::before { top: var(--sub-y); }
-.branch:last-child::before { bottom: auto; height: var(--sub-y); }
-.branch:first-child:last-child::before { display: none; }
-.kids > .branch:first-child::before { top: 0; display: block; }
-.branch > .node::before { content: ""; position: absolute; left: -12px; top: var(--sub-y); width: 20px; border-top: 1px solid var(--wire); }
-.subs > .branch:first-child:last-child > .node::before { left: -20px; width: 28px; }
-@container (max-width: 700px) {
-  .family:not(.solo) > .node::after { left: 28px; top: 100%; width: 0; height: 6px; border-top: 0; border-left: 1px solid var(--wire); }
-  .subs { margin: 6px 0 0 16px; padding-left: 24px; }
-  .subs > .branch:first-child::before { top: 0; }
-  .subs > .branch:first-child:last-child::before { display: block; height: var(--sub-y); }
-  .subs > .branch:first-child:last-child > .node::before { left: -12px; width: 20px; }
+/* Rails: a line drops from the session's mark; each subagent elbows off it, and an
+   orchestrator's own subagents drop from its mark one level in. */
+.subs, .kids { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.subs { margin-left: 28px; padding: 4px 0 0 18px; }
+.kids { margin-left: 18px; padding: 2px 0 0 18px; }
+.branch { position: relative; min-width: 0; }
+.branch::before { content: ""; position: absolute; left: -18px; top: -2px; bottom: 0; border-left: 1px solid var(--wire); }
+.subs > .branch:first-child::before { top: -4px; }
+.branch:last-child::before { bottom: auto; height: calc(var(--sub-y) + 2px); }
+.subs > .branch:first-child:last-child::before { height: calc(var(--sub-y) + 4px); }
+.branch > .node::after, .fold-row::after { content: ""; position: absolute; left: -18px; top: var(--sub-y); width: 14px; border-top: 1px solid var(--wire); }
+
+.fold-row { position: relative; width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 6px; background: none; text-align: left; font-size: 12px; color: var(--faint); }
+.fold-row:hover { background: var(--surface); color: var(--ink); }
+.fold-row .metrics { margin-left: auto; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
+.caret { width: 20px; display: grid; place-items: center; }
+.caret::before { content: ""; width: 6px; height: 6px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform 0.2s var(--ease); }
+.fold-row[aria-expanded="true"] .caret::before { transform: rotate(45deg); }
+
+@container (max-width: 820px) {
+  .node.root { grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-areas: "mark who state" ". doing doing" ". foot end" ". spark spark"; }
+  .node.sub { grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-areas: "mark who state" ". mission mission" ". model metrics"; }
   .sub .id { display: none; }
 }
 

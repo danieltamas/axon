@@ -1,6 +1,7 @@
 // One project's topology (BUS-PLAN §7.1): a section per harness, its sessions grouped by
-// state, each with its subagents beside it. Cards are kept by agent id and updated in place,
-// so a snapshot at 50 events a second changes text, not DOM, and a pulse never restarts.
+// state, one session per row with its subagents hanging under it as a tree (session →
+// orchestrator → subagent). Finished subagents fold into one line. Rows are kept by agent id
+// and updated in place, so a snapshot at 50 events a second changes text, not DOM.
 
 import { activityChart } from "./activity.js";
 import { bytes, el, glyph, isProcess, mark, setRing, setText, since, STATUS, tokens, money, walk } from "./dom.js";
@@ -17,8 +18,8 @@ export function createBoard(container, scroller, token, onSelect) {
   const sums = new Map();
   let shape = "";
 
-  // A session is a card; a subagent is one aligned row beside it. The same agent keeps
-  // its element across snapshots unless its place in the tree changes kind.
+  // A session is a full-width row card; a subagent is a compact row under it. The same
+  // agent keeps its element across snapshots unless its place in the tree changes kind.
   function card(node, depth) {
     const kind = depth === 0 ? "root" : "sub";
     let entry = cards.get(node.id);
@@ -37,10 +38,10 @@ export function createBoard(container, scroller, token, onSelect) {
     const model = el("span", "model");
     const metrics = el("span", "metrics");
     const notes = el("span", "notes");
-    entry = { kind, button, ring, role, id, status, mission, model, metrics, notes };
+    const fan = el("span", "fan");
+    entry = { kind, button, ring, role, id, status, mission, model, metrics, notes, fan };
     if (kind === "root") {
-      const head = el("span", "n-head");
-      head.append(ring, who, status);
+      who.append(fan, mission);
       const doing = el("span", "doing");
       const doingLabel = el("b");
       const doingText = el("span");
@@ -48,11 +49,13 @@ export function createBoard(container, scroller, token, onSelect) {
       const spark = el("span", "spark");
       const foot = el("span", "n-foot");
       foot.append(model, metrics, notes);
-      button.append(head, mission, doing, spark, foot);
+      button.append(ring, who, status, doing, foot, spark);
       Object.assign(entry, { doing, doingLabel, doingText, spark });
     } else {
-      who.append(mission);
-      button.append(ring, who, model, metrics, status);
+      // An orchestrator's fan-out leads its task, so the name column stays the name.
+      const task = el("span", "task");
+      task.append(fan, mission);
+      button.append(ring, who, task, model, metrics, status);
     }
     cards.set(node.id, entry);
     return entry;
@@ -70,6 +73,7 @@ export function createBoard(container, scroller, token, onSelect) {
     entry.id.title = node.id;
     setText(entry.status, STATUS[node.status] || node.status);
     setText(entry.model, node.model || (node.observed ? "no turns yet" : ""));
+    setText(entry.fan, fanLine(node));
     if (entry.kind === "sub") {
       setText(entry.mission, node.mission || "");
       setText(entry.metrics, costLine(node));
@@ -91,35 +95,90 @@ export function createBoard(container, scroller, token, onSelect) {
     setText(entry.notes, notesLine(node));
   }
 
-  // A subagent and, nested under it, its own subagents.
-  function branch(node) {
-    const box = el("div", "branch");
-    box.append(card(node, 1).button);
-    if (node.children && node.children.length) {
-      const kids = el("div", "kids");
-      kids.append(...node.children.map(branch));
-      box.append(kids);
+  // Parents whose finished subagents the operator unfolded.
+  const unfolded = new Set();
+  let last = { repo: null, selected: null };
+
+  // One child per row: open subagents (and any with open descendants) first, working ahead
+  // of quiet; finished ones fold into a single line once there are two or more of them.
+  function arrange(parent, selected) {
+    const kids = parent.children || [];
+    const open = kids.filter((k) => !finished(k)).sort((a, b) => rank(a) - rank(b));
+    const done = kids.filter(finished);
+    const folded = done.length > 1 && !unfolded.has(parent.id) && !done.some((k) => holds(k, selected));
+    return { open, done, folded };
+  }
+
+  function shapeOf(node, selected) {
+    const { open, done, folded } = arrange(node, selected);
+    const shown = folded ? open : [...open, ...done];
+    return [node.id, shown.map((k) => shapeOf(k, selected)), folded ? done.length : 0, done.length > 1];
+  }
+
+  function children(parent, selected, cls, depth = 1) {
+    const { open, done, folded } = arrange(parent, selected);
+    const box = el("div", cls);
+    box.append(...open.map((k) => branch(k, selected, depth)));
+    if (folded) box.append(foldRow(parent, done, true));
+    else {
+      box.append(...done.map((k) => branch(k, selected, depth)));
+      if (done.length > 1) box.append(foldRow(parent, done, false));
     }
+    return box.childElementCount ? box : null;
+  }
+
+  // A subagent and, nested under it, its own subagents: an orchestrator's fan-out.
+  function branch(node, selected, depth = 1) {
+    const box = el("div", "branch");
+    const { button } = card(node, 1);
+    // Deeper rows give up name width for their indent, so every depth's columns line up.
+    button.style.setProperty("--depth", depth - 1);
+    box.append(button);
+    const kids = children(node, selected, "kids", depth + 1);
+    if (kids) box.append(kids);
     return box;
   }
 
-  function family(root) {
+  // The folded line for finished subagents, or the line that folds them again.
+  function foldRow(parent, done, folded) {
+    const box = el("div", "branch fold");
+    const button = el("button", "fold-row");
+    button.type = "button";
+    button.setAttribute("aria-expanded", String(!folded));
+    const caret = el("span", "caret");
+    const label = folded ? `${done.length} finished subagents` : `Fold ${done.length} finished subagents`;
+    let tok = 0;
+    let cost = 0;
+    walk(done, (n) => {
+      tok += n.tokens || 0;
+      cost += n.cost_usd || 0;
+    });
+    button.append(caret, el("span", "fold-label", label), el("span", "metrics", folded ? [`${tokens(tok)} tok`, cost ? money(cost) : null].filter(Boolean).join(" · ") : ""));
+    button.addEventListener("click", () => {
+      if (folded) unfolded.add(parent.id);
+      else unfolded.delete(parent.id);
+      shape = "";
+      render(last.repo, last.selected);
+    });
+    box.append(button);
+    return box;
+  }
+
+  function family(root, selected) {
     const box = el("div", "family");
-    const subs = el("div", "subs");
-    subs.append(...(root.children || []).map(branch));
-    box.classList.toggle("solo", !subs.childElementCount);
     box.append(card(root, 0).button);
-    // A session left open at a prompt is ended from its own card; the ender sits over the
-    // card's corner as a sibling, since a button cannot hold another.
+    // A session left open at a prompt is ended from its own row; the ender sits over the
+    // row's corner as a sibling, since a button cannot hold another.
     if (isProcess(root)) {
       box.classList.add("endable");
       box.append(createEnder({ token, sessions: [root], label: "End", confirm: "Click to end", compact: true }));
     }
-    if (subs.childElementCount) box.append(subs);
+    const subs = children(root, selected, "subs");
+    if (subs) box.append(subs);
     return box;
   }
 
-  function skeleton(repo) {
+  function skeleton(repo, selected) {
     sums.clear();
     if (!repo || !repo.harnesses.length) return [empty()];
     return repo.harnesses.map((lane) => {
@@ -135,22 +194,25 @@ export function createBoard(container, scroller, token, onSelect) {
         const band = el("div", "band");
         const title = el("h4", "band-head");
         title.append(el("span", null, label), el("span", "count", roots.length));
-        const grid = el("div", "band-grid");
-        grid.append(...roots.map(family));
-        band.append(title, grid);
+        const list = el("div", "band-list");
+        list.append(...roots.map((root) => family(root, selected)));
+        band.append(title, list);
         section.append(band);
       }
       return section;
     });
   }
 
-  // The skeleton is rebuilt only when the tree's shape changes; everything else is an
+  // The skeleton is rebuilt only when what is shown changes shape; everything else is an
   // in-place update.
   function render(repo, selected) {
-    const nextShape = repo ? JSON.stringify(repo.harnesses.map((h) => [h.harness, bands(h.roots).map((b) => [b.label, ids(b.roots)])])) : "";
+    last = { repo, selected };
+    const nextShape = repo
+      ? JSON.stringify(repo.harnesses.map((h) => [h.harness, bands(h.roots).map((b) => [b.label, b.roots.map((r) => shapeOf(r, selected))])]))
+      : "";
     if (nextShape !== shape || !container.childElementCount) {
       shape = nextShape;
-      container.replaceChildren(...skeleton(repo));
+      container.replaceChildren(...skeleton(repo, selected));
     }
     const now = Date.now();
     const seen = new Set();
@@ -273,8 +335,31 @@ function bands(roots) {
   return out;
 }
 
-function ids(roots) {
-  return roots.map((n) => [n.id, ids(n.children || [])]);
+// A subagent is finished when it and everything under it has closed.
+function finished(node) {
+  return node.status === "closed" && (node.children || []).every(finished);
+}
+
+const RANK = { orphaned: 0, active: 1, idle: 2 };
+function rank(node) {
+  return RANK[node.status] ?? 3;
+}
+
+function holds(node, id) {
+  return node.id === id || (node.children || []).some((k) => holds(k, id));
+}
+
+// How wide an orchestrator fans out, and how much of it is still at work.
+function fanLine(node) {
+  let all = 0;
+  let working = 0;
+  walk(node.children || [], (n) => {
+    all += 1;
+    if (n.status === "active") working += 1;
+  });
+  if (!all) return "";
+  const noun = all === 1 ? "subagent" : "subagents";
+  return working ? `${all} ${noun}, ${working} working` : `${all} ${noun}`;
 }
 
 function empty() {
