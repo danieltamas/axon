@@ -109,7 +109,9 @@ impl Tails {
                 if !tail.searched {
                     tail.searched = true;
                     let deeper = read_tail(&tail.path, meta.len(), PROMPT_SEARCH_BYTES).ok()?;
-                    request = latest_prompt(harness, &deeper).filter(|p| substantive(p)).map(|p| clip(&p));
+                    request = latest_prompt(harness, &deeper)
+                        .filter(|p| substantive(p))
+                        .map(|p| clip(&p));
                 }
                 tail.prompt = request.or(prompt).or(tail.prompt.take());
             }
@@ -211,17 +213,22 @@ fn parse(harness: &str, text: &str, content: bool) -> (Vec<Value>, Option<String
     }
     let skip = rows.len().saturating_sub(ROWS);
     rows.drain(..skip);
-    let prompt = latest_prompt(harness, text).filter(|_| content).map(|p| clip(&p));
+    let prompt = latest_prompt(harness, text)
+        .filter(|_| content)
+        .map(|p| clip(&p));
     (rows, prompt)
 }
 
 fn records(text: &str) -> impl Iterator<Item = Value> + '_ {
-    text.lines().filter_map(|line| serde_json::from_str(line).ok())
+    text.lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
 }
 
 /// The operator's last real request: "yes" or "do it" answers the agent instead.
 fn latest_prompt(harness: &str, text: &str) -> Option<String> {
-    let prompts: Vec<String> = records(text).filter_map(|r| operator_prompt(harness, &r)).collect();
+    let prompts: Vec<String> = records(text)
+        .filter_map(|r| operator_prompt(harness, &r))
+        .collect();
     let request = prompts.iter().rev().find(|p| substantive(p));
     request.or(prompts.last()).cloned()
 }
@@ -231,7 +238,10 @@ fn substantive(prompt: &str) -> bool {
 }
 
 fn clip(prompt: &str) -> String {
-    transcript::redact(prompt).chars().take(PROMPT_CHARS).collect()
+    transcript::redact(prompt)
+        .chars()
+        .take(PROMPT_CHARS)
+        .collect()
 }
 
 /// A prompt the operator typed. Harness-injected turns (command output, reminders,
@@ -244,7 +254,12 @@ fn operator_prompt(harness: &str, record: &Value) -> Option<String> {
             if record["type"] == "user"
                 && record["isMeta"] != true
                 && record["isCompactSummary"] != true
-                && record["origin"]["kind"].as_str().map_or(true, |k| k == "human") => &record["message"]["content"],
+                && record["origin"]["kind"]
+                    .as_str()
+                    .map_or(true, |k| k == "human") =>
+        {
+            &record["message"]["content"]
+        }
         "codex"
             if record["payload"]["type"] == "message" && record["payload"]["role"] == "user" =>
         {

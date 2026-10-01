@@ -89,12 +89,22 @@ impl Observer {
         repo_of: &mut Locate<'_>,
         content: bool,
     ) -> anyhow::Result<Vec<Root>> {
-        if self.refreshed.map_or(true, |at| at.elapsed() >= REFRESH_EVERY) {
+        if self
+            .refreshed
+            .map_or(true, |at| at.elapsed() >= REFRESH_EVERY)
+        {
             self.ingested = ingested(conn)?;
             activity(conn, &mut self.ingested)?;
             self.refreshed = Some(Instant::now());
         }
-        roots(conn, sessions, &self.ingested, &mut self.tails, repo_of, content)
+        roots(
+            conn,
+            sessions,
+            &self.ingested,
+            &mut self.tails,
+            repo_of,
+            content,
+        )
     }
 }
 

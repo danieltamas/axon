@@ -9,8 +9,8 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::memory::Sampler;
-use crate::store::now_ms;
 use crate::observed::Observer;
+use crate::store::now_ms;
 use crate::{budget, chatter, transcript};
 
 /// Rows of narrative per agent in a snapshot; the page asks for no more.
@@ -193,7 +193,10 @@ pub fn build(
 /// Costs in the snapshot are USD; the page shows them in the operator's display currency.
 fn currency() -> Value {
     let pricing = axon_core::pricing::Pricing::bundled();
-    let code = pricing.display_currency.clone().unwrap_or_else(|| "USD".into());
+    let code = pricing
+        .display_currency
+        .clone()
+        .unwrap_or_else(|| "USD".into());
     json!({"code": code, "per_usd": pricing.fx()})
 }
 
@@ -235,7 +238,10 @@ fn render(
     // A subagent inside its parent's process (Claude's) shares that memory; only the
     // process owner reports it, so sums never count a process twice.
     let shares_process = node.pid.is_some() && node.pid == parent_pid;
-    let rss = node.pid.filter(|_| !shares_process).and_then(|pid| facts.rss.get(&pid));
+    let rss = node
+        .pid
+        .filter(|_| !shares_process)
+        .and_then(|pid| facts.rss.get(&pid));
     Ok(json!({
         "id": node.id,
         "harness": node.harness,
@@ -271,7 +277,15 @@ pub(crate) struct Line<'a> {
 }
 
 pub(crate) fn push_line(out: &mut Vec<Value>, line: Line) {
-    let Line { kind, source, text, recorded, tokens, tool, ts } = line;
+    let Line {
+        kind,
+        source,
+        text,
+        recorded,
+        tokens,
+        tool,
+        ts,
+    } = line;
     if let Some((name, detail, failed)) = tool {
         let tool = json!({"name": name, "detail": detail, "failed": failed});
         match out.last_mut().filter(|last| last["kind"] == "tool_run") {

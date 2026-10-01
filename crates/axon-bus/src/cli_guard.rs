@@ -95,7 +95,9 @@ fn invocation(words: &[String], i: usize) -> Option<Invocation> {
         "axon-bus" => Some(Invocation::Bus(i + 1)),
         "axon" => {
             let before = i.checked_sub(1).map(|b| words[b].as_str());
-            let command_position = before.map_or(true, |w| w == ";" || PREFIXES.contains(&w) || w.contains('='));
+            let command_position = before.map_or(true, |w| {
+                w == ";" || PREFIXES.contains(&w) || w.contains('=')
+            });
             if !command_position {
                 None
             } else if words.get(i + 1).map(String::as_str) == Some("bus") {
@@ -111,11 +113,15 @@ fn invocation(words: &[String], i: usize) -> Option<Invocation> {
 /// Capture is the default everywhere, so only an explicit, unconflicted structure-only
 /// serve is an agent's; `--content` beside `--no-content` would win in clap's order.
 fn serves_content(args: &[String]) -> bool {
-    let set = |name: &str| args.iter().any(|a| a == name || a.starts_with(&format!("{name}=")));
+    let set = |name: &str| {
+        args.iter()
+            .any(|a| a == name || a.starts_with(&format!("{name}=")))
+    };
     set("--content") || !set("--no-content")
 }
 
-const CAPTURE_REASON: &str = "content capture is turned on by the human only; an agent may run serve --no-content";
+const CAPTURE_REASON: &str =
+    "content capture is turned on by the human only; an agent may run serve --no-content";
 
 /// Why `actor` may not run this tool call's bus command, or None.
 pub fn refusal(actor: &str, payload: &Value) -> Option<String> {
@@ -136,7 +142,9 @@ pub fn refusal(actor: &str, payload: &Value) -> Option<String> {
             .collect();
         if invocation == Invocation::Dashboard(start) {
             // `axon --scan-only`, `--help` and `--version` serve nothing.
-            let inert = args.iter().any(|a| ["--scan-only", "--help", "-h", "--version", "-V"].contains(&a.as_str()));
+            let inert = args
+                .iter()
+                .any(|a| ["--scan-only", "--help", "-h", "--version", "-V"].contains(&a.as_str()));
             if !inert && serves_content(&args) {
                 return Some(CAPTURE_REASON.to_owned());
             }

@@ -365,7 +365,9 @@ pub fn redact(text: &str) -> String {
                 // A bare number after `tokens:` is a count; after `password=` it is a secret.
                 let key = head.to_ascii_lowercase();
                 let counts = key.contains("token")
-                    && !["password", "passwd", "secret", "key", "credential"].iter().any(|k| key.contains(k));
+                    && !["password", "passwd", "secret", "key", "credential"]
+                        .iter()
+                        .any(|k| key.contains(k));
                 if counts && secret.as_str().bytes().all(|b| b.is_ascii_digit()) {
                     return whole.as_str().to_owned();
                 }
@@ -419,8 +421,14 @@ mod tests {
             assert!(redacted.contains(expected), "{text} -> {redacted}");
         }
         assert_eq!(redact("input_tokens: 123456"), "input_tokens: 123456");
-        assert_eq!(redact(r#"{"output_tokens":123456}"#), r#"{"output_tokens":123456}"#);
-        assert_eq!(redact(r#"{"password":"correct-horse-battery"}"#), r#"{"password":"[redacted]"}"#);
+        assert_eq!(
+            redact(r#"{"output_tokens":123456}"#),
+            r#"{"output_tokens":123456}"#
+        );
+        assert_eq!(
+            redact(r#"{"password":"correct-horse-battery"}"#),
+            r#"{"password":"[redacted]"}"#
+        );
         assert_eq!(redact("password=12345678"), "password=[redacted]");
         assert_eq!(redact("plain words stay"), "plain words stay");
     }

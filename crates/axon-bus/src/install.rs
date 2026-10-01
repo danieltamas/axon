@@ -105,7 +105,11 @@ fn command(exe: &str, harness: Harness, event: &str) -> String {
 
 /// `axon` runs the bus as a subcommand; the `axon-bus` alias takes the verb directly.
 fn bus_verb(exe: &str) -> &'static str {
-    let name = exe.trim_matches('\'').rsplit('/').next().unwrap_or_default();
+    let name = exe
+        .trim_matches('\'')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
     if name == "axon" || name == "axon.exe" {
         " bus"
     } else {
@@ -283,7 +287,11 @@ fn hermes_block(exe: &str) -> String {
 }
 
 fn plugin_source(exe: &str) -> String {
-    let hook = if bus_verb(exe).is_empty() { json!([exe, "hook"]) } else { json!([exe, "bus", "hook"]) };
+    let hook = if bus_verb(exe).is_empty() {
+        json!([exe, "hook"])
+    } else {
+        json!([exe, "bus", "hook"])
+    };
     format!(
         r#"// axon-bus plugin shim; `axon-bus uninstall` removes it.
 const HOOK = {hook};

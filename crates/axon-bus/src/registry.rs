@@ -51,7 +51,14 @@ pub fn upsert(conn: &Connection, agent: &Agent, status: Status) -> anyhow::Resul
         conn.execute(
             "UPDATE agents SET status=?2, last_seen_at=?3, model=coalesce(?4, model),
              cwd=coalesce(cwd, ?5), pid=coalesce(?6, pid) WHERE id=?1",
-            params![agent.id, status.as_str(), now, agent.model, agent.cwd, agent.pid],
+            params![
+                agent.id,
+                status.as_str(),
+                now,
+                agent.model,
+                agent.cwd,
+                agent.pid
+            ],
         )?;
         if previous != status.as_str() {
             record_status(conn, agent.id, status)?;

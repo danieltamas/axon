@@ -48,7 +48,11 @@ pub fn build_router(state: Arc<AppState>, dashboard: Router) -> Router {
 }
 
 /// Bind `addr` (loopback) and serve until the process is stopped.
-pub async fn serve(addr: SocketAddr, state: Arc<AppState>, dashboard: Router) -> anyhow::Result<()> {
+pub async fn serve(
+    addr: SocketAddr,
+    state: Arc<AppState>,
+    dashboard: Router,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;

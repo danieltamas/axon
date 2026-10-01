@@ -147,7 +147,12 @@ fn rung_doorbell(
 
 /// The bus-command guard needs no hub: when nothing above could answer, the human-only
 /// verbs and forged senders are still refused rather than let through by the error.
-fn guard_only(harness: &str, event: &str, actor: Option<&str>, payload: &Value) -> Option<Option<Value>> {
+fn guard_only(
+    harness: &str,
+    event: &str,
+    actor: Option<&str>,
+    payload: &Value,
+) -> Option<Option<Value>> {
     if !gate::is_pre_tool(harness, event) {
         return None;
     }
