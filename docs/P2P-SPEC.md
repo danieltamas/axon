@@ -195,6 +195,10 @@ CREATE TABLE IF NOT EXISTS peers (
   last_error TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS peers_live_node ON peers(node_id) WHERE state <> 'removed';
+-- Last direct addresses seen on an authenticated connection from this peer (never a claim the
+-- peer makes about itself); fed to the endpoint on start so peers re-find each other after a
+-- restart without a relay. Deleted with the peer on remove. Amendment 2026-10-01 (U4 finding).
+CREATE TABLE IF NOT EXISTS peer_addrs (peer_id TEXT PRIMARY KEY, addrs_json TEXT NOT NULL, seen_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS peer_invites (invite_id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, consumed_by TEXT, cancelled_at INTEGER);
 CREATE TABLE IF NOT EXISTS peer_shares (
   share_id TEXT PRIMARY KEY, peer_id TEXT NOT NULL, label TEXT NOT NULL,
