@@ -26,77 +26,10 @@ use tokio::sync::watch;
 
 use crate::memory::Sampler;
 use crate::observed::Observer;
-use crate::{end, msg, snapshot, store, transcript};
+use crate::{assets, end, msg, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
-const ASSETS: [(&str, &str, &str); 15] = [
-    (
-        "/activity.js",
-        "text/javascript",
-        include_str!("../ui/activity.js"),
-    ),
-    ("/app.js", "text/javascript", include_str!("../ui/app.js")),
-    ("/arcs.js", "text/javascript", include_str!("../ui/arcs.js")),
-    (
-        "/board.js",
-        "text/javascript",
-        include_str!("../ui/board.js"),
-    ),
-    (
-        "/brain.js",
-        "text/javascript",
-        include_str!("../ui/brain.js"),
-    ),
-    (
-        "/brain-math.js",
-        "text/javascript",
-        include_str!("../ui/brain-math.js"),
-    ),
-    (
-        "/brain-render.js",
-        "text/javascript",
-        include_str!("../ui/brain-render.js"),
-    ),
-    (
-        "/brain-worker.js",
-        "text/javascript",
-        include_str!("../ui/brain-worker.js"),
-    ),
-    (
-        "/context.js",
-        "text/javascript",
-        include_str!("../ui/context.js"),
-    ),
-    ("/dom.js", "text/javascript", include_str!("../ui/dom.js")),
-    (
-        "/overview.js",
-        "text/javascript",
-        include_str!("../ui/overview.js"),
-    ),
-    ("/send.js", "text/javascript", include_str!("../ui/send.js")),
-    ("/style.css", "text/css", include_str!("../ui/style.css")),
-    (
-        "/usage.js",
-        "text/javascript",
-        include_str!("../ui/usage.js"),
-    ),
-    (
-        "/manifest.webmanifest",
-        "application/manifest+json",
-        include_str!("../ui/manifest.webmanifest"),
-    ),
-];
-/// The icons that let the page be installed as an app (Add to Dock, Install).
-const ICONS: [(&str, &[u8]); 3] = [
-    (
-        "/apple-touch-icon.png",
-        include_bytes!("../ui/apple-touch-icon.png"),
-    ),
-    ("/icon-192.png", include_bytes!("../ui/icon-192.png")),
-    ("/icon-512.png", include_bytes!("../ui/icon-512.png")),
-];
-
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
                    connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
@@ -156,20 +89,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, String)
         snapshots: watch_database(db.to_owned(), content)?,
         content,
     });
-    let mut router = Router::new().route("/", get(index));
-    for (path, content_type, body) in ASSETS {
-        router = router.route(path, get(move || async move { asset(content_type, body) }));
-    }
-    for (path, body) in ICONS {
-        let headers = [
-            (header::CONTENT_TYPE, "image/png"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ];
-        router = router.route(
-            path,
-            get(move || async move { (headers, body).into_response() }),
-        );
-    }
+    let router = assets::routes(Router::new().route("/", get(index)));
     let router = router
         .route("/api/snapshot", get(snapshot_json))
         .route("/api/stream", get(stream))
@@ -310,15 +230,6 @@ async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Res
     );
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     response
-}
-
-/// Revalidated on every load, so the page never runs modules from an older binary.
-fn asset(content_type: &'static str, body: &'static str) -> Response {
-    let headers = [
-        (header::CONTENT_TYPE, content_type),
-        (header::CACHE_CONTROL, "no-cache"),
-    ];
-    (headers, body).into_response()
 }
 
 /// The page carries the token in a meta tag; the Host check keeps other sites from reading it.
@@ -465,7 +376,8 @@ mod tests {
     /// asset-loading forms are refused.
     #[test]
     fn page_loads_no_remote_assets() {
-        let files = std::iter::once(INDEX_HTML).chain(ASSETS.iter().map(|(_, _, body)| *body));
+        let files =
+            std::iter::once(INDEX_HTML).chain(assets::ASSETS.iter().map(|(_, _, body)| *body));
         for body in files {
             for needle in [
                 "src=\"http",

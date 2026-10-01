@@ -9,6 +9,7 @@ import { createBoard } from "./board.js";
 import { createContext } from "./context.js";
 import { agents, bytes, el, isProcess, money, setCurrency, setText, stats, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
+import { offerInstall, onServerLost, registerWorker } from "./pwa.js";
 import { createEnder } from "./send.js";
 import { createUsage } from "./usage.js";
 
@@ -180,6 +181,7 @@ function connect() {
   source.addEventListener("error", () => {
     link.dataset.state = "down";
     setText(link, "Reconnecting");
+    onServerLost();
   });
 }
 
@@ -207,3 +209,5 @@ applyTheme(THEMES.includes(saved) ? saved : "auto");
 new ResizeObserver(() => arcs.redraw()).observe($("tree"));
 route();
 connect();
+registerWorker();
+offerInstall();

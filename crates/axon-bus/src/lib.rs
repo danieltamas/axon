@@ -3,6 +3,7 @@
 //! No async runtime here by design: `hook` runs on every tool call and must stay near the
 //! process-spawn floor (BUS-PLAN §00, spike Q4). Only `serve` starts one.
 
+mod assets;
 mod budget;
 mod chatter;
 mod claims;
