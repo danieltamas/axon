@@ -129,7 +129,7 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     let dashboard = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
     let link = axon_bus::session::login_link(&db, cli.port)?;
     println!("Dashboard: {link}");
-    spawn_refresher(state.clone(), link.clone());
+    spawn_refresher(state.clone());
     if !cli.no_open {
         open_in_browser(&link);
     }
@@ -148,7 +148,7 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
 /// so it runs on the blocking pool — it never stalls the server, and the browser (a separate
 /// process) keeps animating at 60fps regardless. A min-gap caps re-scan frequency under load.
 /// The first pass runs at once and prints the CLI summary.
-fn spawn_refresher(state: Arc<server::AppState>, login_link: String) {
+fn spawn_refresher(state: Arc<server::AppState>) {
     use std::time::Duration;
     let trigger = Arc::new(tokio::sync::Notify::new());
     let poke = trigger.clone();
@@ -181,7 +181,7 @@ fn spawn_refresher(state: Arc<server::AppState>, login_link: String) {
             match tokio::task::spawn_blocking(scan).await {
                 Ok(Ok((s, ev))) => {
                     if std::mem::take(&mut first) {
-                        print_cli_summary(&s, &login_link);
+                        print_cli_summary(&s);
                     }
                     *state.summary.write().unwrap_or_else(|p| p.into_inner()) = s;
                     *state.events.write().unwrap_or_else(|p| p.into_inner()) = ev;

@@ -2,7 +2,7 @@
 
 use axon::summary::Summary;
 
-pub fn print_cli_summary(s: &Summary, login_link: &str) {
+pub fn print_cli_summary(s: &Summary) {
     let top_agents: Vec<&str> = s
         .by_agent
         .iter()
@@ -79,7 +79,6 @@ pub fn print_cli_summary(s: &Summary, login_link: &str) {
             s.preview_priced_models.join(", ")
         );
     }
-    println!("Dashboard: {login_link}");
 }
 
 /// Percent of a budget cap consumed (0 if the cap is non-positive).
