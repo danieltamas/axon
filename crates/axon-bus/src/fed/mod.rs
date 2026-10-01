@@ -56,6 +56,12 @@ pub fn enable(data_dir: &Path, conn: &Connection, on: bool) -> anyhow::Result<()
     Ok(())
 }
 
+/// Store the relay Settings chose: `"default"` or a relay URL. A running service applies it
+/// on its next start.
+pub fn set_relay(conn: &Connection, relay: &str) -> rusqlite::Result<()> {
+    crate::store::put_setting(conn, SETTING_RELAY, Some(relay))
+}
+
 /// Peers that are not removed: the ones whose pinned key must still exist.
 pub fn live_peer_count(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row(

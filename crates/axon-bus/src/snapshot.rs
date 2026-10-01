@@ -341,7 +341,7 @@ fn narrative(conn: &Connection, agent: &str, content: bool) -> rusqlite::Result<
     let mut rows = stmt.query(rusqlite::params![
         agent,
         NARRATIVE_ROWS,
-        now_ms() - transcript::RETENTION_MS,
+        now_ms() - transcript::retention_ms(conn)?,
         content
     ])?;
     let mut out: Vec<Value> = Vec::new();

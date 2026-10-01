@@ -8,8 +8,10 @@ use serde_json::Value;
 
 use crate::redact::redact;
 
-/// Narrative rows are deleted after 7 days (§7 privacy default).
-pub const RETENTION_MS: i64 = 7 * 24 * 3600 * 1000;
+/// Narrative rows are deleted after this many days unless Settings says otherwise (§7
+/// privacy default).
+pub const DEFAULT_NARRATIVE_DAYS: i64 = 7;
+pub(crate) const DAY_MS: i64 = 24 * 3600 * 1000;
 
 /// Longest tool detail kept (a path or a command).
 const MAX_DETAIL_CHARS: usize = 200;
@@ -211,6 +213,42 @@ pub fn content_enabled(conn: &Connection) -> rusqlite::Result<bool> {
         .is_some_and(|until| until > crate::store::now_ms()))
 }
 
+/// Whether the owner has capture switched on in Settings (the default). `serve --no-content`
+/// overrides it: a stored `true` never widens what the server was started with.
+pub fn capture_enabled(conn: &Connection) -> rusqlite::Result<bool> {
+    Ok(crate::store::setting(conn, "capture_enabled")?.is_none_or(|v| v != "0"))
+}
+
+pub fn set_capture_settings(
+    conn: &Connection,
+    enabled: bool,
+    narrative_days: i64,
+) -> rusqlite::Result<()> {
+    crate::store::put_setting(
+        conn,
+        "capture_enabled",
+        Some(if enabled { "1" } else { "0" }),
+    )?;
+    crate::store::put_setting(conn, "narrative_days", Some(&narrative_days.to_string()))
+}
+
+/// How long narrative is kept, in days.
+pub fn narrative_days(conn: &Connection) -> rusqlite::Result<i64> {
+    Ok(crate::store::setting(conn, "narrative_days")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_NARRATIVE_DAYS))
+}
+
+pub fn retention_ms(conn: &Connection) -> rusqlite::Result<i64> {
+    Ok(narrative_days(conn)? * DAY_MS)
+}
+
+/// Hold the capture lease while this server was started with content and Settings has
+/// capture on; end it otherwise.
+pub fn apply_capture(conn: &Connection, content: bool) -> rusqlite::Result<()> {
+    set_capture(conn, content && capture_enabled(conn)?)
+}
+
 /// Start or renew the capture lease (`serve --content`), or end it (`serve` without it).
 pub fn set_capture(conn: &Connection, on: bool) -> rusqlite::Result<()> {
     if !on {
@@ -299,7 +337,7 @@ const EXPIRE_EVERY_MS: i64 = 3600 * 1000;
 pub fn expire(conn: &Connection) -> rusqlite::Result<usize> {
     conn.execute(
         "DELETE FROM narrative WHERE ts < ?1",
-        [crate::store::now_ms() - RETENTION_MS],
+        [crate::store::now_ms() - retention_ms(conn)?],
     )
 }
 
@@ -321,6 +359,7 @@ pub fn expire_if_due(conn: &Connection) -> rusqlite::Result<()> {
         return Ok(());
     }
     expire(conn)?;
+    crate::usage::expire(conn)?;
     conn.execute(
         "INSERT INTO settings (key,value) VALUES ('narrative_expired_at',?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",

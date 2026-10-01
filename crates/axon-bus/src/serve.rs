@@ -27,6 +27,7 @@ use tokio::sync::watch;
 
 use crate::memory::Sampler;
 use crate::observed::Observer;
+use crate::settings::{self, Federation};
 use crate::{assets, end, msg, session, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
@@ -60,34 +61,28 @@ pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> an
     runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let address: SocketAddr = listener.local_addr()?;
-        let router = build(db, address.port(), content)?;
+        let (router, federation) = build(db, address.port(), content)?;
         let origin = format!("http://{address}");
         match ready_file {
             Some(path) => write_ready(path, &origin)?,
             None => eprintln!("axon-bus: dashboard at {origin}"),
         }
-        let federation = fed_start(db).await;
+        federation.restart().await;
         let served = axum::serve(listener, router).await;
-        if let Some(federation) = federation {
-            federation.shutdown().await;
-        }
+        federation.shutdown().await;
         Ok(served?)
     })
 }
 
-/// Federation runs beside the server and lives in the same data dir as the database.
-pub async fn fed_start(db: &Path) -> Option<crate::fed::service::Handle> {
-    crate::fed::service::start(db.parent()?, db).await
-}
-
-/// The dashboard and its API, for a server another binary bound on 127.0.0.1:`port`.
-pub fn router(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
+/// The dashboard and its API, for a server another binary bound on 127.0.0.1:`port`, and
+/// the federation service the caller starts (`restart`) once it serves and stops at the end.
+pub fn router(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federation)> {
     build(db, port, content)
 }
 
-fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
+fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federation)> {
     let conn = store::open(db).context("no hub; run `axon bus init`")?;
-    transcript::set_capture(&conn, content)?;
+    transcript::apply_capture(&conn, content)?;
     session::record_port(&conn, port)?;
     drop(conn);
     let app = Arc::new(App {
@@ -97,6 +92,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
         snapshots: watch_database(db.to_owned(), content)?,
         content,
     });
+    let federation = Federation::new(db);
     let router = assets::routes(Router::new().route("/", get(index)));
     let router = router
         .route("/api/session", post(create_session))
@@ -104,9 +100,10 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
         .route("/api/stream", get(stream))
         .route("/api/msg", post(send))
         .route("/api/end", post(end_sessions))
-        .layer(middleware::from_fn_with_state(app.clone(), guard))
-        .with_state(app);
-    Ok(router)
+        .with_state(app.clone())
+        .merge(settings::routes(db, content, federation.clone()))
+        .layer(middleware::from_fn_with_state(app, guard));
+    Ok((router, federation))
 }
 
 /// `{url}`, written whole (temp file + rename). The temp file is created fresh with
@@ -149,7 +146,7 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
         let mut sampled_at = Instant::now();
         loop {
             if renewed_at.is_none_or(|at| at.elapsed() >= RENEW_EVERY) {
-                let upkeep = transcript::set_capture(&conn, content)
+                let upkeep = transcript::apply_capture(&conn, content)
                     .and_then(|()| transcript::expire_if_due(&conn));
                 if let Err(err) = upkeep {
                     eprintln!("axon-bus: capture lease or retention failed: {err}");

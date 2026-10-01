@@ -142,6 +142,30 @@ pub fn store(conn: &Connection, pending: &Pending) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Days to keep usage rows; `None` (the default) keeps them forever.
+pub fn retention_days(conn: &Connection) -> rusqlite::Result<Option<i64>> {
+    Ok(crate::store::setting(conn, "usage_retention_days")?.and_then(|v| v.parse().ok()))
+}
+
+pub fn set_retention_days(conn: &Connection, days: Option<i64>) -> rusqlite::Result<()> {
+    crate::store::put_setting(
+        conn,
+        "usage_retention_days",
+        days.map(|d| d.to_string()).as_deref(),
+    )
+}
+
+/// Delete usage rows older than the owner's retention, if one is set.
+pub fn expire(conn: &Connection) -> rusqlite::Result<()> {
+    if let Some(days) = retention_days(conn)? {
+        conn.execute(
+            "DELETE FROM usage WHERE ts < ?1",
+            [now_ms() - days * transcript::DAY_MS],
+        )?;
+    }
+    Ok(())
+}
+
 fn epoch_ms(iso: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(iso)
         .ok()

@@ -23,7 +23,10 @@ const DEFAULT_PORT: u16 = 7777;
 
 /// The digest of `input` as 64 lowercase hex characters.
 fn sha256_hex(input: &[u8]) -> String {
-    Sha256::digest(input).iter().map(|byte| format!("{byte:02x}")).collect()
+    Sha256::digest(input)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// 32 bytes from the OS, base64url without padding: 43 characters.
@@ -109,6 +112,24 @@ pub fn valid(conn: &Connection, secret: &str) -> anyhow::Result<bool> {
         )?;
     }
     Ok(true)
+}
+
+/// Sign out every browser but the one holding `secret`.
+pub fn revoke_others(conn: &Connection, secret: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM dashboard_sessions WHERE session_hash <> ?1",
+        [sha256_hex(secret.as_bytes())],
+    )
+    .map(|_| ())
+}
+
+/// Sessions that can still sign in.
+pub fn live_count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM dashboard_sessions WHERE expires_at > ?1",
+        [store::now_ms()],
+        |r| r.get(0),
+    )
 }
 
 pub fn cookie_header(secret: &str) -> String {

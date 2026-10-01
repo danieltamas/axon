@@ -126,7 +126,7 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     if !cli.no_hooks {
         axon_bus::ensure_hooks();
     }
-    let dashboard = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
+    let (dashboard, federation) = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
     let link = axon_bus::session::login_link(&db, cli.port)?;
     println!("Dashboard: {link}");
     spawn_refresher(state.clone());
@@ -135,11 +135,9 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     }
     println!("  live (file-watch) — press Ctrl-C to stop\n");
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
-    let federation = axon_bus::serve::fed_start(&db).await;
+    federation.restart().await;
     let served = server::serve(addr, state, &db, dashboard).await;
-    if let Some(federation) = federation {
-        federation.shutdown().await;
-    }
+    federation.shutdown().await;
     served
 }
 

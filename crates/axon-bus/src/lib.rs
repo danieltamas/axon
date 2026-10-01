@@ -30,6 +30,7 @@ mod roster;
 mod route;
 pub mod serve;
 pub mod session;
+mod settings;
 mod setup;
 mod snapshot;
 mod store;

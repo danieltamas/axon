@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
 );
 
 -- What agents say and think (BUS-PLAN §7), one row per block. `text` and `tool_detail`
--- stay NULL unless content capture is on; rows expire after 7 days (transcript::RETENTION_MS).
+-- stay NULL unless content capture is on; rows expire after `narrative_days` (default 7, transcript::retention_ms).
 CREATE TABLE IF NOT EXISTS narrative (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id    TEXT NOT NULL REFERENCES agents(id),
@@ -278,6 +278,27 @@ fn open_with(path: &Path, busy: Duration) -> anyhow::Result<Connection> {
 /// appending to it cannot interleave with another process.
 pub fn write_tx(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
+}
+
+/// A machine-wide switch from the `settings` table.
+pub fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+/// Store a machine-wide switch, or remove it with `None`.
+pub fn put_setting(conn: &Connection, key: &str, value: Option<&str>) -> rusqlite::Result<()> {
+    match value {
+        Some(value) => conn.execute(
+            "INSERT INTO settings (key,value) VALUES (?1,?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [key, value],
+        ),
+        None => conn.execute("DELETE FROM settings WHERE key=?1", [key]),
+    }
+    .map(drop)
 }
 
 /// Append one audit event, chained to the previous one. Call inside `write_tx`.
