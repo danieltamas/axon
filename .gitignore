@@ -2,9 +2,6 @@
 /target
 **/*.rs.bk
 
-# Node (UI dev). NOTE: ui/dist IS committed (embedded into the binary via rust-embed)
-/ui/node_modules
-/ui/.vite
 
 # Local runtime artifacts
 *.db
@@ -19,6 +16,7 @@
 
 # Local dev / screenshot artifacts (root only — keep assets/socials/axon-*.png)
 .playwright-mcp/
+graphify-out/
 /axon-*.png
 
-# Keep tracked: Cargo.lock (binary crate), ui/dist (embedded assets)
+# Keep tracked: Cargo.lock (binary crate)

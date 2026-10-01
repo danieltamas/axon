@@ -15,8 +15,8 @@ fixtures in [`tests/fixtures/`](./tests/fixtures/) are the acceptance gates: a c
 
 ## Dev setup
 
-You need a stable Rust toolchain ([rustup](https://rustup.rs)). No Node is required to build —
-`ui/dist` is committed and embedded via `rust-embed`.
+You need a stable Rust toolchain ([rustup](https://rustup.rs)). No Node is required to build:
+the dashboard is plain ES modules in `crates/axon-bus/ui`, embedded in the binary.
 
 ```bash
 cargo build                                  # debug build

@@ -4,6 +4,10 @@
 
 > A single, self-contained **Rust binary** that turns the logs your AI coding-agents already write into a **live, harness-agnostic observability dashboard** in the browser — live activity, spend, speed, and *which agent/model did what*, with a three.js "brain" as the signature view and shareable cards. **100% local, zero infra, one binary.**
 
+> **Status (v0.3.0):** the ingest schemas (§6, Appendix A) still hold. The frontend sections
+> describe the original Vue/TresJS plan; the shipped dashboard is plain ES modules in
+> `crates/axon-bus/ui`, and the control plane is specified in [docs/BUS-PLAN.md](./docs/BUS-PLAN.md).
+
 > **This is a hand-off spec.** Copy it into the new `axon/` repo as `DESIGN.md` and execute. It assumes no prior context. **§6 + Appendix A are verified against real logs on the author's machine** — trust them over any prior recon.
 
 ---

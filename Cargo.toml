@@ -42,7 +42,6 @@ axon-bus = { path = "crates/axon-bus" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 tower-http = { version = "0.6", features = ["fs", "compression-gzip"] }
-rust-embed = "8"
 notify = "6"
 rusqlite.workspace = true
 serde.workspace = true
