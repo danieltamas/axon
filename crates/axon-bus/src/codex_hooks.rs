@@ -42,13 +42,40 @@ fn runs(entry: &dyn TableLike, event: &str) -> bool {
         .is_some_and(|c| is_bus_command(c, Harness::Codex, event))
 }
 
-fn handler(cmd: &str) -> Item {
+fn handler(cmd: &str) -> InlineTable {
     let mut hook = InlineTable::new();
     hook.insert("type", "command".into());
     hook.insert("command", cmd.into());
+    hook
+}
+
+fn handlers(cmd: &str) -> Item {
     let mut hooks = Array::new();
-    hooks.push(hook);
+    hooks.push(handler(cmd));
     value(hooks)
+}
+
+/// Codex runs a group's handlers for every tool when it has no matcher or a match-all one.
+fn matches_everything(group: &dyn TableLike) -> bool {
+    group
+        .get("matcher")
+        .is_none_or(|m| m.as_str().is_some_and(|m| ["", "*", ".*"].contains(&m)))
+}
+
+/// Add the Axon handler to a group, beside whatever handlers it already holds.
+fn add_handler(group: &mut dyn TableLike, cmd: &str) {
+    match group.get_mut("hooks") {
+        Some(Item::ArrayOfTables(tables)) => {
+            let mut hook = Table::new();
+            hook.insert("type", value("command"));
+            hook.insert("command", value(cmd));
+            tables.push(hook);
+        }
+        Some(Item::Value(Value::Array(array))) => array.push(handler(cmd)),
+        _ => {
+            group.insert("hooks", handlers(cmd));
+        }
+    }
 }
 
 /// Keep the entries of `item` for which `keep` holds, in order over the table entries.
@@ -81,37 +108,79 @@ pub(crate) fn wire(original: Option<&str>, exe: &str) -> anyhow::Result<String> 
     for event in CODEX_EVENTS {
         let cmd = command(exe, Harness::Codex, event);
         let item = hooks.entry(event).or_insert(value(Array::new()));
+        // A handler sitting in a group that skips some tools never runs everywhere.
+        strip_event(item, event, &|group| !matches_everything(group));
         let mut wired = false;
         for group in entries_mut(item) {
-            if runs(group, event) {
-                // The flat shape Codex ignores: its group is rewritten where it stands.
+            // The flat shape Codex ignores becomes a handler in the group's own `hooks`.
+            let was_flat = runs(group, event);
+            if was_flat {
                 group.remove("command");
-                group.insert("hooks", handler(&cmd));
-                wired = true;
-            } else if let Some(inner) = group.get_mut("hooks") {
+            }
+            let mut here = false;
+            if let Some(inner) = group.get_mut("hooks") {
                 for hook in entries_mut(inner).into_iter().filter(|h| runs(*h, event)) {
                     hook.insert("type", value("command"));
                     hook.insert("command", value(cmd.as_str()));
-                    wired = true;
+                    here = true;
                 }
             }
+            if was_flat && !here {
+                add_handler(group, &cmd);
+                here = true;
+            }
+            wired |= here;
         }
         if wired {
             continue;
         }
         if let Some(tables) = item.as_array_of_tables_mut() {
             let mut group = Table::new();
-            group.insert("hooks", handler(&cmd));
+            group.insert("hooks", handlers(&cmd));
             tables.push(group);
         } else if let Some(array) = item.as_array_mut() {
             let mut group = InlineTable::new();
-            group.insert("hooks", handler(&cmd).into_value().expect("an array value"));
+            group.insert(
+                "hooks",
+                handlers(&cmd).into_value().expect("an array value"),
+            );
             array.push(group);
         } else {
             anyhow::bail!("config.toml `hooks.{event}` is not an array");
         }
     }
     Ok(doc.to_string())
+}
+
+/// Take the Axon handlers out of the groups of one event `applies` selects, dropping a
+/// group only when Axon's handler was all it held. True when the event is left empty.
+fn strip_event(item: &mut Item, event: &str, applies: &dyn Fn(&dyn TableLike) -> bool) -> bool {
+    let had_entries = !entries(item).is_empty();
+    let mut drop_group = Vec::new();
+    for group in entries_mut(item) {
+        if !applies(group) {
+            drop_group.push(false);
+            continue;
+        }
+        let was_flat = runs(group, event);
+        if was_flat {
+            group.remove("command");
+        }
+        let mut emptied = false;
+        if let Some(inner) = group.get_mut("hooks") {
+            let before = entries(inner).len();
+            retain_entries(inner, |h| !runs(h, event));
+            emptied = before > 0 && is_empty(inner);
+        }
+        let holds_handlers = group.get("hooks").is_some_and(|inner| !is_empty(inner));
+        drop_group.push((was_flat || emptied) && !holds_handlers);
+    }
+    let mut index = 0;
+    retain_entries(item, |_| {
+        index += 1;
+        !drop_group[index - 1]
+    });
+    had_entries && is_empty(item)
 }
 
 /// `current` without the bus hooks (flat or nested); everything else is left as it was.
@@ -122,25 +191,7 @@ pub(crate) fn unwire(current: &str) -> anyhow::Result<String> {
             let Some(item) = hooks.get_mut(event) else {
                 continue;
             };
-            let had_entries = !entries(item).is_empty();
-            // A group whose last handler was ours goes with it; the user's own groups stay.
-            let mut emptied_by_us = Vec::new();
-            for group in entries_mut(item) {
-                let flat = runs(group, event);
-                let mut emptied = false;
-                if let Some(inner) = group.get_mut("hooks") {
-                    let before = entries(inner).len();
-                    retain_entries(inner, |h| !runs(h, event));
-                    emptied = before > 0 && is_empty(inner);
-                }
-                emptied_by_us.push(flat || emptied);
-            }
-            let mut index = 0;
-            retain_entries(item, |_| {
-                index += 1;
-                !emptied_by_us[index - 1]
-            });
-            if had_entries && is_empty(item) {
+            if strip_event(item, event, &|_| true) {
                 hooks.remove(event);
             }
         }
@@ -163,6 +214,7 @@ pub(crate) fn is_wired(config: &str, exe: &str) -> bool {
             .is_some_and(|item| {
                 entries(item)
                     .iter()
+                    .filter(|group| matches_everything(**group))
                     .filter_map(|group| group.get("hooks"))
                     .flat_map(entries)
                     .any(|hook| {
@@ -240,5 +292,41 @@ mod tests {
         assert!(is_wired(&text, EXE));
         let back = unwire(&text).unwrap();
         assert!(back.contains("command = \"mine\"") && !back.contains("bus hook"));
+    }
+
+    #[test]
+    fn upgrade_keeps_a_non_axon_handler_next_to_the_flat_command() {
+        let owner = "[hooks]\nStop = [{ command = \"/old/axon bus hook codex Stop\", hooks = [{ type = \"command\", command = \"echo keep\" }] }]\n";
+        let text = wire(Some(owner), EXE).unwrap();
+        assert!(text.contains("echo keep"), "{text}");
+        assert!(is_wired(&text, EXE));
+        assert_eq!(text.matches("bus hook codex Stop").count(), 1);
+        let back = unwire(&text).unwrap();
+        assert!(
+            back.contains("echo keep") && !back.contains("bus hook"),
+            "{back}"
+        );
+        assert!(back.contains("Stop = [{ hooks"), "{back}");
+    }
+
+    fn with_pre_tool_use_matcher(text: &str, matcher: &str) -> String {
+        text.replace(
+            "PreToolUse = [{ hooks",
+            &format!("PreToolUse = [{{ matcher = \"{matcher}\", hooks"),
+        )
+    }
+
+    #[test]
+    fn doctor_rejects_a_handler_in_a_group_that_matches_only_some_tools() {
+        let text = wire(None, EXE).unwrap();
+        for matcher in ["^never$", "Bash"] {
+            let narrowed = with_pre_tool_use_matcher(&text, matcher);
+            assert!(!is_wired(&narrowed, EXE), "{narrowed}");
+            let repaired = wire(Some(&narrowed), EXE).unwrap();
+            assert!(is_wired(&repaired, EXE), "{repaired}");
+        }
+        for matcher in ["", "*", ".*"] {
+            assert!(is_wired(&with_pre_tool_use_matcher(&text, matcher), EXE));
+        }
     }
 }

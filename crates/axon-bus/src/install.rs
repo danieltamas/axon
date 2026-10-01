@@ -16,6 +16,7 @@ use crate::opencode_plugin::plugin_source;
 use crate::Harness;
 
 const BACKUP_SUFFIX: &str = ".axon-bus.bak";
+const WROTE_SUFFIX: &str = ".axon-bus.wrote";
 
 pub(crate) const CLAUDE_EVENTS: [&str; 8] = [
     "SessionStart",
@@ -90,6 +91,14 @@ pub(crate) fn layout(harness: Harness) -> Layout {
 pub(crate) fn backup_path(config: &Path) -> PathBuf {
     let mut name = config.file_name().unwrap_or_default().to_os_string();
     name.push(BACKUP_SUFFIX);
+    config.with_file_name(name)
+}
+
+/// The copy of a Codex config exactly as install last wrote it. A live file that still
+/// matches it holds no edits of the owner's, whatever their formatting or comments.
+pub(crate) fn wrote_path(config: &Path) -> PathBuf {
+    let mut name = config.file_name().unwrap_or_default().to_os_string();
+    name.push(WROTE_SUFFIX);
     config.with_file_name(name)
 }
 
@@ -293,6 +302,11 @@ pub(crate) fn edited_since_install(
     let Some(live) = current else {
         return Ok(false);
     };
+    if harness == Harness::Codex {
+        if let Some(wrote) = read_optional(&wrote_path(&layout.config))? {
+            return Ok(live != wrote);
+        }
+    }
     let installed = wire(harness, Some(original), exe, layout)?;
     if installed == live {
         return Ok(false);
@@ -314,6 +328,7 @@ pub fn install(harness: Harness) -> anyhow::Result<()> {
     let layout = layout(harness);
     let current = read_optional(&layout.config)?;
     let backup = read_optional(&backup_path(&layout.config))?;
+    let mut fresh = false;
     let wired = match (&backup, &current) {
         // Edited after install: wire the live file so those edits survive.
         (Some(original), Some(live))
@@ -329,6 +344,7 @@ pub fn install(harness: Harness) -> anyhow::Result<()> {
                 .with_context(|| format!("wire {}", layout.config.display()))?
         }
         _ => {
+            fresh = true;
             let original = pristine(harness, &exe, &layout)?;
             if let Some(original) = &original {
                 write_if_changed(&backup_path(&layout.config), original)?;
@@ -338,6 +354,9 @@ pub fn install(harness: Harness) -> anyhow::Result<()> {
         }
     };
     write_if_changed(&layout.config, &wired)?;
+    if harness == Harness::Codex && fresh {
+        write_if_changed(&wrote_path(&layout.config), &wired)?;
+    }
     if let Some(plugin) = &layout.plugin {
         write_if_changed(plugin, &plugin_source(&exe))?;
     }
@@ -444,5 +463,22 @@ mod acceptance_review2 {
             ),
             r#""C:/Program Files/Axon/axon-bus.exe" hook claude PreToolUse"#
         );
+    }
+
+    #[test]
+    fn codex_edit_is_judged_against_the_bytes_install_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout {
+            config: dir.path().join("config.toml"),
+            plugin: None,
+        };
+        let original = "model = \"x\"\n";
+        let wired = wire(Harness::Codex, Some(original), "axon", &layout).unwrap();
+        fs::write(wrote_path(&layout.config), &wired).unwrap();
+        let edited = |live: &str| {
+            edited_since_install(Harness::Codex, Some(live), original, "axon", &layout).unwrap()
+        };
+        assert!(!edited(&wired));
+        assert!(edited(&format!("# owner note\n{wired}")));
     }
 }

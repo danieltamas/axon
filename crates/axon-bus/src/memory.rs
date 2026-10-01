@@ -194,11 +194,14 @@ pub fn codex_cwd(argv: &[impl AsRef<OsStr>], os_cwd: PathBuf) -> PathBuf {
         dir = match arg {
             "--" => break,
             "-C" | "--cd" => args.next().or(dir),
-            _ => arg
-                .strip_prefix("--cd=")
-                .or_else(|| arg.strip_prefix("-C").filter(|_| !arg.starts_with("--")))
-                .map(|d| d.strip_prefix('=').unwrap_or(d))
-                .or(dir),
+            // `--cd=<v>` takes <v> verbatim; only the attached short form drops an `=`.
+            _ => match (arg.strip_prefix("--cd="), arg.strip_prefix("-C")) {
+                (Some(attached), _) => Some(attached),
+                (None, Some(attached)) if !arg.starts_with("--") => {
+                    Some(attached.strip_prefix('=').unwrap_or(attached))
+                }
+                _ => dir,
+            },
         };
     }
     dir.filter(|d| !d.is_empty())
@@ -248,6 +251,14 @@ mod codex_cwd_tests {
         ] {
             assert_eq!(cwd_of(flag), PathBuf::from("/wt"), "{flag:?}");
         }
+    }
+
+    #[test]
+    fn codex_cwd_takes_a_long_form_value_verbatim() {
+        assert_eq!(
+            cwd_of(&["codex", "exec", "--cd==work", "inspect"]),
+            PathBuf::from("/repo/=work")
+        );
     }
 
     #[test]

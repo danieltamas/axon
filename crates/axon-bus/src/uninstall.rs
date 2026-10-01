@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::hermes_hooks::HERMES_MARKER;
 use crate::install::{
     backup_path, current_exe, edited_since_install, is_bus_command, layout, read_optional, wire,
-    Layout, CLAUDE_EVENTS,
+    wrote_path, Layout, CLAUDE_EVENTS,
 };
 use crate::Harness;
 
@@ -32,6 +32,9 @@ pub fn uninstall(harness: Harness) -> anyhow::Result<()> {
         fs::remove_file(&backup)?;
     } else if current.is_some() && current == Some(wire(harness, None, &exe, &layout)?) {
         fs::remove_file(&layout.config)?;
+    }
+    if harness == Harness::Codex && wrote_path(&layout.config).exists() {
+        fs::remove_file(wrote_path(&layout.config))?;
     }
     if let Some(plugin) = &layout.plugin {
         if plugin.exists() {
