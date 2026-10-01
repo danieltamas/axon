@@ -298,7 +298,15 @@ pub(crate) fn edited_since_install(
         return Ok(false);
     }
     let without_bus = |text: &str| crate::uninstall::unwire(harness, text, layout).ok();
-    Ok(without_bus(live).is_none() || without_bus(live) != without_bus(&installed))
+    let (live, installed) = (without_bus(live), without_bus(&installed));
+    Ok(match (live, installed) {
+        // TOML can be rewritten (inline tables to `[[tables]]`) without changing meaning.
+        (Some(live), Some(installed)) if harness == Harness::Codex => {
+            let parse = |text: &str| toml::from_str::<toml::Value>(text).ok();
+            parse(&live).is_none() || parse(&live) != parse(&installed)
+        }
+        (live, installed) => live.is_none() || live != installed,
+    })
 }
 
 pub fn install(harness: Harness) -> anyhow::Result<()> {

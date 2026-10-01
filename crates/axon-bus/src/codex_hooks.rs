@@ -90,6 +90,7 @@ pub(crate) fn wire(original: Option<&str>, exe: &str) -> anyhow::Result<String> 
                 wired = true;
             } else if let Some(inner) = group.get_mut("hooks") {
                 for hook in entries_mut(inner).into_iter().filter(|h| runs(*h, event)) {
+                    hook.insert("type", value("command"));
                     hook.insert("command", value(cmd.as_str()));
                     wired = true;
                 }
@@ -164,7 +165,10 @@ pub(crate) fn is_wired(config: &str, exe: &str) -> bool {
                     .iter()
                     .filter_map(|group| group.get("hooks"))
                     .flat_map(entries)
-                    .any(|hook| hook.get("command").and_then(Item::as_str) == Some(cmd.as_str()))
+                    .any(|hook| {
+                        hook.get("type").and_then(Item::as_str) == Some("command")
+                            && hook.get("command").and_then(Item::as_str) == Some(cmd.as_str())
+                    })
             })
     })
 }
