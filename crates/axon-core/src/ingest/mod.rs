@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 
 use crate::model::Harness;
 
+/// Bumped whenever a parser changes what it reads from a source, so a scan reads every
+/// source again instead of keeping turns an older parser produced.
+pub const PARSER_VERSION: u32 = 1;
+
 /// One assistant turn after collapse-by-`message.id`, before normalization.
 /// Timestamps are still ISO-8601 strings and the model id is still raw.
 #[derive(Debug, Clone)]
@@ -61,21 +65,19 @@ pub enum SourceKind {
 }
 
 impl Source {
-    /// Every turn in this source; an unreadable source has none.
-    pub fn parse(&self) -> Vec<RawTurn> {
-        let read = || std::fs::read_to_string(&self.path).ok();
+    /// Every turn in this source, or None when it could not be read (so a scan does not
+    /// record it as read and tries again next time).
+    pub fn parse(&self) -> Option<Vec<RawTurn>> {
+        let content = || std::fs::read_to_string(&self.path).ok();
         match self.kind {
-            SourceKind::ClaudeMain => read()
-                .map(|content| claude::parse_main_jsonl(&content))
-                .unwrap_or_default(),
+            SourceKind::ClaudeMain => Some(claude::parse_main_jsonl(&content()?)),
             SourceKind::ClaudeSubagent => {
+                // The meta file is optional; a subagent without one is still counted.
                 let meta = std::fs::read_to_string(self.path.with_extension("meta.json"))
                     .ok()
                     .and_then(|s| claude::SubagentMeta::from_json_str(&s).ok())
                     .unwrap_or_default();
-                read()
-                    .map(|content| claude::parse_subagent_jsonl(&content, &meta))
-                    .unwrap_or_default()
+                Some(claude::parse_subagent_jsonl(&content()?, &meta))
             }
             SourceKind::Codex => {
                 let stem = self
@@ -83,9 +85,7 @@ impl Source {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("codex");
-                read()
-                    .map(|content| codex::parse_session(&content, stem))
-                    .unwrap_or_default()
+                Some(codex::parse_session(&content()?, stem))
             }
             SourceKind::OpenCode => opencode::parse_db(&self.path),
             SourceKind::Ccflare => ccflare::parse_db(&self.path),
@@ -150,7 +150,8 @@ pub fn codex_sources(sessions_dir: &Path) -> Vec<Source> {
 pub fn scan_claude_root(projects_dir: &Path) -> Vec<RawTurn> {
     claude_sources(projects_dir)
         .iter()
-        .flat_map(Source::parse)
+        .filter_map(Source::parse)
+        .flatten()
         .collect()
 }
 
@@ -158,19 +159,20 @@ pub fn scan_claude_root(projects_dir: &Path) -> Vec<RawTurn> {
 pub fn scan_codex_root(sessions_dir: &Path) -> Vec<RawTurn> {
     codex_sources(sessions_dir)
         .iter()
-        .flat_map(Source::parse)
+        .filter_map(Source::parse)
+        .flatten()
         .collect()
 }
 
 /// Read all OpenCode assistant turns from its SQLite database.
 pub fn scan_opencode_db(db_path: &Path) -> Vec<RawTurn> {
-    opencode::parse_db(db_path)
+    opencode::parse_db(db_path).unwrap_or_default()
 }
 
 /// Read all completion requests from a ccflare-family proxy DB (better-ccflare / ccflare).
 /// Each priced request becomes one turn; non-completion rows (token refresh, health) are skipped.
 pub fn scan_ccflare_db(db_path: &Path) -> Vec<RawTurn> {
-    ccflare::parse_db(db_path)
+    ccflare::parse_db(db_path).unwrap_or_default()
 }
 
 fn subagent_sources(dir: &Path, sources: &mut Vec<Source>) {

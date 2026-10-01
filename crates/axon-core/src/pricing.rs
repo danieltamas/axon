@@ -71,6 +71,9 @@ pub struct Pricing {
 /// model and not an *unknown* one, so it must be free — never flagged `unpriced`.
 pub const SYNTHETIC_MODEL: &str = "<synthetic>";
 
+/// The bundled price table, also part of the scan cache key: new prices mean re-pricing.
+pub const BUNDLED: &str = include_str!("../assets/pricing.toml");
+
 impl Pricing {
     pub fn from_toml_str(s: &str) -> anyhow::Result<Self> {
         toml::from_str(s).context("parse pricing.toml")
@@ -85,8 +88,7 @@ impl Pricing {
 
     /// The bundled defaults (`assets/pricing.toml`), embedded at compile time.
     pub fn bundled() -> Self {
-        Self::from_toml_str(include_str!("../assets/pricing.toml"))
-            .expect("bundled assets/pricing.toml must parse")
+        Self::from_toml_str(BUNDLED).expect("bundled assets/pricing.toml must parse")
     }
 
     /// The USD→display-currency multiplier (1.0 if unset).

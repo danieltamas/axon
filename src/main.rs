@@ -24,6 +24,9 @@ use axon::server;
 use axon::store::{Stamp, Store};
 use axon::summary::{build_summary, windowed_cost, Summary};
 
+mod cli_summary;
+use cli_summary::print_cli_summary;
+
 /// Axon — see DESIGN.md for the full build spec.
 #[derive(Parser, Debug)]
 #[command(
@@ -193,8 +196,10 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     let mut store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
     // A new parser or new prices mean every stored turn is read and priced again.
     let fingerprint = format!(
-        "{}\n{}",
+        "{}\n{}\n{}\n{}",
         env!("CARGO_PKG_VERSION"),
+        ingest::PARSER_VERSION,
+        axon::pricing::BUNDLED,
         std::fs::read_to_string(pricing_path()).unwrap_or_default()
     );
     let known = store.source_stamps(&fingerprint)?;
@@ -209,7 +214,11 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
         if known.get(&key) == Some(&stamp) {
             continue;
         }
-        for t in source.parse() {
+        // An unreadable source keeps its old stamp, so the next scan tries it again.
+        let Some(turns) = source.parse() else {
+            continue;
+        };
+        for t in turns {
             match normalize::to_event(&t, &pricing) {
                 Ok(e) => events.push(e),
                 Err(e) => {
@@ -253,6 +262,12 @@ fn stamp(source: &Source) -> Option<Stamp> {
         Some((meta.len() as i64, mtime.as_millis() as i64))
     };
     let (size, mtime) = of(&source.path)?;
+    // A subagent's agent type and description come from its meta file.
+    if source.kind == SourceKind::ClaudeSubagent {
+        if let Some((meta_size, meta_mtime)) = of(&source.path.with_extension("meta.json")) {
+            return Some((size + meta_size, mtime.max(meta_mtime)));
+        }
+    }
     if matches!(source.kind, SourceKind::OpenCode | SourceKind::Ccflare) {
         let mut wal = source.path.clone().into_os_string();
         wal.push("-wal");
@@ -286,125 +301,6 @@ fn day_start_ms(date: chrono::NaiveDate) -> i64 {
         .and_then(|ndt| ndt.and_local_timezone(chrono::Local).single())
         .map(|dt| dt.timestamp_millis())
         .unwrap_or(0)
-}
-
-fn print_cli_summary(s: &Summary, port: u16) {
-    let top_agents: Vec<&str> = s
-        .by_agent
-        .iter()
-        .take(4)
-        .map(|a| a.agent.as_str())
-        .collect();
-    println!("\n  Axon — local AI-agent observability\n");
-    println!(
-        "  Events        {} across {} sessions",
-        commafy(s.events),
-        commafy(s.sessions)
-    );
-    println!(
-        "  Tokens out    {}  (in {}, cache-read {})",
-        commafy(s.tokens_out),
-        commafy(s.tokens_in),
-        commafy(s.cache_read)
-    );
-    println!(
-        "  Lines edited  {} added / {} removed",
-        commafy(s.loc_added),
-        commafy(s.loc_removed)
-    );
-    println!(
-        "  Cost          {}  (all logged history, EUR)",
-        eur(s.cost_eur)
-    );
-    {
-        let span = |spent: f64, cap: Option<f64>| match cap {
-            Some(c) => format!("{} / {} ({:.0}%)", eur(spent), eur(c), pct(spent, c)),
-            None => eur(spent),
-        };
-        println!(
-            "  Spend         today {} · week {}",
-            span(s.today_cost_eur, s.budget_day_eur),
-            span(s.week_cost_eur, s.budget_week_eur)
-        );
-    }
-    if let Some(r) = &s.rtk {
-        println!(
-            "  RTK saved     {} tokens ({:.1}%) over {} commands",
-            compact(r.tokens_saved),
-            r.saved_pct,
-            commafy(r.commands)
-        );
-    }
-    if !s.by_harness.is_empty() {
-        let parts: Vec<String> = s
-            .by_harness
-            .iter()
-            .map(|h| format!("{} {}", h.harness, eur(h.cost_eur)))
-            .collect();
-        println!("  Harnesses     {}", parts.join(" · "));
-    }
-    if !top_agents.is_empty() {
-        println!("  Top agents    {}", top_agents.join(", "));
-    }
-    if !s.unpriced_models.is_empty() {
-        println!(
-            "  Unpriced      {}  (cost is a floor, not exact)",
-            s.unpriced_models.join(", ")
-        );
-    }
-    if !s.credit_priced_models.is_empty() {
-        println!(
-            "  Credits       {}  ({:.2} ChatGPT credits est., included-plan estimate)",
-            s.credit_priced_models.join(", "),
-            s.total_credits
-        );
-    }
-    if !s.preview_priced_models.is_empty() {
-        println!(
-            "  Preview       {}  (separate research-preview limit, no exact monetary rate)",
-            s.preview_priced_models.join(", ")
-        );
-    }
-    println!("  Dashboard →   http://127.0.0.1:{port}");
-}
-
-/// Percent of a budget cap consumed (0 if the cap is non-positive).
-fn pct(spent: f64, cap: f64) -> f64 {
-    if cap > 0.0 {
-        100.0 * spent / cap
-    } else {
-        0.0
-    }
-}
-
-/// Format euros with thousands separators: 5607.61 → "€5,607.61".
-fn eur(n: f64) -> String {
-    let cents = (n * 100.0).round() as u64;
-    format!("€{}.{:02}", commafy(cents / 100), cents % 100)
-}
-
-/// Compact large counts: 134_504_579 → "134.5M".
-fn compact(n: u64) -> String {
-    match n {
-        n if n >= 1_000_000_000 => format!("{:.1}B", n as f64 / 1e9),
-        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
-        n if n >= 1_000 => format!("{:.1}K", n as f64 / 1e3),
-        n => n.to_string(),
-    }
-}
-
-/// Group a number into thousands with commas (35929 → "35,929").
-fn commafy(n: u64) -> String {
-    let s = n.to_string();
-    let len = s.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// Load `~/.config/axon/pricing.toml` if present, else the bundled defaults.

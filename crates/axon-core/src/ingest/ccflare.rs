@@ -48,25 +48,22 @@ pub struct CcflareRow {
     pub response_time_ms: Option<i64>,
 }
 
-/// Read every priced completion request from a ccflare-family DB. Best-effort: returns empty
-/// if the file is missing, locked, or has no `requests(id, timestamp)` table — so Axon
-/// degrades gracefully when no proxy is in use.
-pub fn parse_db(db_path: &Path) -> Vec<RawTurn> {
-    let Ok(conn) = Connection::open_with_flags(
+/// Read every priced completion request from a ccflare-family DB: empty when it has no
+/// `requests(id, timestamp)` table, None when it cannot be read (missing, locked), so a scan
+/// retries it instead of recording it as read.
+pub fn parse_db(db_path: &Path) -> Option<Vec<RawTurn>> {
+    let conn = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    ) else {
-        return Vec::new();
-    };
-    let cols = table_columns(&conn, "requests");
+    )
+    .ok()?;
+    let cols = table_columns(&conn, "requests")?;
     if !cols.contains("id") || !cols.contains("timestamp") {
-        return Vec::new(); // not a ccflare-family DB (or empty/foreign schema)
+        return Some(Vec::new()); // not a ccflare-family DB (or empty/foreign schema)
     }
 
     let sql = build_select(&cols);
-    let Ok(mut stmt) = conn.prepare(&sql) else {
-        return Vec::new();
-    };
+    let mut stmt = conn.prepare(&sql).ok()?;
     let rows = stmt.query_map([], |r| {
         Ok(CcflareRow {
             id: r.get(0)?,
@@ -83,12 +80,8 @@ pub fn parse_db(db_path: &Path) -> Vec<RawTurn> {
             response_time_ms: r.get(11)?,
         })
     });
-    let Ok(rows) = rows else {
-        return Vec::new();
-    };
-    rows.flatten()
-        .filter_map(|row| turn_from_row(&row))
-        .collect()
+    let rows: Vec<CcflareRow> = rows.ok()?.collect::<Result<_, _>>().ok()?;
+    Some(rows.iter().filter_map(turn_from_row).collect())
 }
 
 /// Build a SELECT that reads only the columns this DB actually has, normalizing the family's
@@ -139,17 +132,15 @@ fn build_select(cols: &HashSet<String>) -> String {
     )
 }
 
-/// Column-name set for `table`, lowercased. Empty if the table does not exist.
-fn table_columns(conn: &Connection, table: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
-    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
-            for name in rows.flatten() {
-                out.insert(name.to_lowercase());
-            }
-        }
-    }
-    out
+/// Column-name set for `table`, lowercased: empty if the table does not exist, None when
+/// the database cannot be read.
+fn table_columns(conn: &Connection, table: &str) -> Option<HashSet<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})")).ok()?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1)).ok()?;
+    names
+        .map(|name| name.map(|n| n.to_lowercase()))
+        .collect::<Result<_, _>>()
+        .ok()
 }
 
 /// Map one projected request row to a [`RawTurn`]. Returns `None` for rows with no model

@@ -16,19 +16,17 @@ use serde_json::Value;
 use super::RawTurn;
 use crate::model::Harness;
 
-/// Read all assistant turns from an `opencode.db`. Best-effort: returns empty if the DB is
-/// missing or unreadable (e.g. locked) so Axon degrades gracefully.
-pub fn parse_db(db_path: &Path) -> Vec<RawTurn> {
-    let Ok(conn) = Connection::open_with_flags(
+/// Read all assistant turns from an `opencode.db`. None when the DB cannot be read (missing,
+/// locked, mid-migration), so a scan retries it instead of recording it as read.
+pub fn parse_db(db_path: &Path) -> Option<Vec<RawTurn>> {
+    let conn = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    ) else {
-        return Vec::new();
-    };
-    let Ok(mut stmt) = conn.prepare("SELECT id, session_id, time_created, data FROM message")
-    else {
-        return Vec::new();
-    };
+    )
+    .ok()?;
+    let mut stmt = conn
+        .prepare("SELECT id, session_id, time_created, data FROM message")
+        .ok()?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -37,20 +35,16 @@ pub fn parse_db(db_path: &Path) -> Vec<RawTurn> {
             r.get::<_, String>(3)?,
         ))
     });
-    let Ok(rows) = rows else {
-        return Vec::new();
-    };
-
     let mut out = Vec::new();
-    for row in rows.flatten() {
-        let (id, session_id, time_created, data) = row;
+    for row in rows.ok()? {
+        let (id, session_id, time_created, data) = row.ok()?;
         if let Ok(v) = serde_json::from_str::<Value>(&data) {
             if let Some(t) = turn_from_data(&id, &session_id, time_created, &v) {
                 out.push(t);
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// Build a [`RawTurn`] from one decoded `message.data` object (assistant rows only).
