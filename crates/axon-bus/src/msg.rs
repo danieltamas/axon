@@ -382,6 +382,20 @@ fn doorbell_names(conn: &Connection, agent: &str) -> rusqlite::Result<Vec<String
     Ok(std::iter::once(agent.to_owned()).chain(alias).collect())
 }
 
+/// The command that runs this bus, as the agent's shell can call it: this binary's own
+/// path (it need not be on PATH), with ` bus` when it is the `axon` app.
+fn bus_command() -> String {
+    let exe = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "axon".to_owned());
+    let verb = crate::install::bus_verb(&exe);
+    if exe.contains(' ') {
+        format!("\"{exe}\"{verb}")
+    } else {
+        format!("{exe}{verb}")
+    }
+}
+
 /// Undelivered messages for `agent`, framed as untrusted peer text, marked delivered.
 pub fn deliver(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
     let mut stmt = conn.prepare(
@@ -419,7 +433,8 @@ pub fn deliver(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>>
         text.push_str("[end of peer message]\n");
         if *needs_reply {
             text.push_str(&format!(
-                "Answer with: axon-bus reply {id} --from {agent} --body \"...\"\n"
+                "Answer with: {} reply {id} --from {agent} --body \"...\"\n",
+                bus_command()
             ));
         }
         conn.execute(
