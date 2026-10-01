@@ -15,7 +15,7 @@
 //! - cost_usd=NULL usage rows must be priced from axon-core's bundled USD rates, without
 //!   applying its EUR display FX. Unknown rows fall back to the explicitly set token cap.
 //! - agents.model preserves the raw resolvedModel from a spawn result; price lookup may
-//!   canonicalize it, but must still report the captured Sonnet 5.5 usage as unpriced.
+//!   canonicalize it, but must still report unknown models as unpriced.
 
 mod common;
 use common::*;
@@ -268,7 +268,7 @@ fn tree_cost_sums_priced_usage_once_and_excludes_other_roots() {
     }
 }
 
-// BUS-PLAN §9b and §9 M0: captured Sonnet 5.5 remains unpriced and uses the token ceiling.
+// BUS-PLAN §9b and §9 M0: unknown models are unpriced and use the token ceiling.
 #[test]
 fn captured_unknown_model_is_unpriced_and_falls_back_to_token_budget() {
     let bus = Bus::new();
@@ -279,9 +279,12 @@ fn captured_unknown_model_is_unpriced_and_falls_back_to_token_budget() {
     bus.hook("claude", "PostToolUse", &post);
     let root = post["session_id"].as_str().unwrap();
     let child = post["tool_response"]["agentId"].as_str().unwrap();
-    let model = post["tool_response"]["resolvedModel"].as_str().unwrap();
-    assert_eq!(model, "claude-sonnet-5-5");
-    assert_eq!(bus.agent(child)["model"], model);
+    assert_eq!(
+        bus.agent(child)["model"],
+        post["tool_response"]["resolvedModel"]
+    );
+    // Use a synthetic id so new rates for real models cannot invalidate the unpriced premise.
+    let model = "claude-unreleased-test-model";
     bus.ok(&["budget", "set", root, "50Ktok", "--usd", "3"]);
     bus.usage(child, model, [49_999, 0, 0, 0], now_ms(), 1);
     let total = bus.json(&["budget", "show", root, "--json"]);
