@@ -66,9 +66,18 @@ pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> an
             Some(path) => write_ready(path, &origin)?,
             None => eprintln!("axon-bus: dashboard at {origin}"),
         }
-        axum::serve(listener, router).await?;
-        Ok(())
+        let federation = fed_start(db).await;
+        let served = axum::serve(listener, router).await;
+        if let Some(federation) = federation {
+            federation.shutdown().await;
+        }
+        Ok(served?)
     })
+}
+
+/// Federation runs beside the server and lives in the same data dir as the database.
+pub async fn fed_start(db: &Path) -> Option<crate::fed::service::Handle> {
+    crate::fed::service::start(db.parent()?, db).await
 }
 
 /// The dashboard and its API, for a server another binary bound on 127.0.0.1:`port`.
