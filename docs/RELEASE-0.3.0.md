@@ -1,12 +1,13 @@
 # Release readiness: v0.3.0 (branch `job/axon-bus/m0`)
 
-Checked 2026-10-01 against 26 commits ahead of `main` (121 files, +16.2K / −216). The branch
-has never been pushed.
+Checked 2026-10-01. The branch is pushed as PR #6 and the full CI matrix (macOS x2, Linux x2,
+Windows, MSRV) is green on `0e706ee`.
 
 ## Status
 
-All six blockers below are closed on the branch. What remains is the push sequence: PR, the CI
-matrix (Windows is the first real run), merge, version bump and tag.
+All blockers below are closed, and so is the bus review (introduction, relay, link notices;
+Codex findings fixed in `bc21700`, its 21 acceptance tests in `0e706ee`). What remains: merge,
+the `HOMEBREW_TAP_TOKEN` secret, tag, and the post-release checks.
 
 | # | Blocker | Resolution |
 |---|---|---|
