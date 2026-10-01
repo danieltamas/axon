@@ -215,6 +215,8 @@ fn open_with(path: &Path, busy: Duration) -> anyhow::Result<Connection> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("open {}", path.display()))?;
     conn.busy_timeout(busy)?;
+    // The hub is WAL (set by axon-core); NORMAL drops the fsync on every commit, as Axon does.
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(conn)
 }
 
