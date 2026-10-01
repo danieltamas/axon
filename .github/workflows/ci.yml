@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.86
+      - uses: dtolnay/rust-toolchain@1.91
       - run: cargo check --workspace --locked
 
   # One runner per released platform (dist-workspace.toml); Linux releases are musl, tests run on the native gnu host.

@@ -28,8 +28,15 @@ getrandom = "0.2"
 # Resident memory of each agent's harness process (BUS-PLAN §2 dependency list).
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 # Only `serve` starts a runtime; hooks stay synchronous (BUS-PLAN §2 dependencies).
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
 toml.workspace = true
+# Federation transport (docs/P2P-SPEC.md §3): authenticated QUIC with relay fallback and hole
+# punching. `tls-ring` is the required crypto backend and keeps the release binary small;
+# dropped from the defaults: `portmapper` (UPnP/NAT-PMP, an optional hole-punch aid),
+# `metrics` and `fast-apple-datapath` (a macOS throughput tweak).
+iroh = { version = "1.3", default-features = false, features = ["tls-ring"] }
+# SHA-256 for node fingerprints and pair codes (§3); already in the tree through iroh.
+sha2 = "0.11"
 # Edits the owner's Codex config.toml in place, keeping their comments and layout;
 # already in the tree as a dependency of `toml`.
 toml_edit = "0.22"

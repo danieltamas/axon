@@ -12,6 +12,7 @@ mod cli_guard;
 mod doctor;
 mod doorbell;
 mod end;
+pub mod fed;
 mod gate;
 mod guide;
 mod hermes_hooks;

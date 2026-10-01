@@ -109,7 +109,42 @@ pub fn doctor(db: &Path) -> anyhow::Result<bool> {
             );
         }
     }
+    println!("{}", federation_line(db));
     Ok(healthy)
+}
+
+/// `federation: off | on (<n> peers)`; an unreadable hub reads as off, `hub` above says why.
+fn federation_line(db: &Path) -> String {
+    let Ok(conn) = crate::store::open(db) else {
+        return "federation: off".into();
+    };
+    if !crate::fed::enabled(&conn) {
+        return "federation: off".into();
+    }
+    let peers = crate::fed::live_peer_count(&conn).unwrap_or(0);
+    format!("federation: on ({peers} peers)")
+}
+
+#[cfg(test)]
+mod federation_line_tests {
+    use super::*;
+
+    #[test]
+    fn reports_off_then_on_with_the_peer_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("axon.db");
+        let conn = crate::store::init(&db).unwrap();
+        assert_eq!(federation_line(&db), "federation: off");
+        crate::fed::enable(dir.path(), &conn, true).unwrap();
+        assert_eq!(federation_line(&db), "federation: on (0 peers)");
+        conn.execute(
+            "INSERT INTO peers (peer_id,node_id,label,generation,state,paired_at)
+             VALUES ('p','n','alice',1,'active',1)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(federation_line(&db), "federation: on (1 peers)");
+    }
 }
 
 #[cfg(test)]

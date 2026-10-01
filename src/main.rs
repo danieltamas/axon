@@ -124,7 +124,12 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     }
     let dashboard = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
-    server::serve(addr, state, dashboard).await
+    let federation = axon_bus::serve::fed_start(&db).await;
+    let served = server::serve(addr, state, dashboard).await;
+    if let Some(federation) = federation {
+        federation.shutdown().await;
+    }
+    served
 }
 
 /// Keep the dashboard live by re-scanning whenever a log file changes (via `notify`
