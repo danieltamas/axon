@@ -31,6 +31,7 @@ budget, stop or end them.
 | **Audit and replay**: hash-chained audit log, replay of a JSONL transcript corpus | ✅ |
 | **Usage brain**: a live view of models firing, sized by spend | ✅ |
 | **RTK**: Rust Token Killer's token savings, if installed | ✅ |
+| **Desktop app**: install the dashboard as an app from the browser; when `axon` is not running it shows how to start it and comes back by itself | ✅ |
 | Shareable cards, OTEL export | planned |
 
 ## Install

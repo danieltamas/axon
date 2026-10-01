@@ -3,41 +3,44 @@
 Checked 2026-10-01 against 26 commits ahead of `main` (121 files, +16.2K / −216). The branch
 has never been pushed.
 
-## Verdict
+## Status
 
-**Not ready to tag.** It is ready to push as a PR once three mechanical items are fixed (fmt,
-the one red test, the stale `bin/` install path). Before tagging, also: the privacy findings
-(R1–R5) re-verified, a version bump, and README/DESIGN brought up to date.
+All six blockers below are closed on the branch. What remains is the push sequence: PR, the CI
+matrix (Windows is the first real run), merge, version bump and tag.
 
-## Evidence (run locally, same commands as `.github/workflows/ci.yml`)
+| # | Blocker | Resolution |
+|---|---|---|
+| 1 | fmt drift | `2014723 style: cargo fmt` |
+| 2 | Red acceptance test | `61741e4`, `012aa8c`: the test now uses a synthetic unpriced model id; green |
+| 3 | `bin/` + README install path | `b8d872a`: `bin/` removed, README installs from GitHub Releases |
+| 4 | R1–R5 re-check | Codex re-review: all five FIXED (R5 partial until #10 below) |
+| 5 | R6 transcript swap | `cfc4d43`, `00f48c3`: matched on evidence; interleaved sessions stay unattributed |
+| 6 | Cross-vendor review of the later commits | Codex review of `90f9d55..61f7916`; findings closed below |
 
-| CI step | Result |
-|---|---|
-| `cargo fmt --all --check` | **fails**: 9 files (8 in `crates/axon-bus/src`, `src/server.rs`), pre-existing drift |
-| `cargo clippy --workspace --all-targets -- -D warnings` | passes |
-| `cargo test --workspace --all-targets` (macOS arm64) | **1 failure**: `test_4_usd_only_budget_denies_unpriced_captured_model` (frozen acceptance test; the second previously known failure now passes) |
-| Windows / Linux / macOS-13 test matrix | **not verified**; only `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu` targets are installed here |
+### Second Codex review (`61f7916`), findings
 
-## Blockers, in order
+| # | Finding | Status |
+|---|---|---|
+| 1 | P1 pid reuse can end another process | FIXED `73fc617`: requests carry `{id, started_ms}`; a pid whose start time differs is refused |
+| 2 | P1 basename is weak session identity | **Accepted risk**: only a caller with the per-boot token can ask, and anyone who can run a binary named `codex` already controls the account |
+| 3 | P1 R6 swaps resumed sessions | FIXED `00f48c3` |
+| 4 | P1 Hermes install corrupts valid YAML | FIXED `dc357b2`: commented and indentless `hooks:` blocks merge; `hooks: {}` is refused |
+| 5 | P2 Windows hook commands omit `bus` | FIXED `deab640`: `.exe` and backslash paths keep the verb; cmd double quotes |
+| 6 | P2 failed reads cached as success | FIXED `5e82225`: unreadable sources stay unstamped |
+| 7 | P2 cache identity misses changes | FIXED `5e82225`: parser version, bundled prices and subagent `.meta.json` key the stamp |
+| 8 | P2 truncated Codex history double-counts | **Deferred**: pre-existing in 0.2.1, needs baseline reconciliation in ingest |
+| 9 | P2 wiring check accepts missing hooks | FIXED `43f383b`: every required event, and OpenCode registration |
+| 10 | P2 numeric access tokens disclosed | FIXED `8bb00f4`: only `*tokens` / `token_count` count fields stay readable |
 
-1. **fmt drift.** Run `cargo fmt --all` as its own `style:` commit. CI fails on it otherwise.
-2. **Red acceptance test.** `test_4_usd_only_budget_denies_unpriced_captured_model`: an
-   unpriced captured model must be denied under a USD-only budget. Fix it in `src`; the test is
-   frozen.
-3. **`bin/` + README install path.** The README installs from `raw/main/bin/axon-*`: 17 MB of
-   0.2.1-era binaries committed to git. After the merge, `curl` users get the old binary while
-   the README describes the new app. Recommendation: delete `bin/` and point Install at the
-   GitHub Release installers that dist already generates (shell, PowerShell, Homebrew).
-4. **Privacy review status.** `docs/reviews/codex-bus-observed-2026-09-30.md`: R1–R5 (P1:
-   capture-flag bypass, cross-server lease leak, gate fail-open on a DB lock, message bodies
-   bypassing redaction, redactor misses) were addressed in `90f9d55`. They need an independent
-   re-check before a public release, because content capture is now **on by default**.
-5. **R6 is now user-facing.** R6 (P2): two processes in the same directory can swap
-   transcripts. With per-card **End**, a swapped mission line can lead someone to end the wrong
-   session. The signal itself targets the pid shown, so the risk is mislabelling, not
-   mistargeting. Fix it, or show only pid and model on cards where the match is ambiguous.
-6. **Cross-vendor review** of the commits after `90f9d55` (hook wiring, `/api/end` process
-   signalling, incremental scan). None of them has been reviewed by a second vendor.
+### Known limitations (release notes)
+
+- **Two versions, one database.** Each binary keys the scan cache on its own version, so a
+  0.2.x and a 0.3.0 `axon` running at the same time clear each other's stamps and every scan
+  becomes a full re-read (15.9 s observed against 0.7 s). Stop the old one after upgrading.
+- **Two servers starting at once** can hit `database is locked` on startup; the second start
+  succeeds on retry.
+- **CLI guard on Windows bash** splits commands on `/` and `\`, so an argument that merely
+  contains a backslash path ending in `axon` is still parsed as an invocation.
 
 ## Release mechanics
 
@@ -60,20 +63,13 @@ the one red test, the stale `bin/` install path). Before tagging, also: the priv
     path) leaves hooks pointing at a deleted binary until the next `axon` start.
   - Claude Code treats a missing hook command as non-blocking. Not verified for Codex, OpenCode
     or Hermes.
-- **Windows:** hook commands are written with POSIX single-quote escaping, and `/api/end`
-  sends SIGTERM (sysinfo returns false where unsupported). The Windows CI job is the first
+- **Windows:** hook commands use forward slashes and cmd double quotes; `/api/end` relies on
+  sysinfo's terminate, which returns false where unsupported. The Windows CI job is the first
   real test of both.
-- **MSRV:** `rust-version = "1.74"` has not been checked against the new dependency set
-  (sysinfo 0.33, toml_edit 0.22, axum 0.7). Add a `cargo +1.74 check` job, or raise the
-  declared MSRV to what the lockfile needs.
+- **MSRV:** `rust-version = "1.86"`, checked by the `msrv` CI job (`61f7916`).
 - **crates.io:** not part of the flow. If it becomes one, `axon-bus` must be published first
   and the root's `axon-bus = { path = … }` dependency needs a `version`.
-- **Repo hygiene:**
-  - `graphify-out/` is untracked; add it to `.gitignore`.
-  - `.playwright-mcp/` is already ignored.
-  - `ui/dist/index.html` (the old Mission Control page) is still tracked, but nothing embeds it
-    any more (no `RustEmbed` or `ui/dist` reference in `src/` or `crates/`), and `rust-embed`
-    is an unused dependency. Remove both, along with the `ui/dist` lines in `.gitignore`.
+- **Repo hygiene:** done. `graphify-out/` is ignored; `ui/dist` and `rust-embed` are gone.
 
 ## Push sequence
 
@@ -92,7 +88,10 @@ the one red test, the stale `bin/` install path). Before tagging, also: the priv
 
 **One app.** `axon` serves a single dashboard on `127.0.0.1:7777`. It combines the usage
 analytics, the live brain, and the new control plane (`axon bus …`). It installs as a desktop
-app (PWA manifest and icons).
+app (PWA manifest and icons). In a browser, a banner offers installation (Chromium's install
+prompt, or the menu path on Safari). When `axon` is not running, the installed app shows an
+offline page with the command to start it, and returns to the dashboard by itself once it
+answers.
 
 **Zero-setup hooks.** The first run wires Claude Code, Codex, OpenCode and Hermes:
 - config backed up first;
