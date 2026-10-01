@@ -26,7 +26,8 @@ fn agents(conn: &Connection, sql: &str, id: &str) -> rusqlite::Result<Vec<Value>
 const COLUMNS: &str = "a.id,a.harness,a.role,a.status";
 
 /// `agent`'s place on the bus as JSON: parent, live children, linked roots, links proposed
-/// to it, and the other live roots in its repository. None when it is not registered.
+/// to it, and the other live roots in its repository (its parent aside). None when it is
+/// not registered.
 pub fn peers(conn: &Connection, agent: &str) -> anyhow::Result<Option<Value>> {
     let me: Option<(String, Option<String>)> = conn
         .query_row("SELECT harness,cwd FROM agents WHERE id=?1", [agent], |r| {
@@ -43,7 +44,9 @@ pub fn peers(conn: &Connection, agent: &str) -> anyhow::Result<Option<Value>> {
     )?;
     let children = agents(
         conn,
-        &format!("SELECT {COLUMNS} FROM agents a WHERE a.parent_id=?1 AND a.status<>'closed'"),
+        &format!(
+            "SELECT {COLUMNS} FROM agents a WHERE a.parent_id=?1 AND a.status IN ('active','idle')"
+        ),
         agent,
     )?;
     let linked = agents(
@@ -68,7 +71,7 @@ pub fn peers(conn: &Connection, agent: &str) -> anyhow::Result<Option<Value>> {
         .as_deref()
         .and_then(|c| crate::snapshot::repo_of(Path::new(c)));
     let mut same_repo = Vec::new();
-    if let (Some(repo), true) = (&repo, parent.is_empty()) {
+    if let Some(repo) = &repo {
         let mut stmt = conn.prepare(
             "SELECT a.id,a.harness,a.role,a.status,a.cwd FROM agents a
              WHERE a.parent_id IS NULL AND a.status IN ('active','idle') AND a.id<>?1",
@@ -86,6 +89,7 @@ pub fn peers(conn: &Connection, agent: &str) -> anyhow::Result<Option<Value>> {
             let known = linked
                 .iter()
                 .chain(&proposed)
+                .chain(&parent)
                 .any(|l| l["id"] == root["id"]);
             if theirs.as_ref() == Some(repo) && !known {
                 same_repo.push(root);
@@ -158,9 +162,20 @@ pub fn intro(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
         ));
     }
     if peers["same_repo"].as_array().is_some_and(|a| !a.is_empty()) {
+        let how = if is_root {
+            format!(
+                "To message one, propose a link with {bus} link --to <id>; once it accepts, \
+                 you can message each other."
+            )
+        } else {
+            // Links join session roots only; a subagent reaches another session through them.
+            format!(
+                "Only session roots link: to reach one, ask your parent to run \
+                 {bus} link --to <id>."
+            )
+        };
         text.push_str(&format!(
-            "Other sessions in this repository: {}. To message one, propose a link with \
-             {bus} link --to <id>; once it accepts, you can message each other.\n",
+            "Other sessions in this repository: {}. {how}\n",
             listed(&peers["same_repo"])
         ));
     }

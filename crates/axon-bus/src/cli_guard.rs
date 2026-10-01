@@ -9,7 +9,7 @@ use serde_json::Value;
 /// Verbs whose acting agent is `--from`.
 pub(crate) const FROM_VERBS: [&str; 6] = ["send", "ask", "reply", "grant", "link", "accept"];
 /// Verbs whose acting agent is `--agent`.
-pub(crate) const AGENT_VERBS: [&str; 2] = ["claim", "release"];
+pub(crate) const AGENT_VERBS: [&str; 3] = ["claim", "release", "peers"];
 
 /// The shell command of a tool call, in each harness's payload shape.
 pub(crate) fn command(payload: &Value) -> Option<&str> {
@@ -18,9 +18,10 @@ pub(crate) fn command(payload: &Value) -> Option<&str> {
         .find_map(|pointer| payload.pointer(pointer).and_then(Value::as_str))
 }
 
-/// Shell words, with `;`, `&`, `|` and newlines as their own separator words. Quotes and
-/// POSIX backslash escapes are honoured (on Windows a bare backslash is a path separator);
-/// expansions are left as written.
+/// Shell words, with `;`, `&`, `|` and newlines as their own separator words and unquoted
+/// `<` and `>` as their own words. Quotes and POSIX backslash escapes are honoured (on
+/// Windows a bare backslash is a path separator); expansions are left as written. An
+/// unterminated quote ends in a separator: the shell would not run that command as read.
 pub(crate) fn words(command: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -57,6 +58,13 @@ pub(crate) fn words(command: &str) -> Vec<String> {
                 }
                 words.push(";".to_owned());
             }
+            (None, '<' | '>') => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+                words.push(c.to_string());
+            }
             (None, c) if c.is_whitespace() => {
                 if in_word {
                     words.push(std::mem::take(&mut word));
@@ -71,6 +79,9 @@ pub(crate) fn words(command: &str) -> Vec<String> {
     }
     if in_word {
         words.push(word);
+    }
+    if quote.is_some() {
+        words.push(";".to_owned());
     }
     words
 }
