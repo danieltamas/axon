@@ -8,12 +8,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-// The provisional reader location and matcher-group shape live ONLY here. Substitute
+// Codex 0.153.4 accepts this nested shape in hooks.json or equivalent config.toml. Substitute
 // JSON-encoded values, not raw shell strings. Extra group metadata (e.g. matcher) is OK.
-const CODEX_HOOK_FORMAT: (&str, &str) = (
-    "hooks.json",
-    r#"{"hooks":{EVENT:[{"hooks":[{"type":"command","command":COMMAND}]}]}}"#,
-);
+const CODEX_HOOK_FORMAT: &str =
+    r#"{"hooks":{EVENT:[{"hooks":[{"type":"command","command":COMMAND}]}]}}"#;
 const EVENTS: [&str; 7] = [
     "SessionStart",
     "UserPromptSubmit",
@@ -42,7 +40,7 @@ fn config(bus: &Bus) -> PathBuf {
 }
 
 fn hook_file(bus: &Bus) -> PathBuf {
-    bus.home().join(".codex").join(CODEX_HOOK_FORMAT.0)
+    bus.home().join(".codex/hooks.json")
 }
 
 fn command(event: &str) -> String {
@@ -69,7 +67,6 @@ fn command(event: &str) -> String {
 fn event_document(event: &str) -> Value {
     serde_json::from_str(
         &CODEX_HOOK_FORMAT
-            .1
             .replace("EVENT", &serde_json::to_string(event).unwrap())
             .replace("COMMAND", &serde_json::to_string(&command(event)).unwrap()),
     )
@@ -117,27 +114,21 @@ fn read_config(bus: &Bus) -> Value {
 
 fn read_hooks(bus: &Bus) -> Value {
     let path = hook_file(bus);
-    let bytes = fs::read(&path).unwrap_or_else(|error| {
-        panic!(
-            "Codex-readable hooks missing at {}: {error}",
-            path.display()
-        )
-    });
-    parse_json(&bytes)
+    match fs::read(&path) {
+        Ok(bytes) => parse_json(&bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => panic!("cannot read Codex hooks at {}: {error}", path.display()),
+    }
 }
 
-fn assert_installed(bus: &Bus) -> Value {
-    let hooks = read_hooks(bus);
-    let config = read_config(bus);
-    let all_commands: Vec<_> = commands(&hooks)
-        .into_iter()
-        .chain(commands(&config))
-        .collect();
+fn assert_installed(bus: &Bus) -> [Value; 2] {
+    let documents = [read_config(bus), read_hooks(bus)];
+    let all_commands: Vec<_> = documents.iter().flat_map(commands).collect();
     for event in EVENTS {
         let expected = event_document(event);
         assert!(
-            contains_shape(&hooks, &expected),
-            "{event} lacks a readable command group: {hooks}"
+            documents.iter().any(|doc| contains_shape(doc, &expected)),
+            "{event} lacks a readable command group in config.toml or hooks.json: {documents:?}"
         );
         let suffix = format!(" hook codex {event}");
         assert_eq!(
@@ -150,7 +141,7 @@ fn assert_installed(bus: &Bus) -> Value {
             "exactly one current-binary command for {event}, with no obsolete flat copy"
         );
     }
-    hooks
+    documents
 }
 
 fn seed_owner(bus: &Bus) {
@@ -329,7 +320,7 @@ fn uninstall_restores_both_original_files_byte_for_byte() {
 }
 
 #[test]
-fn uninstall_removes_hook_file_created_by_install() {
+fn uninstall_restores_original_absence_of_hooks_json() {
     let bus = Bus::new();
     fs::create_dir_all(config(&bus).parent().unwrap()).unwrap();
     fs::write(config(&bus), OWNER_CONFIG).unwrap();
@@ -368,7 +359,7 @@ fn doctor_rejects_a_nested_command_with_the_wrong_type() {
     bus.init();
     seed_owner(&bus);
     bus.ok(&["install", "--harness", "codex"]);
-    let mut hooks = assert_installed(&bus);
+    let [mut config_doc, mut hooks] = assert_installed(&bus);
     doctor(&bus, true);
     fn change_type(value: &mut Value, command: &str) {
         match value {
@@ -387,8 +378,13 @@ fn doctor_rejects_a_nested_command_with_the_wrong_type() {
             _ => {}
         }
     }
-    change_type(&mut hooks, &command("SessionStart"));
-    fs::write(hook_file(&bus), serde_json::to_vec_pretty(&hooks).unwrap()).unwrap();
+    if contains_shape(&config_doc, &event_document("SessionStart")) {
+        change_type(&mut config_doc, &command("SessionStart"));
+        fs::write(config(&bus), toml::to_string_pretty(&config_doc).unwrap()).unwrap();
+    } else {
+        change_type(&mut hooks, &command("SessionStart"));
+        fs::write(hook_file(&bus), serde_json::to_vec_pretty(&hooks).unwrap()).unwrap();
+    }
     doctor(&bus, false);
 }
 
@@ -398,10 +394,11 @@ fn installed_session_start_command_registers_a_codex_agent() {
     let bus = Bus::new();
     bus.init();
     bus.ok(&["install", "--harness", "codex"]);
-    let hooks = assert_installed(&bus);
+    let documents = assert_installed(&bus);
     let expected = command("SessionStart");
-    let installed = commands(&hooks)
-        .into_iter()
+    let installed = documents
+        .iter()
+        .flat_map(commands)
         .find(|cmd| *cmd == expected)
         .unwrap();
     let payload = bus.fixture("codex", "SessionStart");

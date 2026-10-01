@@ -1,5 +1,5 @@
 //! Frozen working-root contract: real process table -> real ingested rollout -> HTTP.
-//! A copied shell blocks on stdin, keeping its executable name, argv and OS cwd visible.
+//! A tiny executable blocks on stdin, keeping its executable name, argv and OS cwd visible.
 //! No Codex installation, credentials, network API, or changes to the parent's env are used.
 
 #![cfg(unix)]
@@ -9,6 +9,7 @@ use axon_core::{ingest, normalize, pricing::Pricing, store::Store};
 use common::*;
 use serde_json::{json, Value};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -23,16 +24,40 @@ fn sandbox() -> Bus {
 }
 
 fn harness(bus: &Bus, name: &str, cwd: &Path, argv: &[String]) -> Running {
+    // Copying an Apple platform binary can trigger SIGKILL, even after ad-hoc signing.
+    // Compile once per test binary, outside the isolated HOME so rustup can find its toolchain.
+    static FIXTURE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let fixture = FIXTURE.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("fixture.rs");
+        fs::write(
+            &source,
+            "fn main() { std::io::stdin().read_line(&mut String::new()).unwrap(); }",
+        )
+        .unwrap();
+        let output = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg(&source)
+            .arg("-o")
+            .arg(dir.path().join("fixture"))
+            .output()
+            .expect("rustc must be available to compile the process fixture");
+        assert!(
+            output.status.success(),
+            "compiling the process fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read(dir.path().join("fixture")).unwrap()
+    });
     let exe = bus.root.join("bin").join(name);
     if !exe.exists() {
-        // A symlink resolves to `sh` on Linux and would not exercise harness discovery.
-        fs::copy("/bin/sh", &exe).unwrap();
+        // A symlink resolves to its target on Linux and would not exercise harness discovery.
+        fs::write(&exe, fixture).unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let mut command = Command::new(exe);
     bus.isolate(&mut command);
     let child = command
         .current_dir(cwd)
-        .args(["-c", "read -r line", name])
         .args(argv)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
