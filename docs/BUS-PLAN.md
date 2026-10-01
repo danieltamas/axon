@@ -101,7 +101,7 @@ The human saw two dashboards (`axon` on :7777, `axon-bus serve` on :7433) and as
 
 **Measured by:**
 - `cargo test --workspace` green, with `crates/axon-bus/tests` and `tests/m1..m3_fixtures.rs` unchanged;
-- `curl` against :7777: `/` (200, CSP header), `/api/snapshot` (JSON tree), `/api/summary?range=7d` (JSON), `/api/stream` (SSE), POST `/api/msg` without token → 403, `Host: evil.com` → 403;
+- `curl` against :7777: `/` (200, CSP header), `/api/snapshot` (JSON tree), `/api/summary?range=7d` (JSON), `/api/stream` (SSE), POST `/api/msg` without a session → 401, `Host: evil.com` → 403;
 - `hyperfine 'axon bus hook claude PreToolUse < fixture'` vs `axon-bus hook …`: within 1 ms p95;
 - screenshots of both views, light/dark, desktop and 390 px.
 
@@ -283,8 +283,8 @@ The dashboard is served by `agent-bus serve` and embedded in the binary. It need
 **Security:**
 - The server binds `127.0.0.1` only.
 - The Host header is checked to block DNS rebinding.
-- Every POST requires the per-boot token and a matching Origin.
-- `serve` is for single-user hosts. Any local account can load the page and read its token, so on a shared machine another user could read narratives and send messages (audit SEC-7, accepted 2026-09-30).
+- Every POST requires a matching Origin.
+- The dashboard is behind an owner login (P2P-SPEC §1): `axon` and `axon open` print a single-use link (`/#login=<nonce>`, 60 s) that the page trades at `POST /api/session` for an `HttpOnly; SameSite=Strict` cookie (30 days). Nonces and sessions are stored as SHA-256 hashes. Every `/api/*` route, SSE included, needs the cookie; without it the answer is `401 {"error":"sign_in"}`. The page token is gone, so another local account sees only the sign-in screen and can neither read narratives nor send messages as an agent. This closes SEC-7 (accepted 2026-09-30, closed by U0 of the federation job).
 - The CSP is strict: self only, no inline scripts.
 
 ## 8. Testing and backtesting

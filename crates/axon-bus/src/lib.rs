@@ -12,6 +12,7 @@ mod cli_guard;
 mod doctor;
 mod doorbell;
 mod end;
+pub mod fed;
 mod gate;
 mod guide;
 mod hermes_hooks;
@@ -28,7 +29,9 @@ mod replay;
 mod roster;
 mod route;
 pub mod serve;
+pub mod session;
 mod setup;
+mod sha256;
 mod snapshot;
 mod store;
 mod tail;
@@ -358,6 +361,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             store::init(&db)?;
             serve::run(&db, port, ready_file.as_deref(), !no_content)?;
         }
+        Command::Open(args) => println!("{}", session::open_link(&db, &args)?),
         Command::Replay { file, speed } => replay::run(&db, &file, speed)?,
         Command::Doctor => {
             if !doctor::doctor(&db)? {

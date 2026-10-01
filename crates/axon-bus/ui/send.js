@@ -4,6 +4,7 @@
 // `question` is a pending question the operator may answer on its addressee's behalf.
 
 import { el } from "./dom.js";
+import { showSignIn } from "./signin.js";
 
 const MAX = 400;
 const CONFIRM_MS = 4000;
@@ -15,7 +16,7 @@ const ACTIONS = [
   ["sync", "Note", (r) => `Context ${r.to} should have`],
 ];
 
-export function createComposer({ token, routes, thread = null, question = null, drafts, draftKey }) {
+export function createComposer({ routes, thread = null, question = null, drafts, draftKey }) {
   const form = el("form", "composer");
   const answer = question && { to: question.from, from: question.to };
   const actions = ACTIONS.filter(([value]) => value !== "answer" || answer);
@@ -72,10 +73,11 @@ export function createComposer({ token, routes, thread = null, question = null, 
     send.disabled = true;
     const response = await fetch("/api/msg", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Axon-Token": token },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }).catch(() => null);
     send.disabled = false;
+    if (response && response.status === 401) showSignIn();
     const reply = response ? await response.json().catch(() => ({})) : {};
     status.dataset.ok = String(Boolean(response && response.ok));
     status.textContent = !response ? "The dashboard lost its server. Retry once it reconnects." : response.ok ? `${kind === "stop" ? "Stop sent" : "Sent"} to ${r.to}.` : reply.error || `Refused (${response.status}).`;
@@ -140,7 +142,7 @@ function choice(name, legend, options, checked) {
 // Ends open harness sessions (their processes get a terminate signal), for sessions the
 // bus cannot reach. Two deliberate clicks, like a stop; the server re-checks every id.
 // `compact` drops the status line: the outcome shows on the button, the reason in its title.
-export function createEnder({ token, sessions, label, confirm, compact = false }) {
+export function createEnder({ sessions, label, confirm, compact = false }) {
   const box = el("div", compact ? "card-end" : "ender");
   const button = el("button", "stop-button", label);
   button.type = "button";
@@ -164,11 +166,12 @@ export function createEnder({ token, sessions, label, confirm, compact = false }
     button.disabled = true;
     const response = await fetch("/api/end", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Axon-Token": token },
+      headers: { "Content-Type": "application/json" },
       // The start time pins each process, so a pid reused since the page drew is refused.
       body: JSON.stringify({ agents: sessions.map((s) => ({ id: s.id, started_ms: s.started_ms })) }),
     }).catch(() => null);
     button.disabled = false;
+    if (response && response.status === 401) showSignIn();
     const reply = response ? await response.json().catch(() => ({})) : {};
     const ended = (reply.ended || []).length;
     const refused = reply.refused || [];

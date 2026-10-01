@@ -71,6 +71,13 @@ fn main() -> ExitCode {
         let args = std::iter::once("axon bus".into()).chain(std::env::args_os().skip(2));
         return axon_bus::cli_main(args);
     }
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "open") {
+        return axon_bus::session::open_main(
+            &db_path(),
+            std::env::args_os().skip(1),
+            open_in_browser,
+        );
+    }
     let cli = Cli::parse();
     let outcome = if cli.scan_only {
         run_scan_only()
@@ -95,6 +102,12 @@ fn run_scan_only() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn open_in_browser(link: &str) {
+    if let Err(e) = webbrowser::open(link) {
+        eprintln!("axon: couldn't open a browser ({e}); open the link yourself");
+    }
+}
+
 /// Bare `axon`: serve the live dashboard at once and open the browser; the first scan
 /// runs in the background and prints the CLI summary when it lands.
 async fn run_server(cli: &Cli) -> anyhow::Result<()> {
@@ -108,14 +121,6 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     });
     spawn_refresher(state.clone(), cli.port);
 
-    let url = format!("http://127.0.0.1:{}", cli.port);
-    if !cli.no_open {
-        if let Err(e) = webbrowser::open(&url) {
-            eprintln!("axon: couldn't open a browser ({e}); open {url} yourself");
-        }
-    }
-    println!("  serving {url} — live (file-watch) — press Ctrl-C to stop\n");
-
     let db = db_path();
     axon_bus::init(&db)?;
     // Installing Axon is the whole setup: each harness is wired to this binary once.
@@ -123,8 +128,19 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
         axon_bus::ensure_hooks();
     }
     let dashboard = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
+    let link = axon_bus::session::login_link(&db, cli.port)?;
+    println!("Dashboard: {link}");
+    if !cli.no_open {
+        open_in_browser(&link);
+    }
+    println!("  live (file-watch) — press Ctrl-C to stop\n");
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
-    server::serve(addr, state, dashboard).await
+    let federation = axon_bus::serve::fed_start(&db).await;
+    let served = server::serve(addr, state, &db, dashboard).await;
+    if let Some(federation) = federation {
+        federation.shutdown().await;
+    }
+    served
 }
 
 /// Keep the dashboard live by re-scanning whenever a log file changes (via `notify`

@@ -141,6 +141,20 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- Owner login (P2P-SPEC §1): single-use nonces and cookie sessions, both stored as SHA-256 hashes.
+CREATE TABLE IF NOT EXISTS login_nonces (
+    hash       TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_sessions (
+    hash         TEXT PRIMARY KEY,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts           INTEGER NOT NULL,
@@ -154,6 +168,45 @@ CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
+
+-- Federation (docs/P2P-SPEC.md §5). The owner-session tables of the same section live
+-- with the dashboard login code.
+CREATE TABLE IF NOT EXISTS peers (
+  peer_id TEXT PRIMARY KEY,            -- random, local
+  node_id TEXT NOT NULL,               -- remote iroh public key
+  label TEXT NOT NULL,
+  generation INTEGER NOT NULL,         -- new on every pairing of this node_id
+  state TEXT NOT NULL CHECK (state IN ('pending_confirm','active','paused','removed')),
+  local_confirmed_at INTEGER, remote_confirmed_at INTEGER,
+  paired_at INTEGER NOT NULL, paused_at INTEGER, removed_at INTEGER, removed_reason TEXT,
+  last_error TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS peers_live_node ON peers(node_id) WHERE state <> 'removed';
+CREATE TABLE IF NOT EXISTS peer_invites (invite_id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, consumed_by TEXT, cancelled_at INTEGER);
+CREATE TABLE IF NOT EXISTS peer_shares (
+  share_id TEXT PRIMARY KEY, peer_id TEXT NOT NULL, label TEXT NOT NULL,
+  local_repo TEXT,                     -- canonical repo_of path; NULL until this owner maps it
+  inbound INTEGER NOT NULL, outbound INTEGER NOT NULL,
+  remote_inbound INTEGER NOT NULL DEFAULT 0, remote_outbound INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('offered_out','offered_in','active','removed')),
+  root_commit TEXT                     -- matching hint only
+);
+CREATE TABLE IF NOT EXISTS fed_sessions (session TEXT PRIMARY KEY, agent_id TEXT NOT NULL, share_id TEXT NOT NULL, UNIQUE(agent_id, share_id));
+CREATE TABLE IF NOT EXISTS fed_outbox (
+  message_id TEXT PRIMARY KEY, peer_id TEXT NOT NULL, generation INTEGER NOT NULL,
+  share_id TEXT NOT NULL, revision INTEGER NOT NULL, from_agent TEXT NOT NULL,
+  envelope_json TEXT NOT NULL, bytes INTEGER NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('queued','accepted','expired','cancelled','rejected')),
+  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER, last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS fed_inbox (
+  peer_id TEXT NOT NULL, generation INTEGER NOT NULL, message_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL, local_message_id TEXT NOT NULL, accepted_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  PRIMARY KEY (peer_id, generation, message_id)
+);
+CREATE TABLE IF NOT EXISTS fed_remote_sessions (peer_id TEXT NOT NULL, share_id TEXT NOT NULL, session TEXT NOT NULL, label TEXT NOT NULL, availability TEXT NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY (peer_id, session));
+CREATE TABLE IF NOT EXISTS fed_audit (seq INTEGER PRIMARY KEY, ts INTEGER NOT NULL, peer_fingerprint TEXT, generation INTEGER, share_id TEXT, message_id TEXT, direction TEXT, decision TEXT NOT NULL, reason TEXT);
 ";
 
 /// `prev_hash` of the first event.
