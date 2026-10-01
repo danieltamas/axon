@@ -1,0 +1,12 @@
+{
+  "input": {
+    "tool": "bash",
+    "sessionID": "ses_f137e7cbbffe9LW55g4PgBCML1",
+    "callID": "call_612abeb7"
+  },
+  "output": {
+    "args": {
+      "command": "echo parent-tool"
+    }
+  }
+}

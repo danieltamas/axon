@@ -1,0 +1,23 @@
+{
+  "hook_event_name": "pre_llm_call",
+  "tool_name": null,
+  "tool_input": null,
+  "session_id": "20260929_124401_2b08f1",
+  "cwd": "/tmp/axon-fixture/hermes",
+  "extra": {
+    "task_id": "28521200-9da7-44a0-8397-e82d8ebf2dd6",
+    "turn_id": "20260929_124401_2b08f1:28521200-9da7-44a0-8397-e82d8ebf2dd6:365b49c4",
+    "user_message": "Run the shell command `echo parent-tool` with your terminal tool, then delegate a sub-task to a sub-agent: run `echo child-tool`. Reply ok.",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "Run the shell command `echo parent-tool` with your terminal tool, then delegate a sub-task to a sub-agent: run `echo child-tool`. Reply ok."
+      }
+    ],
+    "is_first_turn": true,
+    "model": "gemma4:26b",
+    "platform": "cli",
+    "sender_id": "",
+    "telemetry_schema_version": "hermes.observer.v1"
+  }
+}

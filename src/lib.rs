@@ -9,12 +9,10 @@
 //!
 //! See `DESIGN.md` for the full build spec.
 
+// Moved to `axon-core` (shared with `axon-bus`); re-exported so `axon::<module>` paths are unchanged.
+pub use axon_core::{ingest, model, normalize, pricing, store};
+
 pub mod config;
-pub mod ingest;
-pub mod model;
-pub mod normalize;
-pub mod pricing;
 pub mod rtk;
 pub mod server;
-pub mod store;
 pub mod summary;

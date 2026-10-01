@@ -15,8 +15,8 @@ fixtures in [`tests/fixtures/`](./tests/fixtures/) are the acceptance gates: a c
 
 ## Dev setup
 
-You need a stable Rust toolchain ([rustup](https://rustup.rs)). No Node is required to build —
-`ui/dist` is committed and embedded via `rust-embed`.
+You need a stable Rust toolchain ([rustup](https://rustup.rs)). No Node is required to build:
+the dashboard is plain ES modules in `crates/axon-bus/ui`, embedded in the binary.
 
 ```bash
 cargo build                                  # debug build
@@ -42,7 +42,7 @@ reference implementation):
 3. **Add the parser** as `src/ingest/<harness>.rs`, returning `Vec<RawTurn>`. Wire discovery
    into `src/ingest/mod.rs` and add the variant to `Harness` in `src/model.rs`.
 4. **Map model ids** to canonical form in `canonicalize_model` (and add rates to
-   `assets/pricing.toml` — leave unknown models to surface as `unpriced`, never a silent €0).
+   `crates/axon-core/assets/pricing.toml` — leave unknown models to surface as `unpriced`, never a silent €0).
 5. **Add gate tests** in `tests/` asserting collapse/attribution/cost against your fixture.
 
 ## Coding conventions

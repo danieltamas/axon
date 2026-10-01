@@ -13,6 +13,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all-targets
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # The rust-version declared in Cargo.toml, checked against the locked dependencies.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86
+      - run: cargo check --workspace --locked
+
+  # One runner per released platform (dist-workspace.toml); Linux releases are musl, tests run on the native gnu host.
+  test:
+    name: test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os != 'Windows'
+        run: cargo test --workspace --all-targets --no-fail-fast
+      # Process launches are slow on Windows runners; one test at a time keeps each
+      # acceptance test's launches inside its own time budget.
+      - if: runner.os == 'Windows'
+        run: cargo test --workspace --all-targets --no-fail-fast -- --test-threads=1

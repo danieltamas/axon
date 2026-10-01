@@ -1,0 +1,96 @@
+/* Axon as an installed app: the install banner on the dashboard and the offline page the
+   service worker shows. Tokens come from style.css. */
+
+/* Install banner: a light material over the board, from the corner it returns to. */
+.install {
+  position: fixed; right: 16px; bottom: 16px; z-index: 30;
+  width: min(380px, calc(100vw - 32px));
+  display: grid; grid-template-columns: 36px 1fr; gap: 4px 14px; padding: 16px;
+  border: 1px solid var(--line-strong); border-radius: 14px;
+  background: color-mix(in srgb, var(--raise) 84%, transparent);
+  backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--raise) 60%, transparent) inset, 0 18px 48px -18px rgba(6, 19, 12, 0.35);
+  opacity: 0; transform: translateY(14px) scale(0.98); transform-origin: bottom right;
+  transition: opacity 320ms var(--ease), transform 420ms var(--ease);
+}
+.install[data-state="shown"] { opacity: 1; transform: none; }
+.install[data-state="leaving"] { opacity: 0; transform: translateY(14px) scale(0.98); transition-duration: 200ms, 240ms; }
+.install-mark { width: 36px; height: 36px; padding: 7px; border-radius: 10px; background: var(--signal-wash); fill: none; stroke: var(--signal); stroke-width: 2; }
+.install-copy strong { display: block; font-size: 14px; font-weight: 600; color: var(--ink-strong); letter-spacing: -0.005em; }
+.install-copy p { margin-top: 3px; font-size: 13px; line-height: 1.45; color: var(--muted); }
+.install-actions { grid-column: 2; display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.install-go, .install-later { height: 30px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; transition: transform 100ms ease-out, background 160ms var(--ease); }
+.install-go { border: 0; background: var(--signal); color: var(--raise); }
+.install-later { border: 1px solid var(--line-strong); background: transparent; color: var(--muted); }
+.install-later:hover { color: var(--ink); background: var(--line); }
+.install-go:active, .install-later:active { transform: scale(0.97); }
+.install-hint { font-size: 13px; font-weight: 500; color: var(--ink); }
+
+/* Offline page */
+body.offline { overflow: auto; background: var(--ground); }
+.off {
+  width: min(520px, 100% - 32px); margin: clamp(48px, 16vh, 160px) auto 64px;
+  display: flex; flex-direction: column; align-items: flex-start;
+}
+.off-mark { width: 116px; height: 116px; margin-left: -10px; overflow: visible; }
+.off-wire { fill: none; stroke: var(--wire); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 3 9; transition: stroke 500ms var(--ease); }
+.off-node { fill: var(--raise); stroke: var(--wire); stroke-width: 2.5; transition: fill 500ms var(--ease), stroke 500ms var(--ease); }
+.off-core { stroke: var(--signal); }
+.off-title { margin-top: 28px; font-size: clamp(30px, 5vw, 40px); line-height: 1.08; letter-spacing: -0.022em; font-weight: 600; color: var(--ink-strong); }
+.off-lede { margin-top: 12px; max-width: 44ch; font-size: 16px; line-height: 1.55; color: var(--muted); }
+
+.off-command {
+  align-self: stretch; margin-top: 28px; display: flex; align-items: center; gap: 12px;
+  padding: 10px 10px 10px 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--raise);
+}
+.off-command code { flex: 1; min-width: 0; font: 500 17px/1.4 var(--mono); color: var(--ink-strong); overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.off-command code::before { content: "$ "; color: var(--faint); }
+.off-command-small { margin-top: 10px; padding: 8px 8px 8px 14px; }
+.off-command-small code { font-size: 12px; font-weight: 400; color: var(--ink); }
+.off-copy {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 13px;
+  transition: transform 100ms ease-out, color 160ms var(--ease), border-color 160ms var(--ease);
+}
+.off-copy:hover { color: var(--ink); border-color: var(--line-strong); }
+.off-copy:active { transform: scale(0.96); }
+.off-copy svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+
+.off-status { margin-top: 18px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.off-pulse { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.off-pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit; opacity: 0.5; }
+
+.off-elsewhere { margin-top: 14px; font-size: 13px; color: var(--muted); }
+.off-elsewhere a { color: var(--ink); text-underline-offset: 3px; }
+.off-more { margin-top: 44px; align-self: stretch; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.off-more summary { cursor: pointer; width: fit-content; display: flex; align-items: center; gap: 8px; list-style: none; color: var(--ink); font-weight: 500; }
+.off-more summary::-webkit-details-marker { display: none; }
+.off-more summary::before { content: ""; width: 6px; height: 6px; border: solid var(--faint); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform 200ms var(--ease); }
+.off-more[open] summary::before { transform: rotate(45deg) translate(-2px, -1px); }
+.off-more p { margin-top: 10px; }
+.off-more p code { font-family: var(--mono); color: var(--ink); }
+
+body[data-state="back"] .off-wire { stroke: var(--signal); stroke-dasharray: none; }
+body[data-state="back"] .off-node { fill: var(--signal-wash); stroke: var(--signal); }
+body[data-state="back"] .off-pulse { background: var(--signal); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .off-wire { animation: off-drift 2.4s linear infinite; }
+  body[data-state="back"] .off-wire { animation: none; }
+  .off-pulse::after { animation: off-breathe 2.4s var(--ease) infinite; }
+  body[data-state="back"] .off { transition: opacity 600ms var(--ease) 200ms; opacity: 0.6; }
+}
+@keyframes off-drift { to { stroke-dashoffset: -24; } }
+@keyframes off-breathe { from { transform: scale(1); opacity: 0.5; } to { transform: scale(2.6); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .install, .install[data-state="leaving"] { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .install { background: var(--raise); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (max-width: 520px) {
+  .install { grid-template-columns: 1fr; }
+  .install-mark { display: none; }
+  .install-actions { grid-column: 1; }
+}

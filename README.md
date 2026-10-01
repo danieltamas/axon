@@ -1,113 +1,95 @@
 <p align="center">
-  <img src="assets/socials/axon-github-banner-1280x640.png" alt="Axon — local, harness-agnostic observability for AI coding agents" width="100%">
+  <img src="assets/socials/axon-github-banner-1280x640.png" alt="Axon: local observability and control for AI coding agents" width="100%">
 </p>
 
 # Axon
 
-**Local, harness-agnostic observability for AI coding agents — one Rust binary, in your browser.**
+**See every AI coding agent on your machine, what it costs, and steer it, from one local dashboard.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Status: early access](https://img.shields.io/badge/status-early%20access-orange.svg)](#roadmap)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg?logo=rust)](https://www.rust-lang.org)
 
-Axon reads the logs your AI coding-agent harnesses **already write** — Claude Code, Codex,
-OpenCode — and shows *which harness, project, agent, and model* is working, how fast, at what
-cost, and how much code it's producing. The signature view is a live three.js "brain" of your
-models firing in real time; alongside it sit per-agent/model cost & attribution, local
-leaderboards, budget alerts, and shareable cards.
+Axon reads the logs your coding-agent harnesses already write (Claude Code, Codex, OpenCode,
+Hermes) and wires itself into their hooks. One `axon` binary then shows which sessions and
+subagents are running in which project, what each one is doing and costs, and lets you message,
+budget, stop or end them.
 
-**100% local. No server. No account. Nothing leaves your machine.**
-
-> [!NOTE]
-> **Early access.** Working today: **cross-harness ingestion** (Claude Code, Codex, OpenCode)
-> with exact per-sub-agent attribution, a **live local dashboard** (`axon`), budget awareness,
-> and RTK token-savings — plus headless JSON (`axon --scan-only`). The three.js "brain" and
-> shareable cards are next — see the [roadmap](#roadmap). The complete, fixture-verified build
-> spec lives in **[DESIGN.md](./DESIGN.md)**.
+**100% local. No account. Nothing leaves your machine.**
 
 ## What it does
 
-| | Capability | Status |
-|---|---|---|
-| 🧩 | **Cross-harness** ingest from the logs harnesses already write — Claude Code, Codex, OpenCode (Ollama via OpenCode) | ✅ |
-| 🎯 | **Exact per-named-agent attribution** — see what each sub-agent (`coder`, `security`, `Explore`…) actually cost, no heuristics | ✅ |
-| 💸 | **Cost & budget awareness** — per model/agent/harness, today/this-week spend with daily/weekly budget alerts | ✅ |
-| 🖥️ | **Live local dashboard** — auto-refreshing telemetry instrument at `localhost`, no restart | ✅ |
-| ♻️ | **RTK integration** — surfaces Rust Token Killer's token savings, if installed | ✅ |
-| 🧠 | **Live "brain"** — three.js view of models firing, sized by cost | 🔭 |
-| 🏆 | **Local leaderboards + Hall of Fame** and shareable PNG/WebM cards | 🔭 |
-| 🔒 | **Enforced privacy** — loopback-only + Origin checks, assets bundled, SQLite `0600`, zero egress by default | ✅ |
-
-Legend: ✅ available · 🚧 in progress · 🔭 planned.
-
-## Why Axon
-
-| | Axon | `ccusage` | Langfuse / Grafana+OTEL |
-|---|---|---|---|
-| Scope | **Cross-harness** | Claude Code only | App-level / Claude-only |
-| Per-named-agent attribution | **✅ exact** | ✗ | ✗ |
-| Local, single binary | **✅** | ✅ (npx) | ✗ (Docker + Postgres/Clickhouse) |
-| Live visual + budget alerts | **✅ (planned)** | ✗ | partial |
-| Account / server required | **No** | No | Yes |
-
-`ccusage` is the instant incumbent for Claude-only token tables. Axon's wedge is
-**cross-harness cost + exact per-agent attribution in one local pane**, with a live visual on
-top — the gap nobody fills.
+| Capability | |
+|---|---|
+| **Live topology**: every project, its sessions grouped as Needs you / Working / Idle / Closed, subagents beside their session, a 24 h activity chart | ✅ |
+| **Observed sessions**: harness processes started before Axon are found from the process table, with transcript narrative ("Now / Said / Ran"), model, tokens, cost and memory | ✅ |
+| **End sessions**: end one idle session from its card or every idle one in a project; two-click confirm, re-checked by the server | ✅ |
+| **Messages between agents**: each agent is told its bus id, whom it can reach and which sessions in its repo it could link with; `send` / `reply` along edges, root-to-root `link` / `accept`, per-thread `grant`, `peers`, operator messages from the dashboard. An agent's bus commands run through its hook, so they work inside a sandbox | ✅ |
+| **Budgets and stops**: token and USD ceilings per tree or agent; warn at 80 %, a stop gate at 100 % | ✅ |
+| **Cross-harness cost**: exact per-subagent attribution, per model / agent / harness, today / week / month spend with budget alerts | ✅ |
+| **Coordination**: path `claim`s in a checkout, task routing from `routes.toml` | ✅ |
+| **Audit and replay**: hash-chained audit log, replay of a JSONL transcript corpus | ✅ |
+| **Usage brain**: a live view of models firing, sized by spend | ✅ |
+| **RTK**: Rust Token Killer's token savings, if installed | ✅ |
+| **Desktop app**: install the dashboard as an app from the browser; when `axon` is not running it shows how to start it and comes back by itself | ✅ |
+| Shareable cards, OTEL export | planned |
 
 ## Install
 
-Prebuilt, self-contained binaries live in [`bin/`](./bin/) — no toolchain needed, nothing to
-configure. Each command below downloads one and installs it as the `axon` command on your
-`PATH`, so afterwards you just type **`axon`** anywhere and the dashboard starts.
-
 ```bash
-# macOS (universal — Apple Silicon + Intel)
-curl -fsSL https://github.com/danieltamas/axon/raw/main/bin/axon-macos -o /tmp/axon
-xattr -d com.apple.quarantine /tmp/axon 2>/dev/null   # unsigned: clear Gatekeeper quarantine
-sudo install -m 0755 /tmp/axon /usr/local/bin/axon
-axon                                                  # scans your logs, opens the dashboard
+# macOS and Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/danieltamas/axon/releases/latest/download/axon-installer.sh | sh
 
-# Linux x86_64 (use axon-linux-arm64 on ARM: Graviton, Pi, Asahi)
-curl -fsSL https://github.com/danieltamas/axon/raw/main/bin/axon-linux-x64 -o /tmp/axon
-sudo install -m 0755 /tmp/axon /usr/local/bin/axon
-axon
+# Homebrew
+brew install danieltamas/tap/axon
 ```
 
-**No `sudo`?** Install into a user dir that's already on your `PATH` instead — e.g.
-`install -m 0755 /tmp/axon ~/.local/bin/axon`, or `~/.cargo/bin/axon` if you have Rust. (If the
-chosen dir isn't on your `PATH` yet, add it: `export PATH="$HOME/.local/bin:$PATH"`.)
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/danieltamas/axon/releases/latest/download/axon-installer.ps1 | iex"
+```
 
-Checksums: [`bin/SHA256SUMS`](./bin/SHA256SUMS). Prefer to build it yourself? With
-[Rust](https://rustup.rs) installed, clone this repo and run `cargo install --path .` — that
-compiles and drops the `axon` command into `~/.cargo/bin`. The Homebrew / `curl | sh` one-liners
-arrive with the first tagged GitHub release.
+Each [release](https://github.com/danieltamas/axon/releases) also carries plain archives and
+checksums for macOS (Apple Silicon, Intel), Linux (x86_64, arm64; static musl) and Windows.
+From source, with [Rust](https://rustup.rs): `cargo install --path .` in a clone.
+
+The first run wires Axon into the harnesses it finds: hooks in their own configs that run this
+`axon`, which is what makes messages, budgets and stops work. Each config is backed up first;
+`axon bus uninstall` restores it byte for byte, and `axon --no-hooks` leaves them alone. If you
+move or reinstall `axon`, the hooks are repointed on its next run.
+
+> [!NOTE]
+> **Upgrading from 0.2.x** moves Axon's usage rows to a new table and re-reads your logs once on
+> the first start (in the background; the dashboard is up immediately). The migration is
+> one-way: don't run 0.2.x against the database afterwards.
 
 ## Usage
 
 ```bash
-# Start the live dashboard and open the browser (re-scans in the background):
-axon                 # serves http://127.0.0.1:7777
+axon                      # serves http://127.0.0.1:7777 and opens it
 axon --port 8080 --no-open
+axon --no-content         # structure only: turns, tokens and tool names, never text
+axon --scan-only          # headless: scan the logs, print a JSON summary, exit
 
-# Headless — scan your logs, print a JSON summary, then exit:
-axon --scan-only
+axon bus --help           # the control plane: send, ask, budget, claim, audit, doctor…
+axon bus budget set <root> 2Mtok --usd 20
+axon bus doctor           # which harnesses are wired
 ```
 
-Both commands scan **all three harnesses** — `~/.claude/projects/`, `~/.codex/sessions/`, and
-OpenCode's `opencode.db`. Optional budget caps live in `~/.config/axon/config.toml` (see
-[`assets/config.example.toml`](./assets/config.example.toml)); the dashboard's Spend panel and
-the CLI then show today/this-week spend with amber/red alerts.
+Axon scans `~/.claude/projects/`, `~/.codex/sessions/`, OpenCode's `opencode.db` and
+ccflare-family proxy databases. Only logs that changed since the last scan are read again, so
+a restart and the live refresh stay fast however much history you have. Budget caps live in
+`~/.config/axon/config.toml` (see [`assets/config.example.toml`](./assets/config.example.toml)).
 
-`axon --scan-only` collapses each turn, attributes every sub-agent, and prints totals plus
-per-model, per-agent, and per-harness breakdowns:
+`axon --scan-only` prints totals plus per-model, per-agent and per-harness breakdowns:
 
 ```jsonc
 {
   "events": 38483,
   "sessions": 206,
   "tokens_out": 36320161,
-  "cost_eur": 8187.32,                    // computed from pricing.toml (USD rates × fx → EUR)
-  "unpriced_models": ["gpt-5.4"],        // models missing from the map, surfaced loudly (cost is a floor)
+  "cost_eur": 8187.32,                    // computed from pricing.toml (USD rates × fx)
+  "unpriced_models": ["gpt-5.4"],        // models missing from the map: cost is a floor
   "today_cost_eur": 409.96,
   "by_harness": [
     { "harness": "claude-code", "cost_eur": 6963.44 },
@@ -117,37 +99,42 @@ per-model, per-agent, and per-harness breakdowns:
 }
 ```
 
-Rates are USD (from each provider's docs) converted to EUR via `fx_to_display` in
-[`assets/pricing.toml`](./assets/pricing.toml) (override at `~/.config/axon/pricing.toml`).
-A model missing from the map is flagged **`unpriced`** (its cost is a floor) rather than a
-silent €0; local/Ollama models are free. OpenCode's own per-message cost is used directly.
+Rates are USD from each provider's docs, converted via `fx_to_display` in
+[`crates/axon-core/assets/pricing.toml`](./crates/axon-core/assets/pricing.toml) (override at
+`~/.config/axon/pricing.toml`). A model missing from the map is flagged **unpriced** rather than
+counted as free; local models are free; OpenCode's own per-message cost is used directly.
 
 ## How it works
 
-`axon` parses `~/.claude` (and, soon, `~/.codex` / OpenCode) logs into a normalized event,
-stores them in an embedded SQLite database, and serves an embedded **Vue 3 + TresJS**
-dashboard. Live updates come from file-watch → SSE; the numbers always come from SQLite (the
-source of truth). `ui/dist` is committed and embedded via `rust-embed`, so `cargo install
-axon` needs no Node toolchain. See **[DESIGN.md](./DESIGN.md)** for the verified data schemas
-(§6 + Appendix A are checked against real logs — trust them over intuition).
+Three crates in one workspace:
+- `axon-core`: harness log ingest, normalisation, pricing and the SQLite store.
+- `axon-bus`: the control plane, with registry, hooks, routed messages, budgets, claims and
+  the audit log, plus the dashboard it serves.
+- `axon`: the app that ties them together.
+
+Harness hooks call `axon bus hook …` on each event. The dashboard is plain ES modules embedded
+in the binary, live over SSE, and SQLite is the source of truth. See
+[DESIGN.md](./DESIGN.md) for the ingest schemas and [docs/BUS-PLAN.md](./docs/BUS-PLAN.md) for
+the control plane.
 
 ## Privacy
 
-Loopback-only bind (`127.0.0.1`/`[::1]`) + Origin checks; every UI asset bundled (enforced
-zero-outbound — no CDN); SQLite stored `0600` in a `0700` directory. Share-cards redact
-project/branch by default. Nothing leaves your machine unless you export a file or opt into
-`--otel`. See [DESIGN.md §16](./DESIGN.md).
+- The server binds loopback only (`127.0.0.1`).
+- Every write API checks the Host and Origin headers and needs a per-boot token.
+- All UI assets are bundled, so nothing loads from a CDN.
+- SQLite is stored `0600` in a `0700` directory.
+- Agents' conversation text is captured by default for the narrative view, with credentials
+  redacted. Run `axon --no-content` for structure only.
+- Agents cannot start a capture-on server themselves.
+- Nothing leaves your machine unless you export a file or opt into `--otel`.
 
 ## Roadmap
 
-- **M1 — Claude ingest + store (headless)** ✅ *collapse-by-`message.id`, exact sub-agent attribution, cost/LOC engine, SQLite, `--scan-only`.*
-- **M2 — Codex + OpenCode** 🔭 *verify real logs, canonical model map, real € rates.*
-- **M3 — Server + analytics UI** 🔭 *axum + `/api/*` + embedded Vue; leaderboards, drill-down, budget alerts, CSV/JSON export.*
-- **M4 — Brain + live** 🔭 *file-watch → SSE, Mission-Control landing, 60fps perf gates.*
-- **M5 — Cards/clips + packaging** 🔭 *PNG/WebM, weekly recap, cross-compiled releases, installer, Homebrew.*
-- **M6 — OTEL export (optional)** 🔭
-
-Full detail in [DESIGN.md §14](./DESIGN.md).
+- **Done:** cross-harness ingest (Claude Code, Codex, OpenCode, ccflare); live dashboard and
+  usage brain; the control plane (registry, hooks, messages, budgets, claims, audit, replay);
+  observed sessions and ending them; incremental scanning; releases with installers.
+- **Next:** shareable cards and weekly recap; spawning real agents from `routes.toml`; OTEL
+  export.
 
 ## Contributing
 

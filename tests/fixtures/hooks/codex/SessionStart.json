@@ -1,0 +1,9 @@
+{
+  "session_id": "01a0ec7f-c7d6-74b1-a2e0-80218a9702aa",
+  "transcript_path": "/Users/user/.codex/sessions/2026/09/29/rollout-2026-09-29T12-29-52-01a0ec7f-c7d6-74b1-a2e0-80218a9702aa.jsonl",
+  "cwd": "/tmp/axon-fixture/codex",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-6-astra",
+  "permission_mode": "default",
+  "source": "startup"
+}

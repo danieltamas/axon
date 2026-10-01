@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "subagent_stop",
+  "tool_name": null,
+  "tool_input": null,
+  "session_id": "20260929_124401_2b08f1",
+  "cwd": "/tmp/axon-fixture/hermes",
+  "extra": {
+    "parent_turn_id": "20260929_124401_2b08f1:28521200-9da7-44a0-8397-e82d8ebf2dd6:365b49c4",
+    "child_session_id": "20260929_124416_605841",
+    "child_role": "leaf",
+    "child_summary": "I have successfully executed the command `echo child-tool`.\n\n**Results:**\n- Output: `child-tool`\n- Exit Code: 0",
+    "child_status": "completed",
+    "duration_ms": 3600,
+    "telemetry_schema_version": "hermes.observer.v1"
+  }
+}
