@@ -45,6 +45,16 @@ impl Bus {
     pub fn with_limit(limit: Duration) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
+        // Git and slash-separated fixture paths need a non-verbatim drive path on Windows.
+        #[cfg(windows)]
+        let root = {
+            let path = root.to_str().unwrap();
+            PathBuf::from(
+                path.strip_prefix(r"\\?\")
+                    .filter(|path| path.as_bytes().get(1) == Some(&b':'))
+                    .unwrap_or(path),
+            )
+        };
         for dir in ["home", "data", "config", "cache", "work", "tmp"] {
             fs::create_dir(root.join(dir)).unwrap();
         }
