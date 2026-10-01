@@ -92,11 +92,20 @@ pub(crate) fn backup_path(config: &Path) -> PathBuf {
     config.with_file_name(name)
 }
 
-/// The installed binary, quoted for the shell-style command lines harnesses run.
+/// The installed binary, quoted for the shell-style command lines harnesses run. Windows
+/// paths use forward slashes, which cmd, PowerShell and Git Bash all accept unquoted, and
+/// double quotes when they hold a space, since cmd has no single quotes.
 pub(crate) fn command(exe: &str, harness: Harness, event: &str) -> String {
     let safe = |c: char| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c);
-    let exe = if exe.chars().all(safe) {
+    let exe = if cfg!(windows) {
+        exe.replace('\\', "/")
+    } else {
         exe.to_owned()
+    };
+    let exe = if exe.chars().all(safe) {
+        exe
+    } else if cfg!(windows) {
+        format!("\"{exe}\"")
     } else {
         format!("'{}'", exe.replace('\'', r"'\''"))
     };
@@ -105,12 +114,7 @@ pub(crate) fn command(exe: &str, harness: Harness, event: &str) -> String {
 
 /// `axon` runs the bus as a subcommand; the `axon-bus` alias takes the verb directly.
 fn bus_verb(exe: &str) -> &'static str {
-    let name = exe
-        .trim_matches('\'')
-        .rsplit('/')
-        .next()
-        .unwrap_or_default();
-    if name == "axon" || name == "axon.exe" {
+    if binary_name(exe) == "axon" {
         " bus"
     } else {
         ""
@@ -125,9 +129,18 @@ pub(crate) fn is_bus_command(text: &str, harness: Harness, event: &str) -> bool 
     };
     // `axon bus hook …`, `axon-bus hook …`, and the bare `axon hook …` an earlier
     // install wrote by mistake, so a reinstall repoints it.
-    let exe = exe.strip_suffix(" bus").unwrap_or(exe).trim_matches('\'');
-    let name = exe.rsplit('/').next().unwrap_or_default();
+    let name = binary_name(exe.strip_suffix(" bus").unwrap_or(exe));
     name == "axon-bus" || name == "axon"
+}
+
+/// The binary's name without quotes, directories or a Windows `.exe`.
+fn binary_name(exe: &str) -> &str {
+    let file = exe
+        .trim_matches(['\'', '"'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    file.strip_suffix(".exe").unwrap_or(file)
 }
 
 /// Whether a Codex hook entry (inline or `[[hooks.Event]]` table) runs this bus hook.

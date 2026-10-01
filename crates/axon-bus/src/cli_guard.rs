@@ -91,7 +91,8 @@ enum Invocation {
 /// Whether `words[i]` runs a bus command: `axon-bus` anywhere (as before), `axon` only in
 /// command position, since a path ending in `/axon` is usually a directory.
 fn invocation(words: &[String], i: usize) -> Option<Invocation> {
-    match words[i].rsplit('/').next()? {
+    let file = words[i].rsplit(['/', '\\']).next()?;
+    match file.strip_suffix(".exe").unwrap_or(file) {
         "axon-bus" => Some(Invocation::Bus(i + 1)),
         "axon" => {
             let before = i.checked_sub(1).map(|b| words[b].as_str());
