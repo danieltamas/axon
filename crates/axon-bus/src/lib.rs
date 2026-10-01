@@ -19,6 +19,8 @@ mod install;
 mod memory;
 mod msg;
 mod observed;
+mod opencode_plugin;
+mod redact;
 mod registry;
 mod replay;
 mod route;

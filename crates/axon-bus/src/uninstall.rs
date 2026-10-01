@@ -7,9 +7,10 @@ use std::fs;
 use anyhow::{bail, Context};
 use serde_json::{json, Value};
 
+use crate::hermes_hooks::HERMES_MARKER;
 use crate::install::{
     backup_path, current_exe, edited_since_install, is_bus_command, is_codex_bus_entry, layout,
-    read_optional, wire, Layout, CLAUDE_EVENTS, CODEX_EVENTS, HERMES_MARKER,
+    read_optional, wire, Layout, CLAUDE_EVENTS, CODEX_EVENTS,
 };
 use crate::Harness;
 

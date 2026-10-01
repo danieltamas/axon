@@ -1,8 +1,8 @@
 //! SQLite persistence (DESIGN.md §9, §16). Events are keyed on their idempotent `id`, so a
 //! boot-scan, a re-scan, and (later) a live-tail delta all converge to the same row set.
 //!
-//! `scanned_sources` remembers each log's size and mtime when it was last read, so a scan
-//! re-reads only the logs that changed.
+//! `scanned_sources` remembers each log's identity when it was last read, so a scan re-reads
+//! only the logs that changed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,9 +40,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_agent ON usage_events(agent);
 CREATE TABLE IF NOT EXISTS scanned_sources (
-    path      TEXT PRIMARY KEY,
-    size      INTEGER NOT NULL,
-    mtime_ms  INTEGER NOT NULL
+    path   TEXT PRIMARY KEY,
+    stamp  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scan_meta (
     key    TEXT PRIMARY KEY,
@@ -50,8 +49,8 @@ CREATE TABLE IF NOT EXISTS scan_meta (
 );
 ";
 
-/// A source's size and modification time (epoch ms) when it was last read.
-pub type Stamp = (i64, i64);
+/// The identity of every file a source was read from, compared only for equality.
+pub type Stamp = String;
 
 /// The database shared by `axon` and `axon-bus`: `$XDG_DATA_HOME/axon/axon.db`.
 pub fn default_path() -> PathBuf {
@@ -85,6 +84,7 @@ impl Store {
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
         )?;
         rename_legacy_events(&conn)?;
+        drop_size_mtime_stamps(&conn)?;
         conn.execute_batch(SCHEMA)?;
         migrate_schema(&conn)?;
         if path != ":memory:" {
@@ -130,8 +130,8 @@ impl Store {
         }
         let mut stmt = self
             .conn
-            .prepare("SELECT path, size, mtime_ms FROM scanned_sources")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
+            .prepare("SELECT path, stamp FROM scanned_sources")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -146,11 +146,11 @@ impl Store {
         for e in events {
             upsert_with(&tx, e)?;
         }
-        for (path, (size, mtime_ms)) in stamps {
+        for (path, stamp) in stamps {
             tx.execute(
-                "INSERT INTO scanned_sources (path, size, mtime_ms) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms",
-                params![path, size, mtime_ms],
+                "INSERT INTO scanned_sources (path, stamp) VALUES (?1, ?2) \
+                 ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp",
+                params![path, stamp],
             )?;
         }
         tx.commit()?;
@@ -280,6 +280,15 @@ fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
          WHERE pricing_kind = 'unknown' AND unpriced = 0 AND cost_eur > 0",
         [],
     )?;
+    Ok(())
+}
+
+/// Pre-release builds stamped sources by size and mtime. The table is only a cache, so the
+/// old layout is dropped and every source is read once more.
+fn drop_size_mtime_stamps(conn: &Connection) -> anyhow::Result<()> {
+    if has_column(conn, "scanned_sources", "mtime_ms")? {
+        conn.execute("DROP TABLE scanned_sources", [])?;
+    }
     Ok(())
 }
 

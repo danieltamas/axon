@@ -2,8 +2,19 @@
 //! hooks live there too). Edited as text so the owner's formatting and comments stay:
 //! one `- command: '…'` line per event, under the event's key, added or taken out.
 
-use crate::install::is_bus_command;
+use crate::install::{command, is_bus_command, HERMES_EVENTS};
 use crate::Harness;
+
+pub(crate) const HERMES_MARKER: &str = "# axon-bus hooks; `axon-bus uninstall` removes them\n";
+
+pub(crate) fn hermes_block(exe: &str) -> String {
+    let mut block = format!("{HERMES_MARKER}hooks:\n");
+    for event in HERMES_EVENTS {
+        let cmd = command(exe, Harness::Hermes, event).replace('\'', "''");
+        block.push_str(&format!("  {event}:\n    - command: '{cmd}'\n"));
+    }
+    block
+}
 
 /// `line` without a trailing ` # comment`, for matching keys; item lines are matched whole.
 fn code(line: &str) -> &str {
@@ -62,6 +73,26 @@ fn is_bus_item(line: &str) -> bool {
         .is_some_and(|(_, event)| is_bus_command(&command, Harness::Hermes, event))
 }
 
+/// Whether `config` runs `command` for `event`: a live item under the event's key inside
+/// the `hooks:` block, not a comment or a line elsewhere.
+pub fn has_hook(config: &str, event: &str, command: &str) -> bool {
+    let lines: Vec<&str> = config.lines().collect();
+    let Some((start, end)) = block(&lines) else {
+        return false;
+    };
+    let item = format!("- command: '{}'", command.replace('\'', "''"));
+    let key = format!("{event}:");
+    let is_key = |l: &str| code(l).trim() == key && !l.trim_start().starts_with('-');
+    let Some(at) = (start..end).find(|&i| is_key(lines[i])) else {
+        return false;
+    };
+    lines[at + 1..end]
+        .iter()
+        .filter(|l| content(l))
+        .take_while(|l| indent(l) > indent(lines[at]) || l.trim_start().starts_with("- "))
+        .any(|l| l.trim() == item)
+}
+
 /// `config` without the bus items, and without event keys left empty by removing them.
 pub fn unwire(config: &str) -> String {
     let lines: Vec<&str> = config.split_inclusive('\n').collect();
@@ -95,13 +126,11 @@ pub fn wire(config: &str, hooks: &[(&str, String)]) -> Option<String> {
     let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
     let (start, mut end) = block(&borrowed)?;
     let body = &borrowed[start..end];
-    let key_indent = body
-        .iter()
-        .find(|l| !l.trim().is_empty())
-        .map_or(2, |l| indent(l));
+    // Comments may sit at any column; only content lines set the indents.
+    let key_indent = body.iter().find(|l| content(l)).map_or(2, |l| indent(l));
     let item_indent = body
         .iter()
-        .find(|l| l.trim().starts_with("- "))
+        .find(|l| content(l) && l.trim().starts_with("- "))
         .map_or(key_indent + 2, |l| indent(l));
     let (keys, items) = (" ".repeat(key_indent), " ".repeat(item_indent));
     for (event, command) in hooks {

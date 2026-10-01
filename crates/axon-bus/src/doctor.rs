@@ -5,9 +5,10 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::install::{
-    command, current_exe, detected, layout, plugin_source, read_optional, CLAUDE_EVENTS,
-    CODEX_EVENTS, HERMES_EVENTS,
+    command, current_exe, detected, layout, read_optional, CLAUDE_EVENTS, CODEX_EVENTS,
+    HERMES_EVENTS,
 };
+use crate::opencode_plugin::plugin_source;
 use crate::Harness;
 
 /// Whether every hook `harness` needs runs `exe`: one missing event (say a removed
@@ -61,9 +62,9 @@ pub fn is_wired(harness: Harness, exe: &str) -> anyhow::Result<bool> {
             });
             registered && read_optional(plugin)?.is_some_and(|text| text == plugin_source(exe))
         }
-        Harness::Hermes => HERMES_EVENTS.iter().all(|event| {
-            config.contains(&format!("- command: '{}'", runs(event).replace('\'', "''")))
-        }),
+        Harness::Hermes => HERMES_EVENTS
+            .iter()
+            .all(|event| crate::hermes_hooks::has_hook(&config, event, &runs(event))),
     })
 }
 

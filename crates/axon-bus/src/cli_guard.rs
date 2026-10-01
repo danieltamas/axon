@@ -88,11 +88,19 @@ enum Invocation {
     Dashboard(usize),
 }
 
+/// `NAME=value` with a shell identifier for NAME; `/tmp/a=b/axon` is a path, not one.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 /// Whether `words[i]` runs a bus command: `axon-bus` anywhere (as before), `axon` only in
 /// command position, since a path ending in `/axon` is usually a directory.
 fn invocation(words: &[String], i: usize) -> Option<Invocation> {
     // `DIR=/x/axon` assigns a variable; it runs nothing.
-    if words[i].contains('=') {
+    if is_assignment(&words[i]) {
         return None;
     }
     let file = words[i].rsplit(['/', '\\']).next()?;
@@ -101,7 +109,7 @@ fn invocation(words: &[String], i: usize) -> Option<Invocation> {
         "axon" => {
             let before = i.checked_sub(1).map(|b| words[b].as_str());
             let command_position =
-                before.is_none_or(|w| w == ";" || PREFIXES.contains(&w) || w.contains('='));
+                before.is_none_or(|w| w == ";" || PREFIXES.contains(&w) || is_assignment(w));
             if !command_position {
                 None
             } else if words.get(i + 1).map(String::as_str) == Some("bus") {

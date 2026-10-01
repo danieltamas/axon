@@ -176,7 +176,7 @@ fn read_tail(path: &Path, len: u64, bytes: u64) -> std::io::Result<String> {
 }
 
 fn parse(harness: &str, text: &str, content: bool) -> (Vec<Value>, Option<String>) {
-    let kept = |text: Option<String>| text.filter(|_| content).map(|t| transcript::redact(&t));
+    let kept = |text: Option<String>| text.filter(|_| content).map(|t| crate::redact::redact(&t));
     let mut rows = Vec::new();
     for record in records(text) {
         let ts = transcript::timestamp(harness, &record).unwrap_or(0);
@@ -238,7 +238,7 @@ fn substantive(prompt: &str) -> bool {
 }
 
 fn clip(prompt: &str) -> String {
-    transcript::redact(prompt)
+    crate::redact::redact(prompt)
         .chars()
         .take(PROMPT_CHARS)
         .collect()

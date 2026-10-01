@@ -1,5 +1,4 @@
-//! `install` / `uninstall` / `doctor`: wire `axon-bus hook` into each harness's own config
-//! (BUS-PLAN §00: a plug-in, never a wrapper).
+//! Wires `axon bus hook` into each harness's own config (BUS-PLAN §00: a plug-in, not a wrapper).
 //!
 //! Each config is rewritten from its pristine copy — the `<file>.axon-bus.bak` backup once
 //! one exists — so installing again produces the same bytes. Uninstall puts the backup back.
@@ -12,6 +11,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde_json::{json, Value};
 
+use crate::hermes_hooks::{hermes_block, HERMES_MARKER};
+use crate::opencode_plugin::plugin_source;
 use crate::Harness;
 
 const BACKUP_SUFFIX: &str = ".axon-bus.bak";
@@ -113,7 +114,7 @@ pub(crate) fn command(exe: &str, harness: Harness, event: &str) -> String {
 }
 
 /// `axon` runs the bus as a subcommand; the `axon-bus` alias takes the verb directly.
-fn bus_verb(exe: &str) -> &'static str {
+pub(crate) fn bus_verb(exe: &str) -> &'static str {
     if binary_name(exe) == "axon" {
         " bus"
     } else {
@@ -291,53 +292,6 @@ pub(crate) fn wire(
             Ok(text)
         }
     }
-}
-
-pub(crate) const HERMES_MARKER: &str = "# axon-bus hooks; `axon-bus uninstall` removes them\n";
-
-fn hermes_block(exe: &str) -> String {
-    let mut block = format!("{HERMES_MARKER}hooks:\n");
-    for event in HERMES_EVENTS {
-        let cmd = command(exe, Harness::Hermes, event).replace('\'', "''");
-        block.push_str(&format!("  {event}:\n    - command: '{cmd}'\n"));
-    }
-    block
-}
-
-pub(crate) fn plugin_source(exe: &str) -> String {
-    let hook = if bus_verb(exe).is_empty() {
-        json!([exe, "hook"])
-    } else {
-        json!([exe, "bus", "hook"])
-    };
-    format!(
-        r#"// axon-bus plugin shim; `axon-bus uninstall` removes it.
-const HOOK = {hook};
-function hook(event, payload) {{
-  const run = Bun.spawnSync([...HOOK, "opencode", event], {{
-    stdin: Buffer.from(JSON.stringify(payload)),
-  }});
-  try {{
-    const out = run.stdout.toString().trim();
-    return out ? JSON.parse(out) : null;
-  }} catch {{
-    return null;
-  }}
-}}
-export const AxonBus = async () => ({{
-  event: async ({{ event }}) => {{
-    if (["session.created", "session.idle", "session.deleted"].includes(event.type)) hook(event.type, event);
-  }},
-  "tool.execute.before": async (input, output) => {{
-    const reply = hook("tool.execute.before", {{ input, output }});
-    if (reply?.decision === "deny") throw new Error(reply.reason);
-  }},
-  "tool.execute.after": async (input, output) => {{
-    hook("tool.execute.after", {{ input, output }});
-  }},
-}});
-"#
-    )
 }
 
 pub(crate) fn read_optional(path: &Path) -> anyhow::Result<Option<String>> {

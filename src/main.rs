@@ -21,11 +21,13 @@ use axon::normalize;
 use axon::pricing::Pricing;
 use axon::rtk;
 use axon::server;
-use axon::store::{Stamp, Store};
+use axon::store::Store;
 use axon::summary::{build_summary, windowed_cost, Summary};
 
 mod cli_summary;
+mod stamp;
 use cli_summary::print_cli_summary;
+use stamp::stamp;
 
 /// Axon — see DESIGN.md for the full build spec.
 #[derive(Parser, Debug)]
@@ -247,35 +249,6 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     summary.week_cost_eur = windowed_cost(&all, local_week_start_ms());
     summary.month_cost_eur = windowed_cost(&all, local_month_start_ms());
     Ok((summary, all))
-}
-
-/// A source's size and mtime; for a SQLite source its write-ahead log counts too, since
-/// new rows sit there until a checkpoint touches the main file. None when it is missing.
-fn stamp(source: &Source) -> Option<Stamp> {
-    let of = |path: &std::path::Path| {
-        let meta = std::fs::metadata(path).ok()?;
-        let mtime = meta
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        Some((meta.len() as i64, mtime.as_millis() as i64))
-    };
-    let (size, mtime) = of(&source.path)?;
-    // A subagent's agent type and description come from its meta file.
-    if source.kind == SourceKind::ClaudeSubagent {
-        if let Some((meta_size, meta_mtime)) = of(&source.path.with_extension("meta.json")) {
-            return Some((size + meta_size, mtime.max(meta_mtime)));
-        }
-    }
-    if matches!(source.kind, SourceKind::OpenCode | SourceKind::Ccflare) {
-        let mut wal = source.path.clone().into_os_string();
-        wal.push("-wal");
-        if let Some((wal_size, wal_mtime)) = of(std::path::Path::new(&wal)) {
-            return Some((size + wal_size, mtime.max(wal_mtime)));
-        }
-    }
-    Some((size, mtime))
 }
 
 /// Epoch-ms of local midnight today.

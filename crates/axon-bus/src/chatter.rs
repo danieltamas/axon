@@ -25,7 +25,7 @@ pub fn messages(conn: &Connection, content: bool) -> rusqlite::Result<Vec<Value>
             "from": r.get::<_, String>(3)?,
             "to": r.get::<_, String>(4)?,
             "kind": r.get::<_, String>(5)?,
-            "body": content.then(|| crate::transcript::redact(&body)),
+            "body": content.then(|| crate::redact::redact(&body)),
             "needs_reply": r.get::<_, bool>(7)?,
             "sent_at": r.get::<_, Option<i64>>(8)?,
             "delivered_at": r.get::<_, Option<i64>>(9)?,
