@@ -1,13 +1,14 @@
 //! Local HTTP server (DESIGN.md §9, §16) — the one dashboard (BUS-PLAN §0b) + the usage API.
 //!
-//! Security boundary (there is no auth — loopback + Origin checks ARE the boundary):
+//! Security boundary: loopback + Origin checks, plus the owner's cookie session on every
+//! `/api/*` route (`axon_bus::session`):
 //! - bind `127.0.0.1` only;
 //! - reject any request whose `Host` is not loopback (anti-DNS-rebind);
 //! - reject any cross-origin `Origin`/`Referer` (anti-CSRF).
 //!
 //! Routes: `GET /api/summary`, `GET /api/health`, and the dashboard router from `axon-bus`
-//! (the page, its assets, `/api/snapshot`, `/api/stream`, `POST /api/msg`), which adds its
-//! own per-boot token and CSP. `/api/summary` is kept fresh by `main::spawn_refresher`.
+//! (the page, its assets, `/api/session`, `/api/snapshot`, `/api/stream`, `POST /api/msg`),
+//! which guards itself and adds the CSP. `/api/summary` is kept fresh by `main::spawn_refresher`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,11 +38,12 @@ pub struct AppState {
 }
 
 /// The usage API merged with the dashboard, behind the loopback/Origin guard and gzip.
-pub fn build_router(state: Arc<AppState>, dashboard: Router) -> Router {
-    Router::new()
+pub fn build_router(state: Arc<AppState>, db: &std::path::Path, dashboard: Router) -> Router {
+    let usage_api = Router::new()
         .route("/api/health", get(api_health))
         .route("/api/summary", get(api_summary))
-        .with_state(state)
+        .with_state(state);
+    axon_bus::serve::require_owner(usage_api, db)
         .merge(dashboard)
         .layer(middleware::from_fn(local_only))
         .layer(CompressionLayer::new())
@@ -51,12 +53,13 @@ pub fn build_router(state: Arc<AppState>, dashboard: Router) -> Router {
 pub async fn serve(
     addr: SocketAddr,
     state: Arc<AppState>,
+    db: &std::path::Path,
     dashboard: Router,
 ) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
-    axum::serve(listener, build_router(state, dashboard))
+    axum::serve(listener, build_router(state, db, dashboard))
         .await
         .context("axum serve")?;
     Ok(())

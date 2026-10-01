@@ -13,7 +13,7 @@ export function harnessName(harness) {
   return HARNESS_NAMES[harness] || harness;
 }
 
-export function createBoard(container, scroller, token, onSelect) {
+export function createBoard(container, scroller, onSelect) {
   const cards = new Map();
   const sums = new Map();
   let shape = "";
@@ -171,7 +171,7 @@ export function createBoard(container, scroller, token, onSelect) {
     // row's corner as a sibling, since a button cannot hold another.
     if (isProcess(root)) {
       box.classList.add("endable");
-      box.append(createEnder({ token, sessions: [root], label: "End", confirm: "Click to end", compact: true }));
+      box.append(createEnder({ sessions: [root], label: "End", confirm: "Click to end", compact: true }));
     }
     const subs = children(root, selected, "subs");
     if (subs) box.append(subs);

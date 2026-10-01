@@ -141,6 +141,20 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- Owner login (P2P-SPEC §1): single-use nonces and cookie sessions, both stored as SHA-256 hashes.
+CREATE TABLE IF NOT EXISTS login_nonces (
+    hash       TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_sessions (
+    hash         TEXT PRIMARY KEY,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     seq          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts           INTEGER NOT NULL,

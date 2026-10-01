@@ -210,7 +210,7 @@ pub enum Command {
         /// 0 picks a free port.
         #[arg(long, default_value_t = 7433)]
         port: u16,
-        /// Write {url, token} here once the server accepts connections.
+        /// Write {url} here once the server accepts connections.
         #[arg(long)]
         ready_file: Option<PathBuf>,
         /// Show what agents say and think (the default; redacted, kept 7 days).
@@ -220,6 +220,8 @@ pub enum Command {
         #[arg(long)]
         no_content: bool,
     },
+    /// Print a fresh login link for the dashboard server that is running.
+    Open(crate::session::OpenArgs),
     /// Replay a JSONL corpus of transcript records into the registry and narrative.
     Replay {
         file: PathBuf,

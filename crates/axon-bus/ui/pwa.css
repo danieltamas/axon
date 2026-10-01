@@ -94,3 +94,7 @@ body[data-state="back"] .off-pulse { background: var(--signal); }
   .install-mark { display: none; }
   .install-actions { grid-column: 1; }
 }
+
+/* Sign-in panel: the offline page's layout, shown in place of the dashboard. */
+body[data-auth="signin"] > :not(.signin):not(.bar) { display: none; }
+body[data-auth="signin"] .signin { overflow: auto; }

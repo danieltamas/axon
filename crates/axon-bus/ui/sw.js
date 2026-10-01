@@ -1,6 +1,6 @@
 // Keeps the offline page so an installed Axon can say how to start the server when
-// nothing answers on its port. The dashboard itself is never cached: it carries the
-// per-boot token and is only meaningful while the server runs.
+// nothing answers on its port. The dashboard itself is never cached: it holds the
+// owner session and is only meaningful while the server runs.
 const PREFIX = "axon-offline-";
 const CACHE = `${PREFIX}{{version}}`;
 const OFFLINE = ["/offline.html", "/offline.js", "/style.css", "/pwa.css"];

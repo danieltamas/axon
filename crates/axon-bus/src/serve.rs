@@ -2,8 +2,9 @@
 //! database plus a message sender; killing it loses nothing.
 //!
 //! Security: the Host header must name this loopback server (DNS rebinding), every POST
-//! needs the per-boot token and this exact Origin, and the CSP allows self only. The page
-//! hands its token to any local account, so `serve` is for single-user hosts (§7).
+//! needs this exact Origin, every `/api/*` route needs the owner's cookie session
+//! (`session`, P2P-SPEC §1), and the CSP allows self only. The page itself is public and
+//! holds no secret, so another local account sees only the sign-in screen.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -26,7 +27,7 @@ use tokio::sync::watch;
 
 use crate::memory::Sampler;
 use crate::observed::Observer;
-use crate::{assets, end, msg, snapshot, store, transcript};
+use crate::{assets, end, msg, session, snapshot, store, transcript};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 /// The page's static files, embedded: path, content type, body.
@@ -47,7 +48,6 @@ struct App {
     db: PathBuf,
     port: u16,
     origin: String,
-    token: String,
     snapshots: watch::Receiver<Arc<String>>,
     /// This server's capture option; another server's lease never widens it.
     content: bool,
@@ -60,10 +60,10 @@ pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> an
     runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let address: SocketAddr = listener.local_addr()?;
-        let (router, token) = build(db, address.port(), content)?;
+        let router = build(db, address.port(), content)?;
         let origin = format!("http://{address}");
         match ready_file {
-            Some(path) => write_ready(path, &origin, &token)?,
+            Some(path) => write_ready(path, &origin)?,
             None => eprintln!("axon-bus: dashboard at {origin}"),
         }
         axum::serve(listener, router).await?;
@@ -73,43 +73,36 @@ pub fn run(db: &Path, port: u16, ready_file: Option<&Path>, content: bool) -> an
 
 /// The dashboard and its API, for a server another binary bound on 127.0.0.1:`port`.
 pub fn router(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
-    Ok(build(db, port, content)?.0)
+    build(db, port, content)
 }
 
-fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, String)> {
+fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<Router> {
     let conn = store::open(db).context("no hub; run `axon bus init`")?;
     transcript::set_capture(&conn, content)?;
+    session::record_port(&conn, port)?;
     drop(conn);
-    let token = boot_token()?;
     let app = Arc::new(App {
         db: db.to_owned(),
         port,
         origin: format!("http://127.0.0.1:{port}"),
-        token: token.clone(),
         snapshots: watch_database(db.to_owned(), content)?,
         content,
     });
     let router = assets::routes(Router::new().route("/", get(index)));
     let router = router
+        .route("/api/session", post(create_session))
         .route("/api/snapshot", get(snapshot_json))
         .route("/api/stream", get(stream))
         .route("/api/msg", post(send))
         .route("/api/end", post(end_sessions))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app);
-    Ok((router, token))
+    Ok(router)
 }
 
-/// 256 bits from the OS, new on every boot, so a token never outlives its server.
-fn boot_token() -> anyhow::Result<String> {
-    let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-/// `{url, token}`, written whole (temp file + rename). The temp file is created fresh with
+/// `{url}`, written whole (temp file + rename). The temp file is created fresh with
 /// owner-only permissions, so a file or symlink planted at its name is refused.
-fn write_ready(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
+fn write_ready(path: &Path, url: &str) -> anyhow::Result<()> {
     use std::io::Write;
     let temp = path.with_extension(format!("tmp-{}", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
@@ -122,7 +115,7 @@ fn write_ready(path: &Path, url: &str, token: &str) -> anyhow::Result<()> {
     let mut file = options
         .open(&temp)
         .with_context(|| format!("create {}", temp.display()))?;
-    file.write_all(json!({"url": url, "token": token}).to_string().as_bytes())?;
+    file.write_all(json!({"url": url}).to_string().as_bytes())?;
     drop(file);
     std::fs::rename(&temp, path)?;
     Ok(())
@@ -206,32 +199,33 @@ fn loopback_host(headers: &HeaderMap, port: u16) -> bool {
     host.is_some_and(|h| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}"))
 }
 
-/// Compared in constant time, so response timing does not reveal the token.
-fn same_secret(given: &[u8], expected: &[u8]) -> bool {
-    given.len() == expected.len()
-        && given
-            .iter()
-            .zip(expected)
-            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-            == 0
-}
-
 async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
     let headers = request.headers();
     let mut allowed = loopback_host(headers, app.port);
     if request.method() != Method::GET {
         let origin = headers.get(header::ORIGIN).map(HeaderValue::as_bytes);
-        let token = headers.get("x-axon-token").map(HeaderValue::as_bytes);
         let localhost = format!("http://localhost:{}", app.port);
-        allowed &= (origin == Some(app.origin.as_bytes()) || origin == Some(localhost.as_bytes()))
-            && token.is_some_and(|t| same_secret(t, app.token.as_bytes()));
+        allowed &= origin == Some(app.origin.as_bytes()) || origin == Some(localhost.as_bytes());
     }
-    let mut response = if allowed {
-        next.run(request).await
+    let path = request.uri().path();
+    let is_api = path.starts_with("/api/");
+    let needs_session = is_api && path != "/api/session";
+    let signed_in = if allowed && needs_session {
+        has_session(&app.db, request.headers()).await
     } else {
+        true
+    };
+    let mut response = if !allowed {
         StatusCode::FORBIDDEN.into_response()
+    } else if !signed_in {
+        sign_in_required()
+    } else {
+        next.run(request).await
     };
     let headers = response.headers_mut();
+    if is_api {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(CSP),
@@ -248,10 +242,73 @@ async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Res
     response
 }
 
-/// The page carries the token in a meta tag; the Host check keeps other sites from reading it.
-async fn index(State(app): State<Arc<App>>) -> Response {
-    let page = INDEX_HTML.replace("{{token}}", &app.token);
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response()
+fn sign_in_required() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({"error": "sign_in", "hint": "run axon open"})),
+    )
+        .into_response()
+}
+
+/// Whether the request carries a live owner session. A database error is "not signed in":
+/// the guard fails closed.
+async fn has_session(db: &Path, headers: &HeaderMap) -> bool {
+    let Some(secret) = session::presented(headers).map(str::to_owned) else {
+        return false;
+    };
+    let db = db.to_owned();
+    tokio::task::spawn_blocking(move || session::valid(&store::open(&db)?, &secret))
+        .await
+        .is_ok_and(|checked| checked.unwrap_or(false))
+}
+
+/// Puts the owner session in front of every route of `routes` (the host binary's own API,
+/// merged beside the dashboard's, which guards itself).
+pub fn require_owner(routes: Router, db: &Path) -> Router {
+    routes.layer(middleware::from_fn_with_state(
+        db.to_owned(),
+        |State(db): State<PathBuf>, request: Request, next: Next| async move {
+            if has_session(&db, request.headers()).await {
+                next.run(request).await
+            } else {
+                sign_in_required()
+            }
+        },
+    ))
+}
+
+async fn index() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        INDEX_HTML,
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct Login {
+    nonce: String,
+}
+
+/// Trade a login nonce for the owner's session cookie. Wrong, used and expired nonces all
+/// answer the same 401.
+async fn create_session(State(app): State<Arc<App>>, Json(login): Json<Login>) -> Response {
+    let db = app.db.clone();
+    let traded =
+        tokio::task::spawn_blocking(move || session::exchange(&store::open(&db)?, &login.nonce))
+            .await;
+    match traded {
+        Ok(Ok(Some(secret))) => (
+            StatusCode::NO_CONTENT,
+            [(header::SET_COOKIE, session::cookie_header(&secret))],
+        )
+            .into_response(),
+        Ok(Ok(None)) => {
+            (StatusCode::UNAUTHORIZED, Json(json!({"error": "sign_in"}))).into_response()
+        }
+        Ok(Err(err)) => failure(StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")),
+        Err(err) => failure(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
 }
 
 async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
@@ -312,6 +369,9 @@ struct Outgoing {
 }
 
 async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Response {
+    if request.to_id.starts_with("peer:") {
+        return failure(StatusCode::BAD_REQUEST, "remote_target".to_owned());
+    }
     let db = app.db.clone();
     let sent = tokio::task::spawn_blocking(
         move || -> anyhow::Result<Result<(String, String), msg::Refused>> {

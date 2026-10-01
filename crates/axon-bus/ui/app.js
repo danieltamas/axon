@@ -11,9 +11,9 @@ import { agents, bytes, el, isProcess, money, setCurrency, setText, stats, token
 import { createOverview, projectKey, summarize } from "./overview.js";
 import { offerInstall, onServerLost, registerWorker } from "./pwa.js";
 import { createEnder } from "./send.js";
+import { exchangeLogin, showSignIn } from "./signin.js";
 import { createUsage } from "./usage.js";
 
-const token = document.querySelector('meta[name="axon-token"]').content;
 const $ = (id) => document.getElementById(id);
 // `selected` (an agent) and `thread` are exclusive: the rail shows one context at a time.
 const state = { snapshot: { repos: [] }, project: null, selected: null, thread: null };
@@ -22,10 +22,9 @@ const layout = $("layout");
 const overview = createOverview($("overview"), (key) => {
   location.hash = `#/p/${encodeURIComponent(key)}`;
 });
-const board = createBoard($("tree"), $("board"), token, (id) => focus({ selected: state.selected === id ? null : id }));
+const board = createBoard($("tree"), $("board"), (id) => focus({ selected: state.selected === id ? null : id }));
 const arcs = createArcs({ board, boardEl: $("board"), overlay: $("arcs") });
 const context = createContext($("context"), {
-  token,
   onThread: (thread) => focus({ thread }),
   onAgent: (selected) => focus({ selected }),
   onBack: () => focus({}),
@@ -129,7 +128,7 @@ function renderProjectHead(repo, s) {
   if (roots.some((r) => r.activity)) head.append(activityChart(hours, "turns per hour"));
   if (idle.length) {
     const n = idle.length;
-    head.append(createEnder({ token, sessions: idle, label: `End ${n} idle ${n === 1 ? "session" : "sessions"}…`, confirm: `End ${n} idle: click again` }));
+    head.append(createEnder({ sessions: idle, label: `End ${n} idle ${n === 1 ? "session" : "sessions"}…`, confirm: `End ${n} idle: click again` }));
   }
   if (!s.attention.length) return;
   const list = el("ul", "needs");
@@ -178,10 +177,17 @@ function connect() {
     if (setCurrency(state.snapshot.currency)) usage.redraw();
     requestAnimationFrame(render);
   });
-  source.addEventListener("error", () => {
+  source.addEventListener("error", async () => {
     link.dataset.state = "down";
     setText(link, "Reconnecting");
-    onServerLost();
+    // An EventSource error carries no status; a plain request tells a lost session from a lost server.
+    const probe = await fetch("/api/snapshot", { cache: "no-store" }).catch(() => null);
+    if (probe && probe.status === 401) {
+      source.close();
+      showSignIn();
+    } else {
+      onServerLost();
+    }
   });
 }
 
@@ -207,7 +213,9 @@ try {
 applyTheme(THEMES.includes(saved) ? saved : "auto");
 
 new ResizeObserver(() => arcs.redraw()).observe($("tree"));
-route();
-connect();
+exchangeLogin().then(() => {
+  route();
+  connect();
+});
 registerWorker();
 offerInstall();

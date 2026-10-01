@@ -73,6 +73,7 @@ axon --port 8080 --no-open
 axon --no-content         # structure only: turns, tokens and tool names, never text
 axon --scan-only          # headless: scan the logs, print a JSON summary, exit
 
+axon open --print         # a fresh dashboard login link
 axon bus --help           # the control plane: send, ask, budget, claim, audit, doctor…
 axon bus budget set <root> 2Mtok --usd 20
 axon bus doctor           # which harnesses are wired
@@ -123,7 +124,10 @@ the control plane.
 ## Privacy
 
 - The server binds loopback only (`127.0.0.1`).
-- Every write API checks the Host and Origin headers and needs a per-boot token.
+- The dashboard is behind an owner login. `axon` prints a one-time link (`Dashboard: http://127.0.0.1:<port>/#login=…`,
+  valid 60 s) and opens it; the page trades it for an `HttpOnly`, `SameSite=Strict` cookie that lasts 30 days.
+  Every `/api/*` route needs that cookie, so another local account sees only a sign-in screen. `axon open`
+  issues a fresh link (`--print` to only print it). Every write also checks the Host and Origin headers.
 - All UI assets are bundled, so nothing loads from a CDN.
 - SQLite is stored `0600` in a `0700` directory.
 - Agents' conversation text is captured by default for the narrative view, with credentials

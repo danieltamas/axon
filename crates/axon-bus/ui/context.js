@@ -10,7 +10,7 @@ import { createComposer, createEnder } from "./send.js";
 
 const KIND_LABELS = { question: "Asked", answer: "Answered", redirect: "Redirected", sync: "Noted", stop: "Stopped", ack: "Acknowledged", handoff: "Handed off" };
 
-export function createContext(container, { token, onThread, onAgent, onBack }) {
+export function createContext(container, { onThread, onAgent, onBack }) {
   const head = el("header", "ctx-head");
   const body = el("div", "ctx-body");
   const foot = el("footer", "ctx-foot");
@@ -136,7 +136,7 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
     const question = inThread.filter((m) => m.kind === "question" && m.needs_reply && !m.acked_at).pop() || null;
     part("foot", `thread|${threadId}|${JSON.stringify(routes)}|${question ? question.id : ""}`, () => {
       const intro = el("p", "foot-intro", question ? `${question.to} owes ${question.from} an answer. Answer on its behalf, or step in.` : "Step in on either side of this thread.");
-      composer = createComposer({ token, routes, thread: threadId, question, drafts, draftKey: `thread:${threadId}` });
+      composer = createComposer({ routes, thread: threadId, question, drafts, draftKey: `thread:${threadId}` });
       foot.replaceChildren(intro, composer);
     });
   }
@@ -227,11 +227,11 @@ export function createContext(container, { token, onThread, onAgent, onBack }) {
           foot.replaceChildren(el("p", "foot-intro", node.observed ? "A subagent of a session the bus cannot reach; end the session to end it." : "Nothing on the bus connects to this agent yet, so there is no edge to message it along."));
           return;
         }
-        const ender = createEnder({ token, sessions: [node], label: "End session…", confirm: `End pid ${node.pid}: click again` });
+        const ender = createEnder({ sessions: [node], label: "End session…", confirm: `End pid ${node.pid}: click again` });
         foot.replaceChildren(el("p", "foot-intro", "This session started before Axon's hooks, so it cannot be messaged. Ending it sends the terminate signal its terminal would."), ender);
         return;
       }
-      composer = createComposer({ token, routes, drafts, draftKey: `agent:${node.id}` });
+      composer = createComposer({ routes, drafts, draftKey: `agent:${node.id}` });
       foot.replaceChildren(composer);
     });
   }
