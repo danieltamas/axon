@@ -21,16 +21,22 @@ matrix (Windows is the first real run), merge, version bump and tag.
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | P1 pid reuse can end another process | FIXED `73fc617`: requests carry `{id, started_ms}`; a pid whose start time differs is refused |
+| 1 | P1 pid reuse can end another process | FIXED `73fc617`: requests carry `{id, started_ms}`; the pid is re-read and refused when its start time differs. Residual: the microseconds between that re-read and the signal (macOS has no pidfd) |
 | 2 | P1 basename is weak session identity | **Accepted risk**: only a caller with the per-boot token can ask, and anyone who can run a binary named `codex` already controls the account |
 | 3 | P1 R6 swaps resumed sessions | FIXED `00f48c3` |
 | 4 | P1 Hermes install corrupts valid YAML | FIXED `dc357b2`: commented and indentless `hooks:` blocks merge; `hooks: {}` is refused |
 | 5 | P2 Windows hook commands omit `bus` | FIXED `deab640`: `.exe` and backslash paths keep the verb; cmd double quotes |
 | 6 | P2 failed reads cached as success | FIXED `5e82225`: unreadable sources stay unstamped |
-| 7 | P2 cache identity misses changes | FIXED `5e82225`: parser version, bundled prices and subagent `.meta.json` key the stamp |
+| 7 | P2 cache identity misses changes | FIXED `5e82225`, `19db64a`: parser version and bundled prices key the cache; each file (transcript, `.meta.json`, WAL) contributes its own size, mtime and change marker (inode + ctime on Unix, a head/tail hash on Windows) |
 | 8 | P2 truncated Codex history double-counts | **Deferred**: pre-existing in 0.2.1, needs baseline reconciliation in ingest |
 | 9 | P2 wiring check accepts missing hooks | FIXED `43f383b`: every required event, and OpenCode registration |
 | 10 | P2 numeric access tokens disclosed | FIXED `8bb00f4`: only `*tokens` / `token_count` count fields stay readable |
+
+Codex wrote 36 acceptance tests for these fixes (`1b99fe2`); 8 failed and were fixed in src
+(`19db64a`): column-0 comments inside Hermes `hooks:`, commented-out Hermes hooks counted as
+wired, `password_tokens=` style secrets kept readable, `=` in an executable path bypassing the
+guard, and the service worker deleting other apps' caches on the same origin. All green; the two
+Windows-only tests run in CI. Report: `docs/audits/axon-bus-review2-2026-10-01.md`.
 
 ### Known limitations (release notes)
 
