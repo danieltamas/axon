@@ -50,6 +50,7 @@ struct App {
     port: u16,
     origin: String,
     snapshots: watch::Receiver<Arc<String>>,
+    federation: Federation,
     /// This server's capture option; another server's lease never widens it.
     content: bool,
 }
@@ -85,18 +86,20 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federat
     transcript::apply_capture(&conn, content)?;
     session::record_port(&conn, port)?;
     drop(conn);
+    let federation = Federation::new(db);
     let app = Arc::new(App {
         db: db.to_owned(),
         port,
         origin: format!("http://127.0.0.1:{port}"),
         snapshots: watch_database(db.to_owned(), content)?,
+        federation: federation.clone(),
         content,
     });
-    let federation = Federation::new(db);
     let router = assets::routes(Router::new().route("/", get(index)));
     let router = router
         .route("/api/session", post(create_session))
         .route("/api/snapshot", get(snapshot_json))
+        .route("/api/health", get(health))
         .route("/api/stream", get(stream))
         .route("/api/msg", post(send))
         .route("/api/end", post(end_sessions))
@@ -341,6 +344,11 @@ async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
     }
 }
 
+/// The dashboard server answers: the check that its HTTP side stays up while a peer is away.
+async fn health() -> Json<serde_json::Value> {
+    Json(json!({"status": "ok"}))
+}
+
 async fn stream(
     State(app): State<Arc<App>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
@@ -357,7 +365,8 @@ async fn stream(
             ))
         },
     );
-    Sse::new(updates).keep_alive(KeepAlive::default())
+    let federation = fed::api::events(app.db.clone(), app.federation.clone());
+    Sse::new(futures_util::stream::select(updates, federation)).keep_alive(KeepAlive::default())
 }
 
 /// A message from the human node, sent as `from_id` along the same edges as any agent.

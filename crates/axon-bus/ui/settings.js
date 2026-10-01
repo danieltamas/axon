@@ -78,6 +78,10 @@ export function createSettings(container) {
   }
 
   return {
+    // A federation body pushed on the event stream.
+    fed(body) {
+      if (federation) federation.pushPeers(body);
+    },
     show() {
       showing = true;
       load();

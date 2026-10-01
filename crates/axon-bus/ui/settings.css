@@ -107,7 +107,11 @@
 .peer[data-state="connected"] .peer-state { background: var(--signal-wash); color: var(--signal); }
 .peer[data-state="reconnecting"] .peer-state, .peer[data-state="pending_confirm"] .peer-state { background: var(--warn-wash); color: var(--warn); }
 .peer[data-state="incompatible"] .peer-state { background: var(--stop-wash); color: var(--stop); }
-.peer-facts, .peer-error { grid-column: 1 / -1; }
+.peer[data-state="paused"] .peer-state { background: var(--warn-wash); color: var(--warn); }
+.peer-facts, .peer-error, .peer-actions { grid-column: 1 / -1; }
+.peer-facts:empty, .peer-error:empty { display: none; }
+.peer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 6px; }
+.peer-actions .act { margin-left: auto; }
 .peer-error { font-size: 12px; color: var(--stop); overflow-wrap: anywhere; }
 
 @container (max-width: 720px) {

@@ -55,6 +55,12 @@ mod tests {
             Acquire::Held(_) => panic!("two services on one data dir"),
         }
         drop(first);
-        assert!(matches!(acquire(dir.path()).unwrap(), Acquire::Held(_)));
+        // A test thread forking `git` holds a copy of the descriptor until it execs, so the
+        // release can lag by a few milliseconds.
+        let released = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            matches!(acquire(dir.path()).unwrap(), Acquire::Held(_))
+        });
+        assert!(released, "the lock is free once its holder drops");
     }
 }

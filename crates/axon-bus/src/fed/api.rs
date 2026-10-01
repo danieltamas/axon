@@ -20,13 +20,14 @@ use serde_json::{json, Value};
 use super::pairing::{self, Confirm, JoinError, PeerRow};
 use super::service::Handle;
 use super::shares;
-use super::{identity, invite};
+use super::{identity, invite, stats};
 use crate::settings::Federation;
 use crate::store;
 
 /// No body of these routes is larger than an invite blob.
 const MAX_BODY_BYTES: usize = 16 * 1024;
 
+mod events;
 mod peer_routes;
 mod share_routes;
 
@@ -34,6 +35,8 @@ struct FedApi {
     db: PathBuf,
     federation: Federation,
 }
+
+pub use events::events;
 
 pub fn routes(db: &FsPath, federation: Federation) -> Router {
     let state = Arc::new(FedApi {
@@ -280,6 +283,8 @@ fn view(conn: &Connection, live: Option<Value>) -> anyhow::Result<Value> {
     let mut peers = Vec::new();
     for row in pairing::all_peers(conn)? {
         let mut peer = peer_json(&row, own.as_ref(), live_peers.remove(&row.peer_id));
+        peer["queue"] = stats::queue(conn, &row.peer_id)?;
+        peer["counters"] = stats::counters(conn, &row)?;
         peer["shares"] = shares::of_peer(conn, &row.peer_id)?
             .iter()
             .map(shares::Share::to_json)
@@ -295,8 +300,7 @@ fn view(conn: &Connection, live: Option<Value>) -> anyhow::Result<Value> {
     Ok(body)
 }
 
-/// One peer of §10. Queue and counters are the defaults of a peer that has none yet; the
-/// units that own those fill them in.
+/// One peer of §10, minus the queue, counters and shares that only the database knows.
 fn peer_json(row: &PeerRow, own: Option<&EndpointId>, live: Option<Value>) -> Value {
     let mut peer = json!({
         "peer_id": row.peer_id,
@@ -307,9 +311,6 @@ fn peer_json(row: &PeerRow, own: Option<&EndpointId>, live: Option<Value>) -> Va
         "last_handshake_at": null, "heartbeat_age_ms": null,
         "rtt_ms": null, "rtt_stale": true,
         "last_error": null, "next_retry_at": null,
-        "queue": {"count": 0, "bytes": 0, "oldest_at": null},
-        "counters": {"sent_accepted": 0, "received": 0, "expired": 0, "rejected": 0, "cancelled": 0},
-        "shares": [],
     });
     for (key, value) in live.iter().filter_map(Value::as_object).flatten() {
         peer[key] = value.clone();

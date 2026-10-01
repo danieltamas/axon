@@ -5,7 +5,6 @@ pub mod api;
 mod audit;
 pub mod codec;
 pub mod delivery;
-pub mod delivery;
 pub mod discovery;
 mod envelope;
 mod health;
@@ -19,6 +18,7 @@ mod receive;
 pub mod remote;
 pub mod service;
 pub mod shares;
+mod stats;
 #[cfg(test)]
 mod testkit;
 mod transport;

@@ -219,7 +219,6 @@ pub async fn dial_loop(shared: Arc<Shared>, node: EndpointId) {
         let retry_at = now_ms() + delay.as_millis() as i64;
         shared.update(&node, |h| h.next_retry_at = Some(retry_at));
         sleep(delay).await;
-        shared.update(&node, |h| h.next_retry_at = None);
     }
 }
 
@@ -227,6 +226,9 @@ pub async fn dial_loop(shared: Arc<Shared>, node: EndpointId) {
 /// so a peer that connects and then flaps does not climb to the cap.
 async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> anyhow::Result<()> {
     let addr: EndpointAddr = shared.dial_address(node);
+    // While this attempt is in flight the next one is due when it gives up.
+    let gives_up = now_ms() + CONNECT_TIMEOUT.as_millis() as i64;
+    shared.update(&node, |h| h.next_retry_at = Some(gives_up));
     let conn = timeout(CONNECT_TIMEOUT, shared.endpoint.connect(addr, FED_ALPN))
         .await
         .map_err(|_| anyhow!("connect timed out"))?
@@ -234,6 +236,7 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
     shared.set_connection(node, conn.clone());
     shared.update(&node, |h| {
         h.connected = true;
+        h.next_retry_at = None;
         h.last_handshake_at = Some(now_ms());
     });
 

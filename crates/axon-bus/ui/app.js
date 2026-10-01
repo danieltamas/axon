@@ -183,6 +183,7 @@ function connect() {
     if (setCurrency(state.snapshot.currency)) usage.redraw();
     requestAnimationFrame(render);
   });
+  source.addEventListener("fed", (event) => settings.fed(JSON.parse(event.data)));
   source.addEventListener("error", async () => {
     link.dataset.state = "down";
     setText(link, "Reconnecting");
