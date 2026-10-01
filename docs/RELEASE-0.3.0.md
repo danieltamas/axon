@@ -25,7 +25,7 @@ matrix (Windows is the first real run), merge, version bump and tag.
 | 2 | P1 basename is weak session identity | **Accepted risk**: only a caller with the per-boot token can ask, and anyone who can run a binary named `codex` already controls the account |
 | 3 | P1 R6 swaps resumed sessions | FIXED `00f48c3` |
 | 4 | P1 Hermes install corrupts valid YAML | FIXED `dc357b2`: commented and indentless `hooks:` blocks merge; `hooks: {}` is refused |
-| 5 | P2 Windows hook commands omit `bus` | FIXED `deab640`: `.exe` and backslash paths keep the verb; cmd double quotes |
+| 5 | P2 Windows hook commands omit `bus` | FIXED `deab640`: `.exe` and backslash paths keep the verb; cmd double quotes. The guard recognises `C:\…\axon.exe` and quoted Windows paths |
 | 6 | P2 failed reads cached as success | FIXED `5e82225`: unreadable sources stay unstamped |
 | 7 | P2 cache identity misses changes | FIXED `5e82225`, `19db64a`: parser version and bundled prices key the cache; each file (transcript, `.meta.json`, WAL) contributes its own size, mtime and change marker (inode + ctime on Unix, a head/tail hash on Windows) |
 | 8 | P2 truncated Codex history double-counts | **Deferred**: pre-existing in 0.2.1, needs baseline reconciliation in ingest |
@@ -43,10 +43,8 @@ Windows-only tests run in CI. Report: `docs/audits/axon-bus-review2-2026-10-01.m
 - **Two versions, one database.** Each binary keys the scan cache on its own version, so a
   0.2.x and a 0.3.0 `axon` running at the same time clear each other's stamps and every scan
   becomes a full re-read (15.9 s observed against 0.7 s). Stop the old one after upgrading.
-- **Two servers starting at once** can hit `database is locked` on startup; the second start
-  succeeds on retry.
-- **CLI guard on Windows bash** splits commands on `/` and `\`, so an argument that merely
-  contains a backslash path ending in `axon` is still parsed as an invocation.
+- **CLI guard in Git Bash on Windows** treats an unquoted backslash as a path separator, as
+  cmd and PowerShell do, so a POSIX escape such as `a\ b` is read as two words there.
 
 ## Release mechanics
 

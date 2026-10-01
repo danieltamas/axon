@@ -19,7 +19,8 @@ fn command(payload: &Value) -> Option<&str> {
 }
 
 /// Shell words, with `;`, `&`, `|` and newlines as their own separator words. Quotes and
-/// backslashes are honoured; expansions are left as written.
+/// POSIX backslash escapes are honoured (on Windows a bare backslash is a path separator);
+/// expansions are left as written.
 fn words(command: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -29,10 +30,20 @@ fn words(command: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some(q), c) if c == q => quote = None,
-            (Some('"'), '\\') => word.extend(chars.next()),
+            // Inside double quotes a backslash escapes only these; `"C:\Program Files"` keeps it.
+            (Some('"'), '\\') => match chars.next() {
+                Some(next @ ('$' | '`' | '"' | '\\' | '\n')) => word.push(next),
+                Some(next) => word.extend(['\\', next]),
+                None => word.push('\\'),
+            },
             (Some(_), c) => word.push(c),
             (None, '\'' | '"') => {
                 quote = Some(c);
+                in_word = true;
+            }
+            // cmd and PowerShell separate paths with it; only POSIX shells escape with it.
+            (None, '\\') if cfg!(windows) => {
+                word.push('\\');
                 in_word = true;
             }
             (None, '\\') => {

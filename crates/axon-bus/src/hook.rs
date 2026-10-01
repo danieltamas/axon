@@ -84,7 +84,7 @@ pub fn run(db: &Path, harness: &str, event: &str) {
 fn trusted_parent(db: &Path, payload: &Value) -> Option<String> {
     let parent = std::env::var("AXON_BUS_PARENT").ok()?;
     let session = str_at(payload, "/session_id")?;
-    let conn = store::open(db).ok()?;
+    let conn = store::open_for_hook(db).ok()?;
     let same_tree: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agents a JOIN agents r ON r.id=a.root_id
@@ -114,7 +114,7 @@ fn gate_only(
         return None;
     }
     let answer = (|| -> anyhow::Result<Option<Option<Value>>> {
-        let mut conn = store::open(db)?;
+        let mut conn = store::open_for_hook(db)?;
         let tx = conn.transaction()?;
         let Some(actor) = actor else { return Ok(None) };
         let actor = registered_as(&tx, harness, actor)?.unwrap_or_else(|| actor.to_owned());
@@ -299,7 +299,7 @@ fn apply(
     if change == Change::Ignored {
         return Ok(None);
     }
-    let mut conn = store::open(db)?;
+    let mut conn = store::open_for_hook(db)?;
     let transcript = read_claude_transcript(&conn, harness, event, &change, payload);
     let tx = store::write_tx(&mut conn)?;
     let resolve = |id: &str| -> rusqlite::Result<String> {

@@ -158,8 +158,10 @@ BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
 /// `prev_hash` of the first event.
 const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-/// SQLite waits at most this long for a lock, inside the hook's 300 ms budget (§2).
-const BUSY_TIMEOUT: Duration = Duration::from_millis(150);
+/// A hook waits at most this long for a lock, inside its 300 ms budget (§2).
+const HOOK_BUSY_TIMEOUT: Duration = Duration::from_millis(150);
+/// Everything else (CLI verbs, the server) can wait out another process's write.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -201,9 +203,18 @@ fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Open an existing database; never creates one (a hook must not create an absent hub).
 pub fn open(path: &Path) -> anyhow::Result<Connection> {
+    open_with(path, BUSY_TIMEOUT)
+}
+
+/// `open` for a hook, which gives up on a held lock quickly rather than stall the harness.
+pub fn open_for_hook(path: &Path) -> anyhow::Result<Connection> {
+    open_with(path, HOOK_BUSY_TIMEOUT)
+}
+
+fn open_with(path: &Path, busy: Duration) -> anyhow::Result<Connection> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("open {}", path.display()))?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.busy_timeout(busy)?;
     Ok(conn)
 }
 
