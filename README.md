@@ -32,6 +32,8 @@ budget, stop or end them.
 | **Usage brain**: a live view of models firing, sized by spend | ✅ |
 | **RTK**: Rust Token Killer's token savings, if installed | ✅ |
 | **Desktop app**: install the dashboard as an app from the browser; when `axon` is not running it shows how to start it and comes back by itself | ✅ |
+| **Settings page**: pair peers, capture and retention, usage retention, budgets, hook install state, database size and compact, all from the dashboard | planned |
+| **Working across machines**: pair your Axon with a teammate's from Settings, share a project, and the agents in it message each other; live connection health, pause or remove at any time ([plan](./docs/P2P-PLAN.md)) | planned |
 | Shareable cards, OTEL export | planned |
 
 ## Install
@@ -128,13 +130,19 @@ the control plane.
   redacted. Run `axon --no-content` for structure only.
 - Agents cannot start a capture-on server themselves.
 - Nothing leaves your machine unless you export a file or opt into `--otel`.
+- Planned federation ([plan](./docs/P2P-PLAN.md)) stays off until you pair a peer and share a
+  project. Pairing grants nothing by default. Only messages from agents in a shared project
+  cross, as end-to-end encrypted connections between pinned keys. A remote agent can never
+  stop, redirect or command yours, and nothing is shared about your other projects.
 
 ## Roadmap
 
 - **Done:** cross-harness ingest (Claude Code, Codex, OpenCode, ccflare); live dashboard and
   usage brain; the control plane (registry, hooks, messages, budgets, claims, audit, replay);
   observed sessions and ending them; incremental scanning; releases with installers.
-- **Next:** shareable cards and weekly recap; spawning real agents from `routes.toml`; OTEL
+- **Next:** a Settings page, and working across machines (Axon to Axon federation over
+  [iroh](https://iroh.computer), managed from Settings; see [docs/P2P-PLAN.md](./docs/P2P-PLAN.md));
+  shareable cards and weekly recap; spawning real agents from `routes.toml`; OTEL
   export.
 
 ## Contributing
