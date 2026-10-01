@@ -143,6 +143,11 @@ pub enum Command {
         #[arg(long)]
         to: String,
     },
+    /// Whom an agent can message now, and which sessions in its repo it could link with.
+    Peers {
+        #[arg(long)]
+        agent: String,
+    },
     /// Accept the link another root proposed.
     Accept {
         #[arg(long)]

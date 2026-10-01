@@ -63,6 +63,11 @@ fn checkout(cwd: &Path) -> Checkout {
     }
 }
 
+/// The main repository holding `cwd`, worktrees included, as the dashboard groups it.
+pub(crate) fn repo_of(cwd: &Path) -> Option<PathBuf> {
+    checkout(cwd).repo
+}
+
 /// `path` with links resolved, spelled as harnesses report cwds: on Windows without the
 /// `\\?\` prefix `canonicalize` puts on drive paths, so repo keys match session paths.
 fn resolve(path: &Path) -> Option<PathBuf> {

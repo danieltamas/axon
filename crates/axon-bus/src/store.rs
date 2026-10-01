@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS agents (
     status       TEXT NOT NULL CHECK (status IN ('active','idle','closed','orphaned')),
     started_at   INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL,
-    ended_at     INTEGER
+    ended_at     INTEGER,
+    introduced_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_agents_root ON agents(root_id);
 CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
@@ -185,6 +186,7 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
 fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
     for (table, column, kind) in [
         ("agents", "effort", "TEXT"),
+        ("agents", "introduced_at", "INTEGER"),
         ("usage", "received_at", "INTEGER"),
         ("messages", "sent_at", "INTEGER"),
     ] {

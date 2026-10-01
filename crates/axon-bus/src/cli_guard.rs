@@ -7,12 +7,12 @@
 use serde_json::Value;
 
 /// Verbs whose acting agent is `--from`.
-const FROM_VERBS: [&str; 6] = ["send", "ask", "reply", "grant", "link", "accept"];
+pub(crate) const FROM_VERBS: [&str; 6] = ["send", "ask", "reply", "grant", "link", "accept"];
 /// Verbs whose acting agent is `--agent`.
-const AGENT_VERBS: [&str; 2] = ["claim", "release"];
+pub(crate) const AGENT_VERBS: [&str; 2] = ["claim", "release"];
 
 /// The shell command of a tool call, in each harness's payload shape.
-fn command(payload: &Value) -> Option<&str> {
+pub(crate) fn command(payload: &Value) -> Option<&str> {
     ["/tool_input/command", "/output/args/command"]
         .iter()
         .find_map(|pointer| payload.pointer(pointer).and_then(Value::as_str))
@@ -21,7 +21,7 @@ fn command(payload: &Value) -> Option<&str> {
 /// Shell words, with `;`, `&`, `|` and newlines as their own separator words. Quotes and
 /// POSIX backslash escapes are honoured (on Windows a bare backslash is a path separator);
 /// expansions are left as written.
-fn words(command: &str) -> Vec<String> {
+pub(crate) fn words(command: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut in_word = false;
@@ -76,7 +76,7 @@ fn words(command: &str) -> Vec<String> {
 }
 
 /// The value of `--name VALUE` or `--name=VALUE` among `args`.
-fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let long = format!("--{name}");
     let joined = format!("--{name}=");
     args.iter().enumerate().find_map(|(i, arg)| {
@@ -92,7 +92,7 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 const PREFIXES: [&str; 6] = ["exec", "env", "nohup", "time", "command", "sudo"];
 
 #[derive(Clone, Copy, PartialEq)]
-enum Invocation {
+pub(crate) enum Invocation {
     /// `axon-bus …` or `axon bus …`; its arguments start at this word.
     Bus(usize),
     /// The `axon` dashboard, which serves captured content like `axon-bus serve`.
@@ -109,7 +109,7 @@ fn is_assignment(word: &str) -> bool {
 
 /// Whether `words[i]` runs a bus command: `axon-bus` anywhere (as before), `axon` only in
 /// command position, since a path ending in `/axon` is usually a directory.
-fn invocation(words: &[String], i: usize) -> Option<Invocation> {
+pub(crate) fn invocation(words: &[String], i: usize) -> Option<Invocation> {
     // `DIR=/x/axon` assigns a variable; it runs nothing.
     if is_assignment(&words[i]) {
         return None;

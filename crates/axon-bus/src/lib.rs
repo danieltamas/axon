@@ -22,7 +22,9 @@ mod observed;
 mod opencode_plugin;
 mod redact;
 mod registry;
+mod relay;
 mod replay;
+mod roster;
 mod route;
 pub mod serve;
 mod setup;
@@ -245,12 +247,20 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             let mut conn = hub(&db)?;
             let tx = store::write_tx(&mut conn)?;
             route::link(&tx, &from, &to).map_err(|e| Invalid(e.to_string()))?;
+            msg::link_notice(&tx, &from, &to)?;
             tx.commit()?;
+        }
+        Command::Peers { agent } => {
+            let conn = hub(&db)?;
+            let peers = roster::peers(&conn, &agent)?
+                .ok_or_else(|| Invalid(format!("agent {agent} is not registered")))?;
+            println!("{peers}");
         }
         Command::Accept { from, to } => {
             let mut conn = hub(&db)?;
             let tx = store::write_tx(&mut conn)?;
             route::accept(&tx, &from, &to).map_err(|e| Invalid(e.to_string()))?;
+            msg::accepted_notice(&tx, &from, &to)?;
             tx.commit()?;
         }
         Command::Grant {

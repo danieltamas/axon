@@ -1,5 +1,6 @@
 //! The OpenCode plugin shim: a Bun module that forwards session and tool events to
-//! `axon bus hook opencode …` and turns a deny reply into a thrown error.
+//! `axon bus hook opencode …`, turns a deny reply into a thrown error, and appends bus
+//! context (the introduction, peer messages) to a tool's output.
 
 use serde_json::json;
 
@@ -34,7 +35,8 @@ export const AxonBus = async () => ({{
     if (reply?.decision === "deny") throw new Error(reply.reason);
   }},
   "tool.execute.after": async (input, output) => {{
-    hook("tool.execute.after", {{ input, output }});
+    const reply = hook("tool.execute.after", {{ input, output }});
+    if (reply?.context && typeof output.output === "string") output.output += "\n\n" + reply.context;
   }},
 }});
 "#

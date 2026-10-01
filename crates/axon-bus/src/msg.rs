@@ -174,13 +174,45 @@ pub fn from_bus(
     kind: &str,
     body: &str,
 ) -> anyhow::Result<()> {
-    let thread = format!("{BUDGET_THREAD}{scope}");
-    let msg = Outgoing {
-        from: scope,
+    notice(
+        conn,
+        scope,
         to,
         kind,
         body,
-        thread: Some(&thread),
+        &format!("{BUDGET_THREAD}{scope}"),
+    )
+}
+
+/// Tell `to` that `from` proposed a link, so it learns it can accept; no edge exists yet.
+pub fn link_notice(conn: &Connection, from: &str, to: &str) -> anyhow::Result<()> {
+    let body = format!(
+        "{from} proposes a link so you can message each other. Accept with: {} accept --to {from}",
+        bus_command()
+    );
+    notice(conn, from, to, "sync", &body, &format!("link:{from}"))
+}
+
+/// Tell the proposer `to` that `from` accepted its link.
+pub fn accepted_notice(conn: &Connection, from: &str, to: &str) -> anyhow::Result<()> {
+    let body = format!("{from} accepted your link; you can now message each other.");
+    notice(conn, from, to, "ack", &body, &format!("link:{to}"))
+}
+
+fn notice(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    kind: &str,
+    body: &str,
+    thread: &str,
+) -> anyhow::Result<()> {
+    let msg = Outgoing {
+        from,
+        to,
+        kind,
+        body,
+        thread: Some(thread),
         refs: &[],
         wait: None,
     };
@@ -384,7 +416,7 @@ fn doorbell_names(conn: &Connection, agent: &str) -> rusqlite::Result<Vec<String
 
 /// The command that runs this bus, as the agent's shell can call it: this binary's own
 /// path (it need not be on PATH), with ` bus` when it is the `axon` app.
-fn bus_command() -> String {
+pub(crate) fn bus_command() -> String {
     let exe = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "axon".to_owned());

@@ -361,6 +361,10 @@ fn apply(
             eprintln!("axon-bus: doorbell for {actor} not cleared: {err:#}");
         }
     }
+    // After the commit: the command it runs takes the hub's write lock itself.
+    if reply.is_none() && gate::is_pre_tool(harness, event) {
+        return Ok(crate::relay::run(harness, &actor, payload));
+    }
     Ok(reply)
 }
 

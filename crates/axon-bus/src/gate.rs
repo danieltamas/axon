@@ -1,11 +1,12 @@
 //! What a hook answers the harness (BUS-PLAN §3): deny a tool call on a pending stop or a
-//! non-edge native send, inject undelivered messages, or say nothing (allow).
+//! non-edge native send, introduce the agent to the bus, inject undelivered messages, or
+//! say nothing (allow).
 //! The reply shapes are each harness's own wire format (docs/ACCEPTANCE-BRIEF.md).
 
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::{budget, cli_guard, msg, route};
+use crate::{budget, cli_guard, msg, roster, route};
 
 pub fn is_pre_tool(harness: &str, event: &str) -> bool {
     matches!(
@@ -67,18 +68,35 @@ pub fn verdict(
         }
         return Ok(None);
     }
+    let context = |text: String| json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}});
     match (harness, event) {
+        // A start, or a resume or compaction that wiped what the agent was told.
+        ("claude", "SessionStart" | "SubagentStart") => {
+            Ok(roster::introduce(conn, actor)?.map(context))
+        }
         ("claude" | "codex", "PostToolUse" | "UserPromptSubmit") => {
             if let Some(to) = native_target(harness, payload) {
                 msg::log_native(conn, actor, to)?;
             }
-            Ok(msg::deliver(conn, actor)?.map(|text| {
-                json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
-            }))
+            Ok(news(conn, actor)?.map(context))
         }
-        ("hermes", "pre_llm_call") => {
-            Ok(msg::deliver(conn, actor)?.map(|text| json!({"context": text})))
+        ("hermes", "pre_llm_call") | ("opencode", "tool.execute.after") => {
+            Ok(news(conn, actor)?.map(|text| json!({"context": text})))
         }
         _ => Ok(None),
     }
+}
+
+/// The introduction if `actor` has not had it, then its undelivered messages.
+fn news(conn: &Connection, actor: &str) -> anyhow::Result<Option<String>> {
+    let intro = if roster::unintroduced(conn, actor)? {
+        roster::introduce(conn, actor)?
+    } else {
+        None
+    };
+    let parts: Vec<String> = intro
+        .into_iter()
+        .chain(msg::deliver(conn, actor)?)
+        .collect();
+    Ok((!parts.is_empty()).then(|| parts.join("\n")))
 }
