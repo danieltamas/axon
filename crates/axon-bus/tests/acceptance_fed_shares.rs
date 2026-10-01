@@ -1,7 +1,6 @@
 //! P2P-SPEC §§5–7: share mapping, direction, membership and discovery; A07–A10/A21/A22.
 mod common;
 use common::fed::*;
-use common::*;
 use serde_json::json;
 use std::time::Duration;
 

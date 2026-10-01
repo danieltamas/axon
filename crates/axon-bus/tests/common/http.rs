@@ -30,8 +30,8 @@ impl Server {
     }
 
     pub fn anonymous(bus: &Bus, content: bool, offset_ms: i64) -> Self {
-        assert!(
-            cfg!(debug_assertions),
+        #[cfg(not(debug_assertions))]
+        compile_error!(
             "federation test seams require debug binaries; release may dial public relays"
         );
         let ready = bus.root.join("ready.json");

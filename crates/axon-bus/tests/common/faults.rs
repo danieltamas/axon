@@ -13,7 +13,7 @@ pub fn unreadable_database() {
     pair.sa.process.0.wait().unwrap();
     let path = pair.a.db_path();
     let permissions = std::fs::metadata(&path).unwrap().permissions();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     // Privileged runners can bypass mode bits; report the specific missing fault.
     if std::fs::File::open(&path).is_ok() {
         std::fs::set_permissions(&path, permissions).unwrap();
