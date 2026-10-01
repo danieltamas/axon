@@ -60,6 +60,8 @@ body.offline { overflow: auto; background: var(--ground); }
 .off-pulse { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
 .off-pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit; opacity: 0.5; }
 
+.off-elsewhere { margin-top: 14px; font-size: 13px; color: var(--muted); }
+.off-elsewhere a { color: var(--ink); text-underline-offset: 3px; }
 .off-more { margin-top: 44px; align-self: stretch; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
 .off-more summary { cursor: pointer; width: fit-content; display: flex; align-items: center; gap: 8px; list-style: none; color: var(--ink); font-weight: 500; }
 .off-more summary::-webkit-details-marker { display: none; }

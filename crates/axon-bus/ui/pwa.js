@@ -64,8 +64,12 @@ function banner(action) {
   requestAnimationFrame(() => requestAnimationFrame(() => { card.dataset.state = "shown"; }));
 }
 
+// An installed app is bound to the port it came from; only offer it where `axon` serves
+// by default, so a one-off `--port` run never becomes the app that waits on a dead port.
+const DEFAULT_PORT = "7777";
+
 export function offerInstall() {
-  if (installed() || dismissed()) return;
+  if (installed() || dismissed() || location.port !== DEFAULT_PORT) return;
   if (safari) {
     banner(() => el("span", "install-hint", "File, then Add to Dock"));
     return;

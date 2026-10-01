@@ -24,6 +24,18 @@ const status = document.getElementById("status");
 const port = location.port || (location.protocol === "https:" ? "443" : "80");
 status.textContent = `Waiting for axon on port ${port}`;
 
+// This window only ever talks to the port it was installed from; say so when that is not
+// the default, and point at the default address too.
+const DEFAULT_PORT = "7777";
+if (port !== DEFAULT_PORT) {
+  document.getElementById("start").textContent = `axon --port ${port}`;
+  document.getElementById("lede").textContent =
+    `This window was installed from port ${port}. Start axon on that port and the dashboard comes back by itself.`;
+  const elsewhere = document.getElementById("elsewhere");
+  elsewhere.querySelector("a").href = `${location.protocol}//${location.hostname}:${DEFAULT_PORT}/`;
+  elsewhere.hidden = false;
+}
+
 // The manifest is not in the worker's cache, so this reaches the network or fails.
 async function answering() {
   try {
