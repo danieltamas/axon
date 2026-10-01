@@ -181,6 +181,11 @@ CREATE TABLE IF NOT EXISTS peers (
   last_error TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS peers_live_node ON peers(node_id) WHERE state <> 'removed';
+-- Direct addresses last seen on an authenticated connection from the peer (never a claim the
+-- peer makes); fed to the endpoint on start. Removing the peer deletes the row.
+CREATE TABLE IF NOT EXISTS peer_addrs (peer_id TEXT PRIMARY KEY, addrs_json TEXT NOT NULL, seen_at INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS peer_addrs_forget AFTER UPDATE OF state ON peers WHEN NEW.state='removed'
+BEGIN DELETE FROM peer_addrs WHERE peer_id=NEW.peer_id; END;
 CREATE TABLE IF NOT EXISTS peer_invites (invite_id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, consumed_by TEXT, cancelled_at INTEGER);
 CREATE TABLE IF NOT EXISTS peer_shares (
   share_id TEXT PRIMARY KEY, peer_id TEXT NOT NULL, label TEXT NOT NULL,

@@ -215,11 +215,14 @@ async fn maintain(handle: Handle, db: PathBuf) {
     }
 }
 
-/// Pairings we confirmed before a restart; the frame may not have reached the other side.
+/// Pairings we confirmed before a restart whose window is still open; the frame may not have
+/// reached the other side, whether or not we are already `active` (the ack is not stored).
+/// `send_confirmed` ends on the first ack, and an already-active peer answers `duplicate`.
 fn unsent_confirmations(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT peer_id FROM peers WHERE state='pending_confirm' AND local_confirmed_at IS NOT NULL",
+        "SELECT peer_id FROM peers WHERE state IN ('pending_confirm','active')
+           AND local_confirmed_at IS NOT NULL AND paired_at > ?1 - ?2",
     )?;
-    let rows = stmt.query_map([], |r| r.get(0))?;
+    let rows = stmt.query_map(params![now_ms(), CONFIRM_WINDOW_MS], |r| r.get(0))?;
     rows.collect()
 }

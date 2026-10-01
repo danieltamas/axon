@@ -77,6 +77,7 @@ impl ProtocolHandler for FedProtocol {
                 conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
                 break;
             };
+            self.0.note_paths(&node, &conn);
             let (shared, conn) = (self.0.clone(), conn.clone());
             tokio::spawn(async move {
                 let request = match timeout(REQUEST_TIMEOUT, read_frame(&mut recv)).await {
@@ -259,6 +260,7 @@ async fn ping(shared: &Arc<Shared>, node: EndpointId, conn: &Connection) -> anyh
     .await?;
     let rtt_ms = sent_at.elapsed().as_secs_f64() * 1000.0;
     let path = selected_path(conn);
+    shared.note_paths(&node, conn);
     match reply["type"].as_str() {
         Some("pong") => shared.update(&node, |h| {
             let now = now_ms();

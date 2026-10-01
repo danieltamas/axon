@@ -84,6 +84,8 @@ pub struct Shared {
     access: AccessMap,
     health: Mutex<HashMap<EndpointId, PeerHealth>>,
     connections: Mutex<HashMap<EndpointId, Connection>>,
+    /// Last addresses written to `peer_addrs` per peer, so unchanged paths cost no write.
+    observed: Mutex<HashMap<EndpointId, Vec<SocketAddr>>>,
     handlers: RwLock<HashMap<String, FrameHandler>>,
     pair_handler: RwLock<Option<PairHandler>>,
     changed: watch::Sender<u64>,
@@ -417,7 +419,9 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
     let lock = match lock::acquire(&fed_dir).context("take the federation lock")? {
         Acquire::Held(lock) => lock,
         Acquire::HeldBy(holder) => {
-            eprintln!("axon-bus: federation already runs for this data dir ({holder})");
+            eprintln!(
+                "axon-bus: federation already runs for this data dir (lock held by {holder})"
+            );
             return Ok(None);
         }
     };
@@ -428,8 +432,6 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
             [identity::KEY_LOST],
         );
     })?;
-    drop(conn);
-
     let access: AccessMap = Arc::default();
     let lookup = MemoryLookup::new();
     let mut builder = match relay {
@@ -453,6 +455,9 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         .await
         .context("bind the federation endpoint")?;
 
+    for addr in addrs::load(&conn)? {
+        lookup.add_endpoint_info(addr);
+    }
     let (changed, _) = watch::channel(0);
     let shared = Arc::new(Shared {
         db_path: db_path.to_owned(),
@@ -462,6 +467,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         access,
         health: Mutex::default(),
         connections: Mutex::default(),
+        observed: Mutex::default(),
         handlers: RwLock::default(),
         pair_handler: RwLock::default(),
         changed,
@@ -484,6 +490,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
     }))
 }
 
+mod addrs;
 mod link;
 pub use link::Link;
 #[cfg(test)]
