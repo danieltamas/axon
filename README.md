@@ -117,34 +117,21 @@ undo.
 1. **Turn it on.** Settings, Federation, switch on. Nothing listens or dials before that.
    Connections go direct when they can and through a relay when they cannot (a relay sees
    only encrypted traffic); the Relay field takes your own `https://` relay.
-2. **Pair.** One of you creates an invite (`axon1:…`, valid 10 minutes, one at a time) and
-   sends it over any channel; the other joins with it and a name for you. Both Axons then show
-   the same six groups of digits, the pair code, and the two key fingerprints. Compare the
-   code out loud or in a chat you already trust, then confirm on both sides within 10 minutes.
-   A wrong code removes the pairing. Creating invites, joining, confirming and sharing are
-   local API calls for now (the Settings page lists and manages peers, it does not start
-   them). From a shell, after `axon open --print` gives you a login link:
-
-   ```bash
-   URL=http://127.0.0.1:7777
-   NONCE=$(axon open --print | sed 's/.*#login=//')
-   curl -s -c jar -H "Origin: $URL" -H 'Content-Type: application/json' \
-     -d "{\"nonce\":\"$NONCE\"}" $URL/api/session
-   api() { curl -s -b jar -H "Origin: $URL" -H 'Content-Type: application/json' "${@:2}" "$URL$1"; }
-
-   api /api/fed/invites -X POST -d '{}'                                  # inviter: copy "invite"
-   api /api/fed/join -X POST -d '{"invite":"axon1:…","label":"alice"}'   # joiner
-   api /api/fed                                                          # both: read "pair_code"
-   api /api/fed/peers/<peer_id>/confirm -X POST -d '{"pair_code":"…"}'   # both
-   ```
-3. **Share a project, in each direction.** Pairing shares nothing. One owner offers a project
-   (`POST /api/fed/peers/<peer_id>/shares` with `local_repo`, a `label`, and `inbound` and
-   `outbound`); the other accepts and maps it to their own checkout
-   (`POST /api/fed/shares/<share_id>/accept`, with their own `inbound` and `outbound`). A
-   message from A to B crosses only when A's `outbound` and B's `inbound` are both on, and each
-   owner can change their own flags or end the share at any time (`PUT` or `DELETE
-   /api/fed/shares/<share_id>`). Only agents working in the shared repository can send or
-   receive, worktrees included.
+2. **Pair.** In Settings, Federation, one of you chooses Invite a machine: an `axon1:`
+   link appears (valid 10 minutes, one at a time, with a countdown, a Copy button and Cancel
+   invite). Send it over any channel. The other pastes it under Join with an invite, adds a
+   name for the inviter, and chooses Join; a refusal is explained under the field. Both
+   Axons then show the same 24 digits, the pair code, and the two key fingerprints. Compare
+   the code out loud or in a chat you already trust, choose Confirm, it matches on both
+   sides within 10 minutes, or Reject. A wrong code removes the pairing. The same steps
+   are available over the local API (`/api/fed`, see `crates/axon-bus/tests/acceptance_m5.rs`).
+3. **Share a project, in each direction.** Pairing shares nothing. On a peer's card, Share a
+   project: pick one of your projects (or enter a folder), choose Send and Receive, and offer
+   it. The other side sees the offer, picks their own checkout and flags, and accepts. A
+   message from A to B crosses only when A's Send and B's Receive are both on; a note under
+   each switch says when the other side has not agreed yet. Each owner can flip their own
+   switches or Unshare (asks first) at any time. Only agents working in the shared repository
+   can send or receive, worktrees included.
 4. **Pause, resume, disconnect.** In Settings, each peer has Pause (nothing is sent or
    delivered, the link stays paired), Resume, and Disconnect, which asks first: it ends every
    share, cancels what is queued, deletes remote messages no agent has seen, and forgets the
@@ -204,8 +191,7 @@ the control plane.
   observed sessions and ending them; incremental scanning; releases with installers; a
   Settings page; working across machines (Axon to Axon federation over
   [iroh](https://iroh.computer), see [docs/P2P-SPEC.md](./docs/P2P-SPEC.md)).
-- **Next:** pairing and sharing from the Settings page (today they are local API calls);
-  shareable cards and weekly recap; spawning real agents from `routes.toml`; OTEL
+- **Next:** shareable cards and weekly recap; spawning real agents from `routes.toml`; OTEL
   export.
 
 ## Contributing
