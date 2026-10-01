@@ -8,6 +8,20 @@ import { showSignIn } from "./signin.js";
 const REASONS = {
   busy: "The database is busy. Nothing was changed; try again in a moment.",
   sign_in: "This browser is signed out. Run axon open in a terminal.",
+  federation_not_running: "Federation is not running. Turn it on first.",
+  invalid_invite: "That invite did not work. It may be wrong, expired or already used; ask for a new one.",
+  label_taken: "You already have a peer with that name.",
+  already_paired: "This machine is already paired with that one.",
+  peer_unreachable: "That machine could not be reached. Check that it is on, that federation is on there and that the invite is still open.",
+  pair_code_mismatch: "The code did not match, so the pairing was removed. Start again.",
+  not_pending: "This pairing is no longer waiting for confirmation.",
+  peer_not_active: "That peer is not connected yet.",
+  already_shared: "That project is already shared with this peer.",
+  too_many_shares: "This peer already has as many shares as it can hold.",
+  wrong_state: "That change no longer applies. The page now shows what is current.",
+  unknown_peer: "That peer no longer exists.",
+  unknown_share: "That share no longer exists.",
+  unavailable: "Axon could not complete that. Nothing was changed.",
 };
 
 // One request, one answer shape. A lost connection reads as status 0.
@@ -47,7 +61,7 @@ export function band(id, title, lede) {
 }
 
 // A label, a control, a hint, and a place for the server's complaint about this field.
-export function field({ name, label, hint, invalid, input, unit }) {
+export function field({ name, label, hint, invalid, input, unit, codes = [] }) {
   const id = uid("f");
   const root = el("div", "fld");
   root.dataset.field = name;
@@ -67,8 +81,9 @@ export function field({ name, label, hint, invalid, input, unit }) {
     root,
     input,
     name,
-    fail() {
-      error.textContent = invalid;
+    codes,
+    fail(text = invalid) {
+      error.textContent = text;
       input.setAttribute("aria-invalid", "true");
       root.dataset.invalid = "true";
     },
@@ -113,14 +128,10 @@ export function switchRow({ label, hint, onToggle }) {
   track.setAttribute("aria-hidden", "true");
   const text = el("span", "sw-text");
   const caption = el("span", "fld-label", label);
-  text.append(caption);
-  const lines = [];
-  if (hint) {
-    const note = el("span", "fld-hint", hint);
-    note.id = `${id}-hint`;
-    text.append(note);
-    lines.push(note.id);
-  }
+  const note = el("span", "fld-hint", hint || "");
+  note.id = `${id}-hint`;
+  text.append(caption, note);
+  const lines = [note.id];
   const status = el("p", "fld-error");
   status.id = `${id}-err`;
   lines.push(status.id);
@@ -129,8 +140,11 @@ export function switchRow({ label, hint, onToggle }) {
   wrap.append(input, track, text);
   root.append(wrap, status);
   input.addEventListener("click", (event) => {
+    // By now the browser has flipped the box; that is the state asked for. preventDefault
+    // puts the box back, and only `set` moves it, once the server has agreed.
+    const wanted = input.checked;
     event.preventDefault();
-    onToggle(!input.checked);
+    onToggle(wanted);
   });
   return {
     root,
@@ -145,12 +159,15 @@ export function switchRow({ label, hint, onToggle }) {
     say: (text) => {
       status.textContent = text;
     },
+    describe: (text) => {
+      note.textContent = text;
+    },
   };
 }
 
 // A form that saves only what changed and shows the server's answer where it belongs.
 // `send` returns the response; `fields` are the field objects a 400 may name.
-export function settingsForm({ fields, children, send, applied, save = "Save" }) {
+export function settingsForm({ fields, children, send, applied, save = "Save", busy = "Saving", done = "Saved", refused = "Not saved" }) {
   const form = el("form", "set-form");
   form.noValidate = true;
   const button = el("button", "btn primary", save);
@@ -167,34 +184,42 @@ export function settingsForm({ fields, children, send, applied, save = "Save" })
     status.textContent = "";
     status.dataset.tone = "";
   };
-  form.addEventListener("input", markDirty);
+  form.addEventListener("input", (event) => {
+    // An edit answers the refusal that was shown for that field.
+    for (const item of fields) if (item.input === event.target) item.clear();
+    markDirty();
+  });
   form.addEventListener("change", markDirty);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     for (const item of fields) item.clear();
     status.dataset.tone = "";
-    status.textContent = "Saving";
+    status.textContent = busy;
     form.dataset.busy = "true";
     button.disabled = true;
     const res = await send();
     delete form.dataset.busy;
     if (res.ok) {
       delete form.dataset.dirty;
-      status.textContent = "Saved";
+      status.textContent = done;
       status.dataset.tone = "ok";
+      // A confirmation is news for a few seconds, then clutter.
+      setTimeout(() => {
+        if (status.dataset.tone === "ok" && status.textContent === done) status.textContent = "";
+      }, 6000);
       applied(res.data);
       return;
     }
     button.disabled = false;
     status.dataset.tone = "bad";
-    const named = res.status === 400 && fields.find((item) => item.name === res.data.field);
+    const named = fields.find((item) => (res.status === 400 && item.name === res.data.field) || item.codes.includes(res.data.error));
     if (named) {
-      named.fail();
+      named.fail(res.data.field ? undefined : reason(res));
       named.input.focus();
-      status.textContent = "Not saved";
+      status.textContent = refused;
     } else {
-      status.textContent = res.status === 400 ? `The server rejected ${res.data.field || "the request"}.` : reason(res);
+      status.textContent = res.data.field ? `The server rejected ${res.data.field}.` : reason(res);
     }
   });
 
