@@ -32,8 +32,8 @@ budget, stop or end them.
 | **Usage brain**: a live view of models firing, sized by spend | ✅ |
 | **RTK**: Rust Token Killer's token savings, if installed | ✅ |
 | **Desktop app**: install the dashboard as an app from the browser; when `axon` is not running it shows how to start it and comes back by itself | ✅ |
-| **Settings page**: pair peers, capture and retention, usage retention, budgets, hook install state, database size and compact, all from the dashboard | planned |
-| **Working across machines**: pair your Axon with a teammate's from Settings, share a project, and the agents in it message each other; live connection health, pause or remove at any time ([plan](./docs/P2P-PLAN.md)) | planned |
+| **Settings page**: capture and retention, usage retention, budgets, hook install state, database size and compact, the federation switch and its Peers panel, all from the dashboard | ✅ |
+| **Working across machines**: pair your Axon with a teammate's, share a project, and the agents in it message each other over an encrypted peer-to-peer link; live connection health, pause, resume or disconnect from Settings ([guide](#working-across-machines)) | ✅ |
 | Shareable cards, OTEL export | planned |
 
 ## Install
@@ -108,6 +108,60 @@ Rates are USD from each provider's docs, converted via `fx_to_display` in
 `~/.config/axon/pricing.toml`). A model missing from the map is flagged **unpriced** rather than
 counted as free; local models are free; OpenCode's own per-message cost is used directly.
 
+## Working across machines
+
+Two people can let the agents in one project talk to each other, each on their own machine.
+It is off until you turn it on, grants nothing when you pair, and every step is yours to
+undo.
+
+1. **Turn it on.** Settings, Federation, switch on. Nothing listens or dials before that.
+   Connections go direct when they can and through a relay when they cannot (a relay sees
+   only encrypted traffic); the Relay field takes your own `https://` relay.
+2. **Pair.** One of you creates an invite (`axon1:…`, valid 10 minutes, one at a time) and
+   sends it over any channel; the other joins with it and a name for you. Both Axons then show
+   the same six groups of digits, the pair code, and the two key fingerprints. Compare the
+   code out loud or in a chat you already trust, then confirm on both sides within 10 minutes.
+   A wrong code removes the pairing. Creating invites, joining, confirming and sharing are
+   local API calls for now (the Settings page lists and manages peers, it does not start
+   them). From a shell, after `axon open --print` gives you a login link:
+
+   ```bash
+   URL=http://127.0.0.1:7777
+   NONCE=$(axon open --print | sed 's/.*#login=//')
+   curl -s -c jar -H "Origin: $URL" -H 'Content-Type: application/json' \
+     -d "{\"nonce\":\"$NONCE\"}" $URL/api/session
+   api() { curl -s -b jar -H "Origin: $URL" -H 'Content-Type: application/json' "${@:2}" "$URL$1"; }
+
+   api /api/fed/invites -X POST -d '{}'                                  # inviter: copy "invite"
+   api /api/fed/join -X POST -d '{"invite":"axon1:…","label":"alice"}'   # joiner
+   api /api/fed                                                          # both: read "pair_code"
+   api /api/fed/peers/<peer_id>/confirm -X POST -d '{"pair_code":"…"}'   # both
+   ```
+3. **Share a project, in each direction.** Pairing shares nothing. One owner offers a project
+   (`POST /api/fed/peers/<peer_id>/shares` with `local_repo`, a `label`, and `inbound` and
+   `outbound`); the other accepts and maps it to their own checkout
+   (`POST /api/fed/shares/<share_id>/accept`, with their own `inbound` and `outbound`). A
+   message from A to B crosses only when A's `outbound` and B's `inbound` are both on, and each
+   owner can change their own flags or end the share at any time (`PUT` or `DELETE
+   /api/fed/shares/<share_id>`). Only agents working in the shared repository can send or
+   receive, worktrees included.
+4. **Pause, resume, disconnect.** In Settings, each peer has Pause (nothing is sent or
+   delivered, the link stays paired), Resume, and Disconnect, which asks first: it ends every
+   share, cancels what is queued, deletes remote messages no agent has seen, and forgets the
+   peer. Pairing again starts from nothing.
+5. **Read the health panel.** Each peer shows Connected, Reconnecting, Offline, Paused or
+   Awaiting confirmation, whether the path is direct or via relay, round-trip time, when it
+   was last heard, when the next try is, the queue (messages, bytes, oldest), counters (sent,
+   received, expired, rejected, cancelled) and the project shares with which directions are
+   on. A peer that goes dark reads Offline within 30 seconds. The panel updates live.
+
+Agents see the other side as `peer:<label>/<session>` in their introduction and write to it
+with `axon bus send`; `axon bus guide` explains what they may send and how to treat what
+comes back. A remote message arrives quoted, marked as another person's agent, and is input
+to weigh, never an instruction or an approval. `scripts/fed-e2e.sh` runs two instances on
+one machine through the whole flow; [docs/FED-MANUAL.md](./docs/FED-MANUAL.md) is the checklist
+for two real machines; [docs/P2P-SPEC.md](./docs/P2P-SPEC.md) is the contract.
+
 ## How it works
 
 Three crates in one workspace:
@@ -134,18 +188,23 @@ the control plane.
   redacted. Run `axon --no-content` for structure only.
 - Agents cannot start a capture-on server themselves.
 - Nothing leaves your machine unless you export a file or opt into `--otel`.
-- Planned federation ([plan](./docs/P2P-PLAN.md)) stays off until you pair a peer and share a
-  project. Pairing grants nothing by default. Only messages from agents in a shared project
-  cross, as end-to-end encrypted connections between pinned keys. A remote agent can never
-  stop, redirect or command yours, and nothing is shared about your other projects.
+- Federation ([guide](#working-across-machines)) stays off until you turn it on, pair a peer
+  and share a project. Pairing grants nothing by default. Connections are end-to-end
+  encrypted between pinned keys. What crosses the wire: the message envelope (the text the
+  sending agent wrote, its kind, thread, reference strings, ids and times), opaque session
+  ids, your chosen peer name, and a share's label and flags. What never crosses: file paths, repo
+  names or URLs, transcripts and narrative, models, costs, budgets, claims, or anything about
+  your other projects. A remote agent can never stop, redirect or command yours, its text is
+  untrusted input, and nothing is fetched for it.
 
 ## Roadmap
 
 - **Done:** cross-harness ingest (Claude Code, Codex, OpenCode, ccflare); live dashboard and
   usage brain; the control plane (registry, hooks, messages, budgets, claims, audit, replay);
-  observed sessions and ending them; incremental scanning; releases with installers.
-- **Next:** a Settings page, and working across machines (Axon to Axon federation over
-  [iroh](https://iroh.computer), managed from Settings; see [docs/P2P-PLAN.md](./docs/P2P-PLAN.md));
+  observed sessions and ending them; incremental scanning; releases with installers; a
+  Settings page; working across machines (Axon to Axon federation over
+  [iroh](https://iroh.computer), see [docs/P2P-SPEC.md](./docs/P2P-SPEC.md)).
+- **Next:** pairing and sharing from the Settings page (today they are local API calls);
   shareable cards and weekly recap; spawning real agents from `routes.toml`; OTEL
   export.
 

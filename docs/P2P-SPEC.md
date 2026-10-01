@@ -433,3 +433,85 @@ The rows A01–A32 in `docs/reviews/P2P-COUNCIL-gpt.md` §3, plus A33, A34 and S
     are automated.
   - A30, power loss.
   - The relayed path across two real networks.
+
+## 12. Amendments
+
+Where the build differs from sections 1–11, this section wins. Each entry says why. Entries
+marked **open** are the owner's to accept or reverse; the rest are settled by the frozen
+acceptance tests or by what the sections left unsaid.
+
+**Pairing (§4).**
+- The pair request frame also carries the joiner's proposed `generation`. The inviter takes
+  the larger of the two so both sides agree, because `ping` compares generations for equality.
+- The inviter learns the joiner's address from the connection's observed paths, never from
+  claimed addresses. The dedup cache of observed addresses is cleared on each peer sync, so an
+  address seen while the peer was `pending_confirm` is saved once it becomes `active`, and a
+  restarted node can dial it again.
+- `GET /api/fed` exposes `pair_code` on each peer in `pending_confirm`. §10's example omits it;
+  §4 requires both screens to show it.
+- `GET /api/fed` reports `enabled: false` whenever the service is not running.
+- Creating invites, joining, confirming and sharing have no Settings UI yet. Settings shows the
+  federation switch and the Peers panel. This is a gap against the plan, not a decision.
+
+**Shares and the message path (§§6–8).**
+- A share's two owners bump one shared `revision`, so changes can cross. A `share_update` with
+  an equal revision and different flags is applied; an older one is ignored. A `share_update`
+  that advances our revision is answered with our own flags at the new revision. Without this,
+  one side's change could be lost permanently.
+- All shares are resent on each peer (re)connect instead of tracking an acknowledged flag,
+  because the schema is frozen. Share frames are idempotent by revision.
+- A reply is tied to the peer id and to the share the question arrived under (read from the
+  `accepted` audit row), not to the discovery cache. The cache is only eventually consistent,
+  and an answer must not depend on it.
+- The sender writes `fed_audit` rows (direction `out`) for accepted, rejected and expired
+  outcomes. §5 listed inbound decisions only.
+- Hooks report their cwd, and a reported cwd replaces the stored one, so membership follows the
+  agent when it moves.
+- Delivery (§8) re-checks, at hook time, that the peer is `active` in the message's generation,
+  that the share is still `active`, and that the recipient is still a member of the share's
+  repository. A message that fails stays pending and is not deleted. An expired message is
+  deleted from `messages` and audited as `expired`; its `fed_inbox` row stays, so a
+  retransmission answers `duplicate`.
+- A hook delivers at most 20 messages and 16 KiB of remote text per call. The rest wait.
+- `msg::deliver` keeps a `from_id NOT LIKE 'peer:%'` filter on the local-message query: it is
+  the partition between local and remote messages, not a skip. Remote rows go only through the
+  remote framing.
+- **Open.** A full inbox (100 or more pending for the recipient) is rejected with
+  `recipient_full`, which is final: the sender's outbox marks the row rejected. A token-bucket
+  limit stays `rate_limited`, which the sender retries. §8 step 8 named no reason for the full
+  inbox.
+- **Open.** `messages.from_id` no longer references `agents(id)`, because remote principals
+  (`peer:<label>/<session>`) have no agents row (§5). Two triggers keep the check for every
+  sender that is not `peer:`-prefixed. A database that still has the foreign key is rebuilt
+  once, in a transaction, when it is opened. The receiver does not turn foreign keys off.
+- **Open.** Rejections beyond 10 per peer per minute are dropped, not counted. §8 says they are
+  "counted, not written"; no counter exists, so the numbers in `counters.rejected` undercount
+  during a flood.
+
+**Lifecycle and health (§§9–10).**
+- Pause, resume and remove each run as one transaction. The notices and the service reload are
+  sent after the commit, with a 2 s budget, so removal never waits for an offline peer. §9 said
+  `notice paused` is sent first; sent first it would block the action on the peer's network.
+- `PUT /api/fed/peers/<id>/label` answers `400 {"error":"label_taken"}` when the label belongs
+  to another non-removed peer.
+- **Open.** A `paused` or `removed` notice received from a paired peer is acknowledged
+  and changes nothing: no state, no queue, no share. Our side keeps sending until the link
+  fails or the owner acts, and the other side's receiver refuses what it will not take. A
+  `removed` notice for a pairing still in `pending_confirm` does remove it. A `resumed` notice
+  is not implemented (`unsupported_notice`). Whether a remote pause should stop our sending is
+  not specified.
+- `next_retry_at` is set when a dial attempt starts, to the time the attempt gives up
+  (now plus the connect timeout), and cleared on connect. §10 left it empty during an
+  in-flight dial.
+- `counters` and `queue` come from the database: `queue` is the `queued` outbox rows; `sent_accepted`,
+  `expired`, `rejected` and `cancelled` come from the outbox and `received` from `fed_inbox`.
+- `/api/stream` emits `event: fed` on every service change and every 4 s, which satisfies "at
+  least every 5 s".
+- `GET /api/health` returns `{"status":"ok"}`. The frozen lifecycle suite polls it; no section
+  defined it.
+
+**Tests and tooling.**
+- The single-instance lock test waits up to 1 s for the lock to release: forked children
+  inherit the lock's file descriptor on macOS.
+- The Peers panel was exercised with a stub DOM, not a browser. The checklist in
+  `docs/FED-MANUAL.md` covers it by hand.
