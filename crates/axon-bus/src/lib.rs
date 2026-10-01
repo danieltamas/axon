@@ -9,6 +9,7 @@ mod chatter;
 mod claims;
 mod cli;
 mod cli_guard;
+mod doctor;
 mod doorbell;
 mod end;
 mod gate;
@@ -345,7 +346,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
         }
         Command::Replay { file, speed } => replay::run(&db, &file, speed)?,
         Command::Doctor => {
-            if !install::doctor(&db)? {
+            if !doctor::doctor(&db)? {
                 return Ok(ExitCode::FAILURE);
             }
         }

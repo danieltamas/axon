@@ -2,7 +2,8 @@
 //! installing Axon is the whole setup. A no-op once wired; a harness that cannot be wired
 //! is reported and skipped, never fatal to the dashboard.
 
-use crate::install::{current_exe, detected, install, is_wired};
+use crate::doctor::is_wired;
+use crate::install::{current_exe, detected, install};
 
 /// Wire each detected harness whose hooks do not run this binary yet (fresh, or left
 /// pointing at another build). A development build wires nothing and says why once.

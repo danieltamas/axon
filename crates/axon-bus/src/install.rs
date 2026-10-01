@@ -35,7 +35,7 @@ pub(crate) const CODEX_EVENTS: [&str; 7] = [
     "SubagentStop",
     "Stop",
 ];
-const HERMES_EVENTS: [&str; 8] = [
+pub(crate) const HERMES_EVENTS: [&str; 8] = [
     "on_session_start",
     "pre_llm_call",
     "pre_tool_call",
@@ -93,7 +93,7 @@ pub(crate) fn backup_path(config: &Path) -> PathBuf {
 }
 
 /// The installed binary, quoted for the shell-style command lines harnesses run.
-fn command(exe: &str, harness: Harness, event: &str) -> String {
+pub(crate) fn command(exe: &str, harness: Harness, event: &str) -> String {
     let safe = |c: char| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c);
     let exe = if exe.chars().all(safe) {
         exe.to_owned()
@@ -286,7 +286,7 @@ fn hermes_block(exe: &str) -> String {
     block
 }
 
-fn plugin_source(exe: &str) -> String {
+pub(crate) fn plugin_source(exe: &str) -> String {
     let hook = if bus_verb(exe).is_empty() {
         json!([exe, "hook"])
     } else {
@@ -431,59 +431,4 @@ pub fn detected() -> Vec<Harness> {
         .into_iter()
         .filter(|h| layout(*h).config.parent().is_some_and(Path::exists))
         .collect()
-}
-
-/// Whether `harness`'s hooks run `exe`. OpenCode's config only names the plugin shim;
-/// the shim names the binary.
-pub fn is_wired(harness: Harness, exe: &str) -> anyhow::Result<bool> {
-    let layout = layout(harness);
-    Ok(match &layout.plugin {
-        Some(plugin) => read_optional(plugin)?.is_some_and(|text| text == plugin_source(exe)),
-        None => read_optional(&layout.config)?
-            .is_some_and(|text| text.contains(command(exe, harness, "").trim_end())),
-    })
-}
-
-/// Print one line per harness and the hub; true when every detected harness is wired to
-/// this binary.
-pub fn doctor(db: &Path) -> anyhow::Result<bool> {
-    let exe = current_exe()?;
-    let mut healthy = true;
-    for harness in detected() {
-        let layout = layout(harness);
-        let config = read_optional(&layout.config)?.unwrap_or_default();
-        let (state, detail) = if is_wired(harness, &exe)? {
-            ("ok", "hooks point at this binary")
-        } else if config.contains("axon-bus") || config.contains("axon bus hook") {
-            healthy = false;
-            (
-                "warn",
-                "hooks point at another axon binary; run `axon bus install`",
-            )
-        } else {
-            healthy = false;
-            ("missing", "not wired; run `axon bus install`")
-        };
-        println!(
-            "{state:<8}{:<10}{} ({detail})",
-            harness.as_str(),
-            layout.config.display()
-        );
-        if harness == Harness::Hermes && state == "ok" {
-            println!("note    hermes    Hermes asks to approve each hook command on first use");
-        }
-    }
-    match crate::store::open(db)
-        .and_then(|c| Ok(c.query_row("SELECT count(*) FROM agents", [], |r| r.get::<_, i64>(0))?))
-    {
-        Ok(agents) => println!("ok      hub       {} ({agents} agents)", db.display()),
-        Err(_) => {
-            healthy = false;
-            println!(
-                "missing hub       {} (hooks stay inert; run `axon bus init`)",
-                db.display()
-            );
-        }
-    }
-    Ok(healthy)
 }
