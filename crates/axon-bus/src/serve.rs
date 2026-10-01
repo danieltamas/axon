@@ -223,7 +223,7 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
         let mut renewed_at: Option<Instant> = None;
         let mut sampled_at = Instant::now();
         loop {
-            if renewed_at.map_or(true, |at| at.elapsed() >= RENEW_EVERY) {
+            if renewed_at.is_none_or(|at| at.elapsed() >= RENEW_EVERY) {
                 let upkeep = transcript::set_capture(&conn, content)
                     .and_then(|()| transcript::expire_if_due(&conn));
                 if let Err(err) = upkeep {

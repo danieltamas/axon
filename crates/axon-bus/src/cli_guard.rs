@@ -95,9 +95,8 @@ fn invocation(words: &[String], i: usize) -> Option<Invocation> {
         "axon-bus" => Some(Invocation::Bus(i + 1)),
         "axon" => {
             let before = i.checked_sub(1).map(|b| words[b].as_str());
-            let command_position = before.map_or(true, |w| {
-                w == ";" || PREFIXES.contains(&w) || w.contains('=')
-            });
+            let command_position =
+                before.is_none_or(|w| w == ";" || PREFIXES.contains(&w) || w.contains('='));
             if !command_position {
                 None
             } else if words.get(i + 1).map(String::as_str) == Some("bus") {

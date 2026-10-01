@@ -65,7 +65,7 @@ pub(crate) fn unwire(harness: Harness, current: &str, layout: &Layout) -> anyhow
                             });
                         }
                     }
-                    entries.retain(|e| e["hooks"].as_array().map_or(true, |list| !list.is_empty()));
+                    entries.retain(|e| e["hooks"].as_array().is_none_or(|list| !list.is_empty()));
                     if entries.is_empty() && before > 0 {
                         hooks.remove(event);
                     }

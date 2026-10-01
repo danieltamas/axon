@@ -256,7 +256,7 @@ fn operator_prompt(harness: &str, record: &Value) -> Option<String> {
                 && record["isCompactSummary"] != true
                 && record["origin"]["kind"]
                     .as_str()
-                    .map_or(true, |k| k == "human") =>
+                    .is_none_or(|k| k == "human") =>
         {
             &record["message"]["content"]
         }
