@@ -35,4 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-targets
+      - if: runner.os != 'Windows'
+        run: cargo test --workspace --all-targets --no-fail-fast
+      # Process launches are slow on Windows runners; fewer tests at once keeps each
+      # acceptance test's launches inside its own time budget.
+      - if: runner.os == 'Windows'
+        run: cargo test --workspace --all-targets --no-fail-fast -- --test-threads=2
