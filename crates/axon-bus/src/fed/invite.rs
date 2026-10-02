@@ -178,6 +178,11 @@ pub fn parse(text: &str) -> Result<Joinable, BadInvite> {
         addrs.push(TransportAddr::Ip(addr.parse().map_err(|_| BadInvite)?));
     }
     if let Some(url) = &blob.relay_url {
+        // The settings page insists on https for a relay the owner picks; an invite from
+        // someone else gets no weaker rule.
+        if !url.starts_with("https://") {
+            return Err(BadInvite);
+        }
         addrs.push(TransportAddr::Relay(
             url.parse::<RelayUrl>().map_err(|_| BadInvite)?,
         ));
@@ -247,6 +252,26 @@ mod tests {
             &format!("{good}{}", "A".repeat(MAX_BLOB_CHARS)),
         ] {
             assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_relay_url_that_is_not_https_makes_the_invite_unusable() {
+        let blob = |relay: &str| {
+            let json = format!(
+                r#"{{"v":1,"node_id":"{}","invite_id":"i1","secret":"{}","direct_addrs":[],"relay_url":"{relay}","expires_at":1,"label":"x"}}"#,
+                node().id,
+                "A".repeat(SECRET_CHARS)
+            );
+            format!("{PREFIX}{}", crate::session::base64url(json.as_bytes()))
+        };
+        assert!(parse(&blob("https://relay.example.com")).is_ok());
+        for relay in [
+            "http://169.254.169.254",
+            "ftp://relay.example.com",
+            "relay.example.com",
+        ] {
+            assert!(parse(&blob(relay)).is_err(), "{relay}");
         }
     }
 }

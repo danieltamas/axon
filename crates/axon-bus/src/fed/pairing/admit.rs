@@ -9,9 +9,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{history_generation, insert_pending, label_ok, pending_by_node, MAX_GENERATION};
-use crate::fed::invite;
 use crate::fed::now_ms;
 use crate::fed::service::{Link, PairHandler};
+use crate::fed::{identity, invite};
 use crate::store;
 
 #[derive(Deserialize)]
@@ -40,7 +40,6 @@ enum Admission {
     Admitted {
         generation: i64,
     },
-    LabelTaken,
     /// Wrong, expired, consumed, cancelled or exhausted: one answer for all of them.
     Refused,
 }
@@ -49,16 +48,29 @@ impl Admission {
     fn reply(&self) -> Value {
         match self {
             Self::Admitted { generation } => json!({"ok": true, "generation": generation}),
-            Self::LabelTaken => json!({"ok": false, "error": "label_taken"}),
             Self::Refused => json!({"ok": false, "error": "invalid_invite"}),
         }
     }
+}
+
+/// What the inviter calls a joiner until its owner renames it. The name the joiner chose
+/// for us is never used (it could pose as someone else on the confirmation screen), and one
+/// derived from the node's own fingerprint cannot clash with another live peer's.
+fn neutral_label(joiner: &str) -> String {
+    let print = joiner
+        .parse::<iroh::EndpointId>()
+        .map_or_else(|_| "peer".to_owned(), |node| identity::fingerprint(&node));
+    format!("axon-{}", print.replace(' ', ""))
 }
 
 /// Check the invite and, for the first valid joiner, create its pending row and consume the
 /// invite: one transaction, committed before the answer leaves (`synchronous=FULL`). A wrong
 /// secret commits its attempt count, so attempts survive a restart.
 fn admit(conn: &mut Connection, joiner: &str, request: &JoinRequest) -> anyhow::Result<Admission> {
+    // An unknown invite costs the dialer nothing to send; it must not cost a write lock.
+    if invite::stored(conn, &request.invite_id)?.is_none() {
+        return Ok(Admission::Refused);
+    }
     conn.pragma_update(None, "synchronous", "FULL")?;
     let tx = store::write_tx(conn)?;
     let admission = admit_in(&tx, now_ms(), joiner, request)?;
@@ -107,16 +119,8 @@ fn admit_in(
     if live {
         return Ok(Admission::Refused);
     }
-    let taken: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM peers WHERE label=?1 AND state<>'removed')",
-        [&request.label],
-        |r| r.get(0),
-    )?;
-    if taken {
-        return Ok(Admission::LabelTaken);
-    }
     let generation = (history_generation(tx, joiner)? + 1).max(request.generation);
-    insert_pending(tx, joiner, &request.label, generation)?;
+    insert_pending(tx, joiner, &neutral_label(joiner), generation)?;
     tx.execute(
         "UPDATE peer_invites SET consumed_by=?1 WHERE invite_id=?2",
         params![joiner, request.invite_id],
@@ -239,20 +243,16 @@ mod tests {
     }
 
     #[test]
-    fn a_taken_label_refuses_without_consuming_the_invite() {
+    fn the_joiners_chosen_label_is_never_stored_the_inviter_assigns_a_neutral_one() {
         let mut fx = fixture();
-        fx.conn
-            .execute(
-                "INSERT INTO peers (peer_id,node_id,label,generation,state,paired_at)
-                 VALUES ('p','n','alice',1,'active',1)",
-                [],
-            )
+        let good = request(&fx, &fx.invite.secret, "ceo-of-your-bank");
+        assert!(admitted(admit(&mut fx.conn, &joiner(2), &good).unwrap()));
+        let label: String = fx
+            .conn
+            .query_row("SELECT label FROM peers", [], |r| r.get(0))
             .unwrap();
-        let good = request(&fx, &fx.invite.secret, "alice");
-        let outcome = admit(&mut fx.conn, &joiner(2), &good).unwrap();
-        assert!(matches!(outcome, Admission::LabelTaken));
-        let other = request(&fx, &fx.invite.secret, "bob");
-        assert!(admitted(admit(&mut fx.conn, &joiner(2), &other).unwrap()));
+        assert!(label.starts_with("axon-") && label.len() == 21, "{label}");
+        assert!(label_ok(&label));
     }
 
     #[test]
