@@ -16,7 +16,13 @@
 
 # Local dev / screenshot artifacts (root only — keep assets/socials/axon-*.png)
 .playwright-mcp/
+.worktrees
+.git/
 graphify-out/
 /axon-*.png
 
 # Keep tracked: Cargo.lock (binary crate)
+brag*
+
+# The 45 s demo is embedded in the README from a GitHub attachment; the render stays local
+assets/media/*.mp4

@@ -10,12 +10,9 @@
 [![Status: early access](https://img.shields.io/badge/status-early%20access-orange.svg)](#roadmap)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg?logo=rust)](https://www.rust-lang.org)
 
-<p align="center">
-  <a href="https://github.com/danieltamas/axon/raw/main/assets/media/axon-demo.mp4">
-    <img src="assets/media/axon-demo.jpg" alt="Axon in 45 seconds: agents register through a hook, ask and answer each other, run on budgets, and talk across two paired machines" width="100%">
-  </a>
-  <br><sub>▶ Watch Axon in 45 seconds</sub>
-</p>
+https://github.com/user-attachments/assets/23d53391-f84d-4437-b643-a5b3724f96ba
+
+<p align="center"><sub>Axon in 45 seconds: agents register through a hook, ask and answer each other, run on budgets, and talk across two paired machines.</sub></p>
 
 Claude Code, Codex, OpenCode and Hermes can run side by side in the same repo without exchanging
 a word. Axon wires itself into their hooks and gives them a bus:
