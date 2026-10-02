@@ -13,6 +13,8 @@ use crate::store;
 pub struct Peer {
     pub node_id: String,
     pub generation: i64,
+    /// The pairing's lifecycle sequence after this change (see `reconcile`).
+    pub seq: i64,
 }
 
 pub enum Change {
@@ -27,13 +29,14 @@ pub enum Change {
 
 fn find(conn: &Connection, peer_id: &str) -> rusqlite::Result<Option<(Peer, String)>> {
     conn.query_row(
-        "SELECT node_id, generation, state FROM peers WHERE peer_id=?1",
+        "SELECT node_id, generation, state, lifecycle_seq FROM peers WHERE peer_id=?1",
         [peer_id],
         |r| {
             Ok((
                 Peer {
                     node_id: r.get(0)?,
                     generation: r.get(1)?,
+                    seq: r.get(3)?,
                 },
                 r.get(2)?,
             ))
@@ -79,11 +82,14 @@ fn transition(
         Some((_, state)) if state != from => Change::WrongState,
         Some((peer, _)) => {
             tx.execute(
-                "UPDATE peers SET state=?2 WHERE peer_id=?1",
+                "UPDATE peers SET state=?2, lifecycle_seq=lifecycle_seq+1 WHERE peer_id=?1",
                 params![peer_id, to],
             )?;
             audit_decision(&tx, &peer, decision)?;
-            Change::Done(peer)
+            Change::Done(Peer {
+                seq: peer.seq + 1,
+                ..peer
+            })
         }
     };
     tx.commit()?;
@@ -131,8 +137,8 @@ pub fn remove_because(
         Some((_, state)) if state == "removed" => Change::Unknown,
         Some((peer, _)) => {
             tx.execute(
-                "UPDATE peers SET state='removed', removed_at=?2, removed_reason=?3
-                 WHERE peer_id=?1",
+                "UPDATE peers SET state='removed', removed_at=?2, removed_reason=?3,
+                 lifecycle_seq=lifecycle_seq+1 WHERE peer_id=?1",
                 params![peer_id, now_ms(), reason],
             )?;
             for share in shares::of_peer(&tx, peer_id)? {

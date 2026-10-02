@@ -16,6 +16,7 @@ mod outbox;
 pub mod pairing;
 mod rate;
 mod receive;
+mod reconcile;
 pub mod remote;
 mod retention;
 pub mod service;

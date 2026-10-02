@@ -13,33 +13,58 @@ use tokio::time::sleep;
 use super::admit::pair_handler;
 use super::{expire_stale, CONFIRM_WINDOW_MS, NOTICE_TRIES, RETRY_EVERY, SWEEP_EVERY};
 use crate::fed::service::{FrameHandler, Handle, Link};
-use crate::fed::{lifecycle, now_ms};
+use crate::fed::{lifecycle, now_ms, reconcile};
 use crate::store;
 
 /// Tell the other side a pairing was removed, retrying while the connection comes up, then
 /// let the service drop the peer. The service is reloaded only afterwards: reloading closes
 /// the connection the notice needs.
 pub async fn notify_removed(handle: Handle, node_id: String, generation: i64) {
-    notify(&handle, &node_id, generation, "removed").await;
+    notify(&handle, &node_id, generation, "removed", 0).await;
     handle.reload();
 }
 
 /// Tell the other side the pairing is usable again, so it stops showing it paused. It
 /// retries like `notify_removed`: a peer that never hears this keeps refusing to send.
-pub async fn notify_resumed(handle: Handle, node_id: String, generation: i64) {
-    notify(&handle, &node_id, generation, "resumed").await;
+pub async fn notify_resumed(handle: Handle, node_id: String, generation: i64, seq: i64) {
+    notify(&handle, &node_id, generation, "resumed", seq).await;
 }
 
-async fn notify(handle: &Handle, node_id: &str, generation: i64, what: &str) {
+/// Deliver a lifecycle notice (`paused`, `resumed`, `removed`) until the peer acknowledges
+/// it. A connection failure and an error answer (a busy peer says `rate_limited`) both retry;
+/// only an answer that says the pairing is gone ends it early. The acknowledgement carries
+/// the peer's own state, which is learned on the spot.
+pub async fn notify(handle: &Handle, node_id: &str, generation: i64, what: &str, seq: i64) {
     let Ok(node) = node_id.parse::<EndpointId>() else {
         return;
     };
-    let frame = json!({"type": "notice", "v": 1, "generation": generation, "what": what});
+    let frame = json!({"type": "notice", "v": 1, "generation": generation, "what": what,
+                       "seq": seq});
     for _ in 0..NOTICE_TRIES {
-        if handle.stopped() || handle.request(&node, &frame).await.is_ok() {
+        if handle.stopped() {
             return;
         }
-        sleep(RETRY_EVERY).await;
+        match handle.request(&node, &frame).await {
+            Ok(reply) if reply["type"] == "ack" => {
+                let db = handle.db_path().to_owned();
+                let (node_id, reply) = (node_id.to_owned(), reply);
+                let _ = tokio::task::spawn_blocking(move || {
+                    reconcile::learn_reply(&store::open(&db)?, &node_id, generation, &reply)
+                        .map_err(anyhow::Error::from)
+                })
+                .await;
+                return;
+            }
+            Ok(reply)
+                if matches!(
+                    reply["reason"].as_str(),
+                    Some("unknown_peer" | "stale_generation")
+                ) =>
+            {
+                return
+            }
+            _ => sleep(RETRY_EVERY).await,
+        }
     }
 }
 
@@ -91,6 +116,10 @@ struct PairingFrame {
     generation: i64,
     /// Present on `notice` only.
     what: Option<String>,
+    /// The sender's lifecycle sequence, on `paused`, `resumed` and `state` notices.
+    seq: Option<i64>,
+    /// The sender's pause state, on `state` notices.
+    paused: Option<bool>,
 }
 
 fn error(reason: &str) -> Value {
@@ -154,29 +183,29 @@ fn remote_removed(conn: &mut Connection, node: &str, generation: i64) -> anyhow:
     Ok(json!({"type": "ack", "status": "accepted"}))
 }
 
-/// The other side paused (or resumed) the pairing: remember it, so sends are refused with
-/// `peer_paused` and the UI says who paused. Our own state does not change.
+/// The other side paused, resumed or told us its state: remember it, so sends are refused
+/// with `peer_paused` and the UI says who paused, unless a newer sequence was already applied.
+/// Our own state does not change; the answer carries it back.
 fn set_remote_paused(
     conn: &mut Connection,
     node: &str,
-    generation: i64,
-    paused: bool,
+    frame: &PairingFrame,
 ) -> anyhow::Result<Value> {
-    let changed = conn.execute(
-        "UPDATE peers SET remote_paused=?3 WHERE node_id=?1 AND generation=?2
-         AND state IN ('active','paused')",
-        params![node, generation, paused],
-    )?;
-    Ok(if changed > 0 {
-        json!({"type": "ack", "status": "accepted"})
-    } else {
-        error("unknown_peer")
-    })
+    let paused = match frame.what.as_deref() {
+        Some("paused") => true,
+        Some("resumed") => false,
+        _ => frame.paused.unwrap_or(false),
+    };
+    let Some(seq) = frame.seq else {
+        return Ok(error("bad_frame"));
+    };
+    reconcile::learn(conn, node, frame.generation, paused, seq)?;
+    Ok(reconcile::acknowledge(conn, node)?)
 }
 
 /// What a handler does to the database for one parsed frame: `(connection, sender's node id,
-/// frame generation, notice's `what`)`, answering the response frame.
-type Apply = fn(&mut Connection, &str, i64, Option<&str>) -> anyhow::Result<Value>;
+/// frame)`, answering the response frame.
+type Apply = fn(&mut Connection, &str, &PairingFrame) -> anyhow::Result<Value>;
 
 fn frame_handler(db: PathBuf, link: Link, apply: Apply) -> FrameHandler {
     Arc::new(move |node: String, frame: Value| {
@@ -189,13 +218,7 @@ fn frame_handler(db: PathBuf, link: Link, apply: Apply) -> FrameHandler {
                 return error("unsupported_version");
             }
             let reply = tokio::task::spawn_blocking(move || {
-                let what = frame.what.as_deref();
-                apply(
-                    &mut crate::fed::open_durable(&db)?,
-                    &node,
-                    frame.generation,
-                    what,
-                )
+                apply(&mut crate::fed::open_durable(&db)?, &node, &frame)
             })
             .await;
             link.reload();
@@ -218,22 +241,19 @@ pub fn install(handle: &Handle, db: &Path) {
     handle.on_pair(pair_handler(db.to_owned(), link.clone()));
     handle.on_frame(
         "confirmed",
-        frame_handler(db.to_owned(), link.clone(), |conn, node, generation, _| {
-            remote_confirmed(conn, node, generation)
+        frame_handler(db.to_owned(), link.clone(), |conn, node, frame| {
+            remote_confirmed(conn, node, frame.generation)
         }),
     );
     handle.on_frame(
         "notice",
-        frame_handler(
-            db.to_owned(),
-            link,
-            |conn, node, generation, what| match what {
-                Some("removed") => remote_removed(conn, node, generation),
-                Some("paused") => set_remote_paused(conn, node, generation, true),
-                Some("resumed") => set_remote_paused(conn, node, generation, false),
+        frame_handler(db.to_owned(), link, |conn, node, frame| {
+            match frame.what.as_deref() {
+                Some("removed") => remote_removed(conn, node, frame.generation),
+                Some("paused" | "resumed" | "state") => set_remote_paused(conn, node, frame),
                 _ => Ok(error("unsupported_notice")),
-            },
-        ),
+            }
+        }),
     );
     tokio::spawn(maintain(handle.clone(), db.to_owned()));
 }

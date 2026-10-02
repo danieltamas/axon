@@ -77,7 +77,7 @@ impl Relay {
 
 /// State shared by the accept side, the dial tasks and the manager.
 pub struct Shared {
-    db_path: PathBuf,
+    pub(super) db_path: PathBuf,
     pub(super) endpoint: Endpoint,
     relay: Relay,
     lookup: MemoryLookup,
@@ -89,7 +89,7 @@ pub struct Shared {
     handlers: RwLock<HashMap<String, FrameHandler>>,
     pair_handler: RwLock<Option<PairHandler>>,
     changed: watch::Sender<u64>,
-    reload: Notify,
+    pub(super) reload: Notify,
     /// Held shared by the outbox from its authorization re-check until the frame is written,
     /// and exclusively by a local commit that withdraws authority (pause, remove, unshare,
     /// flags): once that commit returns, nothing authorised before it is still to be sent.
@@ -280,6 +280,10 @@ impl Handle {
             bail!("peer is not connected");
         };
         transport::request(&conn, frame, written).await
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.shared.db_path
     }
 
     /// See `Shared::transmit_gate`.

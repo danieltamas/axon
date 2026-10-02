@@ -16,8 +16,10 @@ use tokio::time::{interval, sleep, timeout, MissedTickBehavior};
 
 use super::codec::{read_frame, write_frame};
 use super::health::Path;
+use super::reconcile;
 use super::service::{Access, Shared};
 use super::{now_ms, FED_ALPN, PAIR_ALPN};
+use crate::store;
 
 /// Close codes, so a peer's log says why it was dropped.
 const CLOSE_NOT_A_PEER: u32 = 1;
@@ -26,6 +28,8 @@ const CLOSE_PAIR_UNAVAILABLE: u32 = 3;
 
 pub const HEARTBEAT_EVERY: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How often a peer that paused us is asked, without sending anything, whether it resumed.
+const PROBE_EVERY: Duration = Duration::from_secs(5);
 /// A request that gets no whole answer in this time has failed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
@@ -246,6 +250,7 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
         h.last_handshake_at = Some(now_ms());
     });
 
+    trade_state(shared, node, &conn).await;
     let mut beat = interval(HEARTBEAT_EVERY);
     beat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
@@ -255,6 +260,48 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
                 ping(shared, node, &conn).await?;
                 *failures = 0;
             }
+        }
+    }
+}
+
+/// Tell `node` where our side of the pairing stands and learn where its side does, on every
+/// connection (see `reconcile`). A change is applied by the service on its next reload.
+async fn trade_state(shared: &Arc<Shared>, node: EndpointId, conn: &Connection) {
+    let db = shared.db_path.clone();
+    let id = node.to_string();
+    let hello = tokio::task::spawn_blocking({
+        let (db, id) = (db.clone(), id.clone());
+        move || reconcile::hello(&db, &id)
+    })
+    .await;
+    let Ok(Ok(Some((generation, frame)))) = hello else {
+        return;
+    };
+    let Ok(reply) = request(conn, &frame, || {}).await else {
+        return;
+    };
+    let learned = tokio::task::spawn_blocking(move || {
+        reconcile::learn_reply(&store::open(&db)?, &id, generation, &reply)
+            .map_err(anyhow::Error::from)
+    })
+    .await;
+    if matches!(learned, Ok(Ok(true))) {
+        shared.reload.notify_one();
+    }
+}
+
+/// For a peer that paused us and so is not dialed: now and then connect only to trade state,
+/// so a resume whose notice was lost, or a pause on both sides, still ends. A peer that is
+/// still paused refuses the connection; that is silent, not a fault.
+pub async fn probe_loop(shared: Arc<Shared>, node: EndpointId) {
+    loop {
+        sleep(PROBE_EVERY).await;
+        let addr = shared.dial_address(node);
+        if let Ok(Ok(conn)) =
+            timeout(CONNECT_TIMEOUT, shared.endpoint.connect(addr, FED_ALPN)).await
+        {
+            trade_state(&shared, node, &conn).await;
+            conn.close(0u32.into(), b"bye");
         }
     }
 }

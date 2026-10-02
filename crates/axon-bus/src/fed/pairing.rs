@@ -15,7 +15,7 @@ use super::{identity, now_ms, random_id};
 use crate::store;
 
 pub use join::{join, JoinError};
-pub use wire::{install, notify_removed, notify_resumed, send_confirmed};
+pub use wire::{install, notify, notify_removed, notify_resumed, send_confirmed};
 
 /// A pairing not confirmed on both sides within this long is removed.
 pub const CONFIRM_WINDOW_MS: i64 = 600_000;

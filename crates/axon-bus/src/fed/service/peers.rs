@@ -47,18 +47,34 @@ fn load_peers(db_path: &Path) -> anyhow::Result<Vec<PeerRow>> {
 #[derive(Default)]
 struct Dialers {
     tasks: JoinSet<()>,
-    running: HashMap<EndpointId, AbortHandle>,
+    /// Per peer: whether it only gets probed (it paused us), and the task.
+    running: HashMap<EndpointId, (bool, AbortHandle)>,
 }
 
 impl Dialers {
-    fn start(&mut self, shared: &Arc<Shared>, node: EndpointId) {
-        self.running
-            .entry(node)
-            .or_insert_with(|| self.tasks.spawn(transport::dial_loop(shared.clone(), node)));
+    /// Dial `node`, or only probe it when it paused us; a change of mode swaps the task.
+    fn start(&mut self, shared: &Arc<Shared>, node: EndpointId, probe_only: bool) {
+        if self
+            .running
+            .get(&node)
+            .is_some_and(|(probing, _)| *probing == probe_only)
+        {
+            return;
+        }
+        if let Some((_, task)) = self.running.remove(&node) {
+            task.abort();
+        }
+        let shared = shared.clone();
+        let task = if probe_only {
+            self.tasks.spawn(transport::probe_loop(shared, node))
+        } else {
+            self.tasks.spawn(transport::dial_loop(shared, node))
+        };
+        self.running.insert(node, (probe_only, task));
     }
 
     fn keep_only(&mut self, shared: &Shared, wanted: impl Fn(&EndpointId) -> bool) {
-        self.running.retain(|node, task| {
+        self.running.retain(|node, (_, task)| {
             let keep = wanted(node);
             if !keep {
                 task.abort();
@@ -123,13 +139,11 @@ async fn sync_peers(shared: &Arc<Shared>, dialers: &mut Dialers) -> bool {
     }
     locked(&shared.health).retain(|node, _| access.contains_key(node));
     for (node, entry) in &access {
-        if entry.is_live() && !paused_by_peer.contains(node) {
-            dialers.start(shared, *node);
+        if entry.is_live() {
+            dialers.start(shared, *node, paused_by_peer.contains(node));
         }
     }
-    dialers.keep_only(shared, |node| {
-        access.get(node).is_some_and(Access::is_live) && !paused_by_peer.contains(node)
-    });
+    dialers.keep_only(shared, |node| access.get(node).is_some_and(Access::is_live));
     // A peer that became active may have been seen while still pairing, when no address is kept:
     // forget what was seen so the next connection records it.
     locked(&shared.observed).clear();

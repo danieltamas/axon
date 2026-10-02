@@ -10,9 +10,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, post, put};
 use axum::Router;
-use iroh::EndpointId;
 use serde::Deserialize;
-use serde_json::json;
 
 use super::{blocking, revoking, Done, Fail, FedApi};
 use crate::fed::lifecycle::{self, Change, Peer};
@@ -43,10 +41,8 @@ fn applied(change: Change, wrong_state: Fail) -> Result<Peer, Fail> {
 /// Tell the peer what happened to the pairing, once and only while it is connected, then
 /// make the service re-read the peers: that is what closes the connection.
 async fn tell_then_reload(handle: Handle, peer: Peer, what: &'static str) {
-    if let Ok(node) = peer.node_id.parse::<EndpointId>() {
-        let frame = json!({"type": "notice", "v": 1, "generation": peer.generation, "what": what});
-        let _ = tokio::time::timeout(NOTICE_BUDGET, handle.request(&node, &frame)).await;
-    }
+    let tell = pairing::notify(&handle, &peer.node_id, peer.generation, what, peer.seq);
+    let _ = tokio::time::timeout(NOTICE_BUDGET, tell).await;
     handle.reload();
 }
 
@@ -73,6 +69,7 @@ async fn resume(State(api): State<Arc<FedApi>>, Path(peer_id): Path<String>) -> 
             handle,
             peer.node_id,
             peer.generation,
+            peer.seq,
         ));
     }
     Ok(StatusCode::NO_CONTENT)

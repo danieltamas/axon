@@ -132,6 +132,43 @@ async fn a_revocation_waits_for_the_write_of_a_frame_already_cleared() {
 }
 
 #[tokio::test]
+async fn a_pairing_paused_on_both_sides_and_resumed_on_both_connects_again() {
+    let (a, ha, b, hb) = connected_pair().await;
+    crate::fed::pairing::install(&ha, &a.db);
+    crate::fed::pairing::install(&hb, &b.db);
+    // The state both sides end in when each resume notice was refused by a still-paused peer:
+    // active, each believing the other paused (sequence 1) and holding its own resume (2).
+    for node in [&a, &b] {
+        node.conn()
+            .execute(
+                "UPDATE peers SET remote_paused=1, remote_lifecycle_seq=1, lifecycle_seq=2",
+                [],
+            )
+            .unwrap();
+    }
+    ha.reload();
+    hb.reload();
+    let cleared = |node: &Node| {
+        !node
+            .conn()
+            .query_row::<bool, _, _>("SELECT remote_paused FROM peers", [], |r| r.get(0))
+            .unwrap()
+    };
+    for _ in 0..200 {
+        if cleared(&a) && cleared(&b) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(cleared(&a) && cleared(&b), "a pause outlived both resumes");
+    for handle in [&ha, &hb] {
+        wait_for(handle, |peer| peer["state"] == "connected").await;
+    }
+    ha.shutdown().await;
+    hb.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_peer_that_paused_us_is_not_redialed_and_is_not_a_fault() {
     let (a, ha, b, hb) = connected_pair().await;
     a.conn()

@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS peers (
   state TEXT NOT NULL CHECK (state IN ('pending_confirm','active','paused','removed')),
   local_confirmed_at INTEGER, remote_confirmed_at INTEGER,
   paired_at INTEGER NOT NULL, paused_at INTEGER, removed_at INTEGER, removed_reason TEXT,
-  last_error TEXT, remote_paused INTEGER NOT NULL DEFAULT 0   -- 1 while the peer has us paused
+  last_error TEXT, remote_paused INTEGER NOT NULL DEFAULT 0, lifecycle_seq INTEGER NOT NULL DEFAULT 0, remote_lifecycle_seq INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS peers_live_node ON peers(node_id) WHERE state <> 'removed';
 CREATE UNIQUE INDEX IF NOT EXISTS peers_live_label ON peers(label) WHERE state <> 'removed';
