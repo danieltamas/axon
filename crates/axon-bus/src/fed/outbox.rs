@@ -2,13 +2,14 @@
 //! row to its peer while the connection is up, retries transient failures with backoff under
 //! the original `expires_at`, and ends a row on the peer's answer: `accepted` or `rejected`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use iroh::EndpointId;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use tokio::task::JoinSet;
 use tokio::time::sleep;
 
 use super::audit::{self, Decision};
@@ -349,48 +350,80 @@ fn settle(db: &Path, row: &Due, result: &Verdict) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Send one peer's rows in order. Stops at the first transport failure and returns when the
+/// peer may be tried again; the remaining rows stay queued.
+async fn send_to_peer(handle: Handle, db: PathBuf, rows: Vec<Due>) -> Option<Instant> {
+    for mut row in rows {
+        // Shared with nothing but a revocation: held from the re-check to the write, not
+        // through the peer's answer, so a stalled peer never holds it.
+        let transmitting = handle.transmit_gate().read_owned().await;
+        let cleared = tokio::task::spawn_blocking({
+            let db = db.clone();
+            move || clear_to_send(&db, &mut row).map(|ok| (ok, row))
+        })
+        .await;
+        let Ok(Ok((true, row))) = cleared else {
+            continue;
+        };
+        let answer = handle
+            .request_then(&row.node, &row.frame, move || drop(transmitting))
+            .await;
+        let result = judge(&answer);
+        let failed = answer.is_err();
+        let wait = Duration::from_millis(retry_wait_ms(row.attempts) as u64);
+        let db = db.clone();
+        let _ = tokio::task::spawn_blocking(move || settle(&db, &row, &result)).await;
+        if failed {
+            return Some(Instant::now() + wait);
+        }
+    }
+    None
+}
+
 async fn run(handle: Handle, db: PathBuf) {
     // Peers whose last send failed, and until when they are left alone.
     let mut backed_off: HashMap<EndpointId, Instant> = HashMap::new();
+    // One task per peer with rows in flight: peers never wait on each other's answers.
+    let mut sending: JoinSet<(EndpointId, Option<Instant>)> = JoinSet::new();
+    let mut busy: HashSet<EndpointId> = HashSet::new();
     while !handle.stopped() {
         sleep(TICK).await;
+        while let Some(finished) = sending.try_join_next() {
+            if let Ok((node, retry_at)) = finished {
+                busy.remove(&node);
+                if let Some(until) = retry_at {
+                    backed_off.insert(node, until);
+                }
+            }
+        }
         backed_off.retain(|_, until| *until > Instant::now());
         let ready = tokio::task::spawn_blocking({
             let db = db.clone();
-            let skip: Vec<String> = backed_off.keys().map(ToString::to_string).collect();
+            let skip: Vec<String> = backed_off
+                .keys()
+                .chain(&busy)
+                .map(ToString::to_string)
+                .collect();
             move || due(&mut store::open(&db)?, now_ms(), &skip)
         })
         .await;
         let Ok(Ok(ready)) = ready else {
             continue;
         };
-        for mut row in ready {
-            // One unreachable peer costs a request timeout per back-off, not one per row.
-            if backed_off.contains_key(&row.node) {
-                continue;
+        let mut by_peer: Vec<(EndpointId, Vec<Due>)> = Vec::new();
+        for row in ready {
+            match by_peer.iter_mut().find(|(node, _)| *node == row.node) {
+                Some((_, rows)) => rows.push(row),
+                None => by_peer.push((row.node, vec![row])),
             }
-            // Shared with nothing but a revocation: held from the re-check to the write.
-            let transmitting = handle.transmit_gate().read_owned().await;
-            let cleared = tokio::task::spawn_blocking({
-                let db = db.clone();
-                move || clear_to_send(&db, &mut row).map(|ok| (ok, row))
-            })
-            .await;
-            let Ok(Ok((true, row))) = cleared else {
-                continue;
-            };
-            let answer = handle
-                .request_then(&row.node, &row.frame, move || drop(transmitting))
-                .await;
-            if answer.is_err() {
-                let wait = Duration::from_millis(retry_wait_ms(row.attempts) as u64);
-                backed_off.insert(row.node, Instant::now() + wait);
-            }
-            let result = judge(&answer);
-            let db = db.clone();
-            let _ = tokio::task::spawn_blocking(move || settle(&db, &row, &result)).await;
+        }
+        for (node, rows) in by_peer {
+            busy.insert(node);
+            let (handle, db) = (handle.clone(), db.clone());
+            sending.spawn(async move { (node, send_to_peer(handle, db, rows).await) });
         }
     }
+    sending.shutdown().await;
 }
 
 #[cfg(test)]
