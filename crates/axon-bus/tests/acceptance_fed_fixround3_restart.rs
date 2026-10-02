@@ -89,13 +89,14 @@ fn relay_change_racing_pause_keeps_the_busy_outbox_wire_barrier() {
             "paused"
         );
         assert_eq!(health(&pair.a, &pair.sa)["relay"], relay);
-        let assert_barrier = || {
-            for (arrived, frame) in observer.messages() {
-                assert!(queued_ids.iter().any(|id| frame["message_id"] == *id));
-                assert!(arrived <= returned,
+        let assert_barrier =
+            || {
+                for (arrived, frame) in observer.messages() {
+                    assert!(queued_ids.iter().any(|id| frame["message_id"] == *id));
+                    assert!(arrived <= returned,
                     "R2-1: settings restart sent after pause returned, attempt {attempt}: {frame}");
-            }
-        };
+                }
+            };
         // Includes the documented request timeout and an ensuing outbox retry opportunity.
         while returned.elapsed() < Duration::from_secs(12) {
             assert_barrier();

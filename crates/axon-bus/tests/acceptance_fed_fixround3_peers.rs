@@ -64,8 +64,7 @@ fn enable(bus: &Bus, server: &Server) -> Value {
 }
 
 #[test]
-fn heartbeat_responsive_peer_with_twenty_four_stalled_messages_cannot_starve_healthy_peer(
-) {
+fn heartbeat_responsive_peer_with_twenty_four_stalled_messages_cannot_starve_healthy_peer() {
     let (mut pair, _, target_x) = shared(100);
     let y = Bus::with_limit(Duration::from_secs(100));
     y.init();

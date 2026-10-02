@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 fn no_success(reply: Option<Value>, action: &str) {
     if let Some(reply) = reply {
         assert!(
-            reply["type"] == "error"
-                || (reply["type"] == "ack" && reply["status"] == "rejected"),
+            reply["type"] == "error" || (reply["type"] == "ack" && reply["status"] == "rejected"),
             "R2-2: old partial request succeeded after {action} returned: {reply}"
         );
     }
@@ -204,8 +203,7 @@ fn remote_pause_reconciliation_never_sends_queued_messages_on_its_control_probe(
                 "R2-3: queued application frame used a control probe: {:?}",
                 event.frame
             );
-            if event.arrived >= paused_at && event.connection != original_connection.id()
-            {
+            if event.arrived >= paused_at && event.connection != original_connection.id() {
                 assert!(queued_ids.iter().any(|id| event.frame["message_id"] == *id));
                 delivered_elsewhere = true;
             }
