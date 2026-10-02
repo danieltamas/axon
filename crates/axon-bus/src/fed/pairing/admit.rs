@@ -54,13 +54,28 @@ impl Admission {
 }
 
 /// What the inviter calls a joiner until its owner renames it. The name the joiner chose
-/// for us is never used (it could pose as someone else on the confirmation screen), and one
-/// derived from the node's own fingerprint cannot clash with another live peer's.
-fn neutral_label(joiner: &str) -> String {
+/// for us is never used (it could pose as someone else on the confirmation screen). One
+/// derived from the node's own fingerprint is taken unless a live peer already carries it
+/// (an owner may have renamed another peer that way); then the first free `-2`, `-3`, ...
+/// suffix is used. Read in the admission transaction, so the answer cannot go stale.
+fn neutral_label(tx: &Transaction, joiner: &str) -> rusqlite::Result<String> {
     let print = joiner
         .parse::<iroh::EndpointId>()
         .map_or_else(|_| "peer".to_owned(), |node| identity::fingerprint(&node));
-    format!("axon-{}", print.replace(' ', ""))
+    let base = format!("axon-{}", print.replace(' ', ""));
+    let mut candidate = base.clone();
+    for n in 2.. {
+        let taken: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM peers WHERE label=?1 AND state<>'removed')",
+            [&candidate],
+            |r| r.get(0),
+        )?;
+        if !taken {
+            break;
+        }
+        candidate = format!("{base}-{n}");
+    }
+    Ok(candidate)
 }
 
 /// Check the invite and, for the first valid joiner, create its pending row and consume the
@@ -120,7 +135,11 @@ fn admit_in(
         return Ok(Admission::Refused);
     }
     let generation = (history_generation(tx, joiner)? + 1).max(request.generation);
-    insert_pending(tx, joiner, &neutral_label(joiner), generation)?;
+    let label = neutral_label(tx, joiner)?;
+    // No row means a concurrent pairing of this node won; the invite stays unconsumed.
+    if insert_pending(tx, joiner, &label, generation)? == 0 {
+        return Ok(Admission::Refused);
+    }
     tx.execute(
         "UPDATE peer_invites SET consumed_by=?1 WHERE invite_id=?2",
         params![joiner, request.invite_id],
@@ -253,6 +272,35 @@ mod tests {
             .unwrap();
         assert!(label.starts_with("axon-") && label.len() == 21, "{label}");
         assert!(label_ok(&label));
+    }
+
+    #[test]
+    fn a_taken_neutral_label_gets_a_free_suffix_and_the_invite_is_consumed_with_the_peer() {
+        let mut fx = fixture();
+        let taken = neutral_label(&store::write_tx(&mut fx.conn).unwrap(), &joiner(2)).unwrap();
+        fx.conn
+            .execute(
+                "INSERT INTO peers (peer_id,node_id,label,generation,state,paired_at)
+                 VALUES ('other',?1,?2,1,'active',1)",
+                params![joiner(9), taken],
+            )
+            .unwrap();
+        let good = request(&fx, &fx.invite.secret, "alice");
+        assert!(admitted(admit(&mut fx.conn, &joiner(2), &good).unwrap()));
+        let label: String = fx
+            .conn
+            .query_row(
+                "SELECT label FROM peers WHERE node_id=?1",
+                [joiner(2)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(label, format!("{taken}-2"));
+        let consumed = invite::stored(&fx.conn, &fx.invite.invite_id)
+            .unwrap()
+            .unwrap()
+            .3;
+        assert_eq!(consumed, Some(joiner(2)));
     }
 
     #[test]
