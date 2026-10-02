@@ -132,6 +132,75 @@ async fn a_revocation_waits_for_the_write_of_a_frame_already_cleared() {
 }
 
 #[tokio::test]
+async fn pausing_a_peer_closes_every_connection_it_holds_not_only_the_dialed_one() {
+    let (a, ha, b, hb) = connected_pair().await;
+    let extra = hb
+        .shared
+        .endpoint
+        .connect(ha.addr(), FED_ALPN)
+        .await
+        .unwrap();
+    // A first request on it, so it is being served (and tracked) when the pause lands.
+    let frame = json!({"type": "ping", "v": 1, "generation": 1, "t": 0});
+    transport::request(&extra, &frame, || {}).await.unwrap();
+    assert!(locked(&ha.shared.open)[&b.id()].len() >= 2);
+    a.conn()
+        .execute("UPDATE peers SET state='paused'", [])
+        .unwrap();
+    ha.shared.reload.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), extra.closed())
+        .await
+        .expect("the extra connection is closed by the pause");
+    assert!(!locked(&ha.shared.open).contains_key(&b.id()));
+    assert!(!locked(&ha.shared.connections).contains_key(&b.id()));
+    ha.shutdown().await;
+    hb.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_control_probe_is_never_adopted_as_the_send_path_and_a_plain_connection_is() {
+    let (_a, ha, b, hb) = connected_pair().await;
+    let send_path = || locked(&ha.shared.connections)[&b.id()].stable_id();
+    let before = send_path();
+    let ping = |control: bool| {
+        let mut frame = json!({"type": "ping", "v": 1, "generation": 1, "t": 0});
+        if control {
+            frame["control"] = json!(true);
+        }
+        frame
+    };
+    let probe = hb
+        .shared
+        .endpoint
+        .connect(ha.addr(), FED_ALPN)
+        .await
+        .unwrap();
+    transport::request(&probe, &ping(true), || {})
+        .await
+        .unwrap();
+    transport::request(&probe, &ping(false), || {})
+        .await
+        .unwrap();
+    assert_eq!(
+        send_path(),
+        before,
+        "a marked connection stays out of the send path"
+    );
+    let plain = hb
+        .shared
+        .endpoint
+        .connect(ha.addr(), FED_ALPN)
+        .await
+        .unwrap();
+    transport::request(&plain, &ping(false), || {})
+        .await
+        .unwrap();
+    assert_ne!(send_path(), before, "an unmarked one becomes the send path");
+    ha.shutdown().await;
+    hb.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_pairing_paused_on_both_sides_and_resumed_on_both_connects_again() {
     let (a, ha, b, hb) = connected_pair().await;
     crate::fed::pairing::install(&ha, &a.db);

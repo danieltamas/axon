@@ -84,6 +84,8 @@ pub struct Shared {
     access: AccessMap,
     health: Mutex<HashMap<EndpointId, PeerHealth>>,
     connections: Mutex<HashMap<EndpointId, Connection>>,
+    /// Every connection being served, per peer, so a revocation can close them all.
+    open: Mutex<HashMap<EndpointId, Vec<Connection>>>,
     /// Last addresses written to `peer_addrs` per peer, so unchanged paths cost no write.
     observed: Mutex<HashMap<EndpointId, Vec<SocketAddr>>>,
     handlers: RwLock<HashMap<String, FrameHandler>>,
@@ -136,48 +138,6 @@ impl Shared {
     fn add_addr(&self, addr: EndpointAddr) {
         self.lookup.add_endpoint_info(addr);
         self.reload.notify_one();
-    }
-
-    pub(super) fn set_connection(&self, node: EndpointId, conn: Connection) {
-        locked(&self.connections).insert(node, conn);
-    }
-
-    /// A peer that connected to us is alive at that address now, which a connection to its
-    /// former process is not: send over the newest connection, whichever side opened it.
-    pub(super) fn adopt_connection(&self, node: EndpointId, conn: &Connection) {
-        let mut connections = locked(&self.connections);
-        if connections.get(&node).map(Connection::stable_id) != Some(conn.stable_id()) {
-            connections.insert(node, conn.clone());
-        }
-    }
-
-    /// An adopted connection ended: stop sending over it unless a newer one replaced it. The
-    /// session's heartbeat puts its own connection back (`vouch_for`).
-    pub(super) fn forget_connection(&self, node: &EndpointId, conn: &Connection) {
-        let mut connections = locked(&self.connections);
-        if connections.get(node).map(Connection::stable_id) == Some(conn.stable_id()) {
-            connections.remove(node);
-        }
-    }
-
-    /// A heartbeat answered on `conn`: the peer is connected, and sends have a path again if
-    /// an adopted connection that carried them has since ended.
-    pub(super) fn vouch_for(&self, node: &EndpointId, conn: &Connection) {
-        locked(&self.connections).entry(*node).or_insert_with(|| conn.clone());
-    }
-
-    /// A session ended: close its connection and forget it unless a newer one replaced it.
-    pub(super) fn release_connection(&self, node: &EndpointId, conn: &Connection) {
-        conn.close(0u32.into(), b"bye");
-        self.forget_connection(node, conn);
-        self.update(node, |h| h.connected = false);
-    }
-
-    pub(super) fn drop_connection(&self, node: &EndpointId) {
-        if let Some(conn) = locked(&self.connections).remove(node) {
-            conn.close(0u32.into(), b"bye");
-        }
-        self.update(node, |h| h.connected = false);
     }
 
     /// With a self-hosted relay the peer is reachable through it; with the default relays
@@ -368,7 +328,17 @@ impl Handle {
 /// `axon` on the same data dir already runs it, or when it cannot be started safely (each
 /// logged). `data_dir` holds `fed/`; `db_path` is the hub database.
 pub async fn start(data_dir: &Path, db_path: &Path) -> Option<Handle> {
-    match try_start(data_dir, db_path).await {
+    start_with_gate(data_dir, db_path, Arc::default()).await
+}
+
+/// `start`, with the transmit gate supplied by an owner that outlives the service, so a
+/// restart does not give revocations and the new outbox two different gates.
+pub async fn start_with_gate(
+    data_dir: &Path,
+    db_path: &Path,
+    transmit_gate: Arc<tokio::sync::RwLock<()>>,
+) -> Option<Handle> {
+    match try_start(data_dir, db_path, transmit_gate).await {
         Ok(handle) => handle,
         Err(err) => {
             eprintln!("axon-bus: federation not started: {err:#}");
@@ -377,7 +347,11 @@ pub async fn start(data_dir: &Path, db_path: &Path) -> Option<Handle> {
     }
 }
 
-async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Handle>> {
+async fn try_start(
+    data_dir: &Path,
+    db_path: &Path,
+    transmit_gate: Arc<tokio::sync::RwLock<()>>,
+) -> anyhow::Result<Option<Handle>> {
     let conn = store::open(db_path)?;
     if !super::enabled(&conn) {
         return Ok(None);
@@ -438,6 +412,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         access,
         health: Mutex::default(),
         connections: Mutex::default(),
+        open: Mutex::default(),
         observed: Mutex::default(),
         handlers: RwLock::default(),
         pair_handler: RwLock::default(),
@@ -445,7 +420,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         reload: Notify::new(),
         stop_manager: Notify::new(),
         admission: Default::default(),
-        transmit_gate: Arc::default(),
+        transmit_gate,
     });
     let router = Router::builder(endpoint)
         .accept(PAIR_ALPN, PairProtocol::new(shared.clone()))
@@ -465,6 +440,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
 }
 
 mod addrs;
+mod connections;
 mod link;
 mod peers;
 pub use link::{Link, WeakHandle};

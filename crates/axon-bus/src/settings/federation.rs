@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::fed;
 use crate::fed::service::{self, Handle};
@@ -22,6 +22,8 @@ type Applied = (bool, String);
 #[derive(Clone)]
 pub struct Federation {
     db: PathBuf,
+    /// `Shared::transmit_gate` of every service generation, owned here so it survives restarts.
+    transmit_gate: Arc<RwLock<()>>,
     running: Arc<Mutex<(Option<Handle>, Option<Applied>)>>,
     watching: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
@@ -31,6 +33,7 @@ impl Federation {
     pub fn new(db: &Path) -> Self {
         Self {
             db: db.to_owned(),
+            transmit_gate: Arc::default(),
             running: Arc::default(),
             watching: Arc::default(),
             closed: Arc::default(),
@@ -59,7 +62,9 @@ impl Federation {
         }
         slot.1 = stored;
         slot.0 = match self.db.parent() {
-            Some(data_dir) => service::start(data_dir, &self.db).await,
+            Some(data_dir) => {
+                service::start_with_gate(data_dir, &self.db, self.transmit_gate.clone()).await
+            }
             None => None,
         };
         if let Some(handle) = slot.0.as_ref() {
@@ -89,6 +94,12 @@ impl Federation {
                 self.apply(false).await;
             }
         }
+    }
+
+    /// The gate a revocation takes exclusively before it commits; the same one every running
+    /// service's outbox shares, whether or not a service runs at this moment.
+    pub fn transmit_gate(&self) -> Arc<RwLock<()>> {
+        self.transmit_gate.clone()
     }
 
     /// The running service, or `None` when federation is off or did not start.

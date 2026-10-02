@@ -152,6 +152,8 @@ async fn sync_peers(shared: &Arc<Shared>, dialers: &mut Dialers) -> bool {
     // forget what was seen so the next connection records it.
     locked(&shared.observed).clear();
     *shared.access.write().unwrap_or_else(|p| p.into_inner()) = access;
+    // A peer that stopped being live loses every connection, not only the one we dial.
+    shared.drop_unlive_connections();
     shared.changed.send_modify(|version| *version += 1);
     true
 }
@@ -159,10 +161,7 @@ async fn sync_peers(shared: &Arc<Shared>, dialers: &mut Dialers) -> bool {
 fn deny_all(shared: &Arc<Shared>, dialers: &mut Dialers) {
     *shared.access.write().unwrap_or_else(|p| p.into_inner()) = HashMap::new();
     dialers.keep_only(shared, |_| false);
-    let connected: Vec<EndpointId> = locked(&shared.connections).keys().copied().collect();
-    for node in connected {
-        shared.drop_connection(&node);
-    }
+    shared.drop_unlive_connections();
 }
 
 pub(super) async fn manage(shared: Arc<Shared>) {

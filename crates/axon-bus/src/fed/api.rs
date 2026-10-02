@@ -138,15 +138,7 @@ async fn revoking<T: Send + 'static>(
     api: &FedApi,
     work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, Fail> {
-    let gate = api
-        .federation
-        .handle()
-        .await
-        .map(|handle| handle.transmit_gate());
-    let _exclusive = match gate {
-        Some(gate) => Some(gate.write_owned().await),
-        None => None,
-    };
+    let _exclusive = api.federation.transmit_gate().write_owned().await;
     blocking(work).await
 }
 

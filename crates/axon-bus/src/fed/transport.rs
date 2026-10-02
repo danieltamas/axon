@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,7 @@ use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{EndpointAddr, EndpointId};
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tokio::time::{interval, sleep, timeout, MissedTickBehavior};
 
 use super::codec::{read_frame, write_frame};
@@ -80,40 +82,69 @@ impl ProtocolHandler for FedProtocol {
 }
 
 /// Answer the requests the peer opens on `conn`, whichever side dialed it: a peer that
-/// reaches us is where we send over next, so both ends serve every connection. An
-/// `inbound` connection becomes the send path on its first request.
+/// reaches us is where we send over next, so both ends serve every connection. An `inbound`
+/// connection becomes the send path on its first request, unless that request marks it as
+/// a control probe (`control: true`, see `probe_loop`), which never carries our sends.
+///
+/// The connection is tracked while served, so a revocation can close every connection of a
+/// peer (`Shared::drop_connection`); the handlers die with the loop, closed or not.
 async fn serve(shared: Arc<Shared>, conn: Connection, inbound: bool) {
     let node = conn.remote_id();
-    let mut adopted = false;
-    while let Ok((send, mut recv)) = conn.accept_bi().await {
+    let adopted = Arc::new(AtomicBool::new(false));
+    let control = Arc::new(AtomicBool::new(false));
+    shared.track(node, &conn);
+    let mut handlers = JoinSet::new();
+    loop {
+        let (send, mut recv) = tokio::select! {
+            incoming = conn.accept_bi() => match incoming {
+                Ok(stream) => stream,
+                Err(_) => break,
+            },
+            Some(_) = handlers.join_next() => continue,
+        };
         // Re-checked per stream: a peer paused or removed since the handshake is cut off.
-        let Some(access) = shared.access_of(&node).filter(Access::is_live) else {
+        if shared.access_of(&node).filter(Access::is_live).is_none() {
             conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
             break;
-        };
-        if inbound && !std::mem::replace(&mut adopted, true) {
-            shared.adopt_connection(node, &conn);
         }
         if !rate::admit(&shared.admission, &node.to_string()) {
             let busy = json!({"type": "error", "reason": "rate_limited"});
-            tokio::spawn(respond(send, busy));
+            handlers.spawn(respond(send, busy));
             continue;
         }
         shared.note_paths(&node, &conn);
         let (shared, conn) = (shared.clone(), conn.clone());
-        tokio::spawn(async move {
-            let request = match timeout(REQUEST_TIMEOUT, read_frame(&mut recv)).await {
+        let (adopted, control) = (adopted.clone(), control.clone());
+        handlers.spawn(async move {
+            let mut request = match timeout(REQUEST_TIMEOUT, read_frame(&mut recv)).await {
                 Ok(Ok(request)) => request,
                 // Oversized, malformed or stalled: drop the whole connection.
                 _ => return conn.close(VarInt::from_u32(CLOSE_BAD_FRAME), b"bad frame"),
             };
+            // Revoked while the frame was arriving: nothing is dispatched.
+            let Some(access) = shared.access_of(&node).filter(Access::is_live) else {
+                return conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
+            };
+            let marked = request
+                .as_object_mut()
+                .and_then(|frame| frame.remove("control"))
+                .is_some_and(|mark| mark == json!(true));
+            if inbound && marked {
+                control.store(true, Ordering::SeqCst);
+            } else if inbound
+                && !control.load(Ordering::SeqCst)
+                && !adopted.swap(true, Ordering::SeqCst)
+            {
+                shared.adopt_connection(node, &conn);
+            }
             let response = shared.dispatch(&node, &access, request).await;
             respond(send, response).await;
         });
     }
-    if adopted {
+    if adopted.load(Ordering::SeqCst) {
         shared.forget_connection(&node, &conn);
     }
+    shared.untrack(&node, &conn);
 }
 
 /// Write the answer and hold the stream until the requester has read it.
@@ -273,7 +304,7 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
         h.last_handshake_at = Some(now_ms());
     });
 
-    trade_state(shared, node, &conn).await;
+    trade_state(shared, node, &conn, false).await;
     let mut beat = interval(HEARTBEAT_EVERY);
     beat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let outcome = loop {
@@ -295,7 +326,8 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
 
 /// Tell `node` where our side of the pairing stands and learn where its side does, on every
 /// connection (see `reconcile`). A change is applied by the service on its next reload.
-async fn trade_state(shared: &Arc<Shared>, node: EndpointId, conn: &Connection) {
+/// `control` marks the connection as a probe the receiver must not send over (see `serve`).
+async fn trade_state(shared: &Arc<Shared>, node: EndpointId, conn: &Connection, control: bool) {
     let db = shared.db_path.clone();
     let id = node.to_string();
     let hello = tokio::task::spawn_blocking({
@@ -303,9 +335,12 @@ async fn trade_state(shared: &Arc<Shared>, node: EndpointId, conn: &Connection) 
         move || reconcile::hello(&db, &id)
     })
     .await;
-    let Ok(Ok(Some((generation, frame)))) = hello else {
+    let Ok(Ok(Some((generation, mut frame)))) = hello else {
         return;
     };
+    if control {
+        frame["control"] = json!(true);
+    }
     let reply = request(conn, &frame, || {}).await;
     let Ok(reply) = reply else {
         return;
@@ -330,7 +365,7 @@ pub async fn probe_loop(shared: Arc<Shared>, node: EndpointId) {
         if let Ok(Ok(conn)) =
             timeout(CONNECT_TIMEOUT, shared.endpoint.connect(addr, FED_ALPN)).await
         {
-            trade_state(&shared, node, &conn).await;
+            trade_state(&shared, node, &conn, true).await;
             conn.close(0u32.into(), b"bye");
         }
     }
