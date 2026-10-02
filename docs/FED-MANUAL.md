@@ -87,6 +87,22 @@ home directory. Use two different home networks, behind ordinary NAT.
       `GET /api/fed` shows it still queued, and it is delivered when the peer returns: the
       peer's `counters.received` goes up by one, not two.
 
+## 8. The same steps over the local API
+Everything the Settings page does is a route, for scripting a run or driving a headless
+machine. Sign in with `axon open --print`: `POST /api/session` `{"nonce":"<from the link>"}`
+answers `{"token":"…"}` and sets the cookie. Every call then needs both (`Cookie:
+axon_session=…` and `x-axon-session: <token>`), a matching `Origin` and, on POST and PUT,
+`Content-Type: application/json`.
+
+- `PUT /api/settings/federation {"enabled":true}` turns federation on.
+- `POST /api/fed/invites {}` creates an invite; `POST /api/fed/join {"invite","label"}` joins
+  with one.
+- `POST /api/fed/peers/<id>/confirm {"pair_code"}` attests the pair code on this side.
+- `GET /api/fed` reads peers, shares, health and counters.
+
+The acceptance tests `crates/axon-bus/tests/acceptance_fed_pairing.rs` and
+`acceptance_fed_auth.rs` exercise every route above.
+
 ## Record
 Machine and OS of each side, `axon --version`, the numbers above, and the screenshots. File a
 finding for every unticked line, named `FED-<section>-<line>` (for example `FED-3-1`) with

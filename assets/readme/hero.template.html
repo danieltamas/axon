@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-theme="__THEME__">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=2400, height=1200" />
+    <title>Axon</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      :root {
+        --ground: #05080a; --ink: #d3e3d9; --ink-strong: #eef7f1; --muted: #93a398;
+        --line: rgba(211, 227, 217, 0.14); --signal: #34d399;
+        --h-claude: #eb9a70; --h-codex: #7ebdff; --h-opencode: #b5d86a; --h-hermes: #c79bf2;
+        --glow: rgba(52, 211, 153, 0.12);
+        --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        --sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      }
+      :root[data-theme="light"] {
+        --ground: #f1f4f0; --ink: #17251d; --ink-strong: #06130c; --muted: #4a5a51;
+        --line: rgba(23, 37, 29, 0.16); --signal: #0b7d58;
+        --h-claude: #c0582b; --h-codex: #2c6bc9; --h-opencode: #5a8519; --h-hermes: #8747c2;
+        --glow: rgba(11, 125, 88, 0.08);
+      }
+      html, body { width: 2400px; height: 1200px; overflow: hidden; background: var(--ground); }
+      #root { position: relative; width: 100%; height: 100%; font-family: var(--sans); color: var(--ink-strong); }
+      .field { position: absolute; inset: 0; background: radial-gradient(1100px 700px at 78% 50%, var(--glow), transparent 70%); }
+      .brand { position: absolute; left: 160px; top: 200px; display: flex; align-items: center; gap: 22px; }
+      .brand svg { width: 52px; height: 52px; fill: none; stroke: var(--signal); stroke-width: 2; }
+      .wordmark { font: 700 40px var(--mono); letter-spacing: 0.24em; color: var(--ink-strong); }
+      .copy { position: absolute; left: 160px; top: 340px; width: 1360px; display: flex; flex-direction: column; gap: 44px; }
+      .headline { font-weight: 600; font-size: 82px; letter-spacing: -0.035em; line-height: 1.08; }
+      .headline em { font-style: normal; color: var(--signal); }
+      .sub { width: 1180px; font-size: 38px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.35; color: var(--muted); }
+      .local { position: absolute; left: 160px; bottom: 170px; font: 500 28px var(--mono); letter-spacing: 0.08em; color: var(--muted); }
+      .local b { color: var(--signal); font-weight: 500; }
+
+      .bus { position: absolute; left: 1620px; top: 200px; width: 620px; height: 800px; }
+      .wire { position: absolute; left: 44px; top: 0; width: 2px; height: 800px; background: var(--line); }
+      .pulse { position: absolute; left: 41px; top: 318px; width: 8px; height: 56px; border-radius: 4px; background: var(--signal); box-shadow: 0 0 24px var(--signal); }
+      .stop { position: absolute; left: 160px; display: flex; align-items: center; gap: 28px; }
+      .stop::before { content: ""; position: absolute; left: -116px; width: 90px; height: 2px; background: var(--line); }
+      .stop i { width: 14px; height: 14px; border-radius: 50%; background: var(--h); box-shadow: 0 0 0 6px var(--ground); position: absolute; left: -122px; }
+      .pill { padding: 18px 34px; border: 2px solid var(--h); border-radius: 999px; color: var(--h); font: 600 32px/1 var(--mono); letter-spacing: 0.14em; white-space: nowrap; }
+      .claude { --h: var(--h-claude); } .codex { --h: var(--h-codex); } .opencode { --h: var(--h-opencode); } .hermes { --h: var(--h-hermes); }
+      .stop.claude { top: 64px; } .stop.codex { top: 254px; } .stop.opencode { top: 444px; } .stop.hermes { top: 634px; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="1" data-width="2400" data-height="1200">
+      <div class="field"></div>
+      <div class="brand">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.6"/><circle cx="19" cy="5" r="2.6"/><circle cx="19" cy="19" r="2.6"/><path d="M7.4 10.9 16.6 6.1M7.4 13.1l9.2 4.8"/></svg>
+        <span class="wordmark">AXON</span>
+      </div>
+      <div class="copy">
+        <div class="headline">The coordination bus for the coding agents on your machine, <em>and on your teammate's.</em></div>
+        <div class="sub">Claude Code, Codex, OpenCode and Hermes, registered by a hook, talking along links both sides accepted, on a budget, audited.</div>
+      </div>
+      <div class="local"><b>100% local</b> &nbsp;·&nbsp; nothing leaves your machine until you pair it with one you trust</div>
+      <div class="bus">
+        <div class="wire"></div><div class="pulse"></div>
+        <div class="stop claude"><i></i><span class="pill claude">CLAUDE CODE</span></div>
+        <div class="stop codex"><i></i><span class="pill codex">CODEX</span></div>
+        <div class="stop opencode"><i></i><span class="pill opencode">OPENCODE</span></div>
+        <div class="stop hermes"><i></i><span class="pill hermes">HERMES</span></div>
+      </div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = { duration: () => 1, seek() {}, pause() {}, time() { return 0; } };
+    </script>
+  </body>
+</html>
