@@ -29,6 +29,10 @@ pub fn load_or_create(data_dir: &Path, peers_exist: bool) -> anyhow::Result<Secr
     if is_symlink(&path) {
         bail!("{KEY_LOST}: {} is a symlink", path.display());
     }
+    // A key others can read may have been copied: never used, never replaced, peers or not.
+    if path.exists() {
+        require_private(&path)?;
+    }
     match read_key(&path) {
         Ok(Some(key)) => return Ok(key),
         Ok(None) if !peers_exist => {}
