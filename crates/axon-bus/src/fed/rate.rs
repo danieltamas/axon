@@ -17,8 +17,8 @@ const FRAMES_PER_SECOND: f64 = 10.0;
 const FRAME_BURST: f64 = 20.0;
 /// Streams per second one peer may open at all, of any kind: the bound on what it can make
 /// the service persist or dispatch before a handler's own rate applies.
-const STREAMS_PER_SECOND: f64 = 50.0;
-const STREAM_BURST: f64 = 100.0;
+const STREAMS_PER_SECOND: f64 = 20.0;
+const STREAM_BURST: f64 = 40.0;
 
 pub type Buckets = Arc<Mutex<HashMap<String, Bucket>>>;
 /// Rejections written to one database's audit per peer per window; the rest are only counted.
@@ -131,7 +131,7 @@ mod tests {
     fn a_peer_over_the_stream_rate_is_refused_whatever_it_sends_and_counted() {
         let buckets = Buckets::default();
         let admitted = (0..300).filter(|_| admit(&buckets, "stream-hog")).count();
-        assert!((100..300).contains(&admitted), "{admitted}");
+        assert!((40..300).contains(&admitted), "{admitted}");
         assert!(admit(&buckets, "someone-else"));
         assert!(refused("stream-hog") >= 200 - 5);
     }

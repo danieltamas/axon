@@ -566,12 +566,81 @@ reports are in `docs/audits/`.
 - **Settings errors** answer a fixed `unavailable` and log the cause; `config.toml` budget edits are
   serialized and staged under unique names.
 
-- **Accepted, not fixed (P3).** Thread names stay as sent on the wire (BUG-11; frozen tests
-  assert it). Dial backoff caps at 10 s without jitter (BUG-12). A slow message at the head of a
-  peer's queue delays the ones behind it (BUG-13). The pair code is an attestation, not a secret
-  channel, and the manual says so (SEC-8). Dependency advisories are tracked by CI, not
-  here (SEC-10). SEC-6 and SEC-11 need a larger redesign than the risk warrants for a local
-  tool. Invite relay URLs are checked for `https://` only, not against private hosts (SEC-7;
-  the relay is chosen by the owner). The `peer:` address partition stays case-insensitive in
-  triggers already created in existing databases (SEC-9). QA TEST-n items belong to the
-  acceptance suites. Release items REL-4 and REL-5 are packaging steps outside this repo.
+**Fix round 2 (2026-10-02).**
+- **Transmit boundary (RR-1).** The service owns one gate (`transmit_gate`, a read-write lock).
+  The outbox holds it shared from its authorization re-check until the frame is written; a local
+  pause, remove, unshare or flag change takes it exclusively around its commit. So in the owning
+  process no frame is written after such a commit returns, and no SQLite write transaction is held
+  across a network await (the gate is released when the write finishes, not when the peer answers).
+  The gate is global rather than per peer: a revocation may wait for in-flight writes to any peer,
+  at most the 10 s request timeout. A revocation made by another process (the `axon bus` CLI) is
+  seen by the owner's next re-check; the residual window is the time between that re-check and the
+  frame's write, normally milliseconds and never more than the same 10 s.
+- **Streams (RR-2).** An open `/api/stream` re-reads its session every 500 ms with a read-only query
+  that must answer within 400 ms; a missing session, an error or a timeout closes the stream, so
+  revoking or expiring a session ends it within 1 s even while a writer holds the database. The
+  stream never refreshes `last_used_at`; only API requests do.
+- **Lifecycle (RR-3, RR-4).** Each pairing carries `lifecycle_seq`, bumped by every pause, resume and
+  removal of ours, and `remote_lifecycle_seq`, the newest of the peer's that we applied. `paused`,
+  `resumed` and `state` notices carry `seq`; one that is not newer is ignored, so a late pause
+  cannot undo a later resume. The acknowledgement carries the answerer's own `{paused, seq}`, which
+  the sender learns. On every connection each side sends a `state` notice, so a notice lost while
+  apart is repaired at the next connect. A peer that paused us is not dialed for traffic but is
+  probed every 5 s (connect, trade `state`, close; silent when it refuses): a pause on both sides
+  followed by a resume on both ends leaves two peers that reconnect without pairing again. Notices
+  retry until acknowledged, an error answer included, except `unknown_peer` and
+  `stale_generation`. A removal notice lost to an outage is still not repaired (see Shares above).
+- **Reload (RR-5).** A failed read of the peers table and a failed reload worker both deny, close
+  and retry at the next tick. **Retention (RR-7).** An old undelivered inbound message is deleted
+  with its inbox record in the same transaction, never the record alone. **Dialers (RR-8).**
+  Aborted dial tasks are reaped while running; shutdown signals the manager, which aborts and joins
+  every dialer before it returns. **Budget file (RR-9).** Edits of `config.toml` hold an advisory
+  file lock (`config.toml.lock`), so other `axon` processes are excluded too.
+- **Admission (RR-11).** Before any address is persisted or a frame dispatched, a peer may open
+  20 streams per second (burst 40) of any kind, built-in `ping` and unknown types included;
+  over it the stream answers `rate_limited` and is counted like any other refusal. The per-kind
+  rate of Rates and limits stays behind it.
+- **Identity key (RR-14, SEC-12).** A key file readable by group or others is refused at start with
+  the `chmod 600` fix; the mode is not repaired, because the key may already have been copied.
+  A new key is created 0600 in a 0700 directory. Windows has no mode to read back, so there the
+  owner-only ACL is still set rather than checked. **Refs (REL-13).** `axon bus guide` states that
+  a ref uses `/` only.
+- **Joiner label (SEC-6).** The inviter never stores the label the joiner chose; it names the
+  pending peer `axon-` plus the 16 hex digits of the joiner's fingerprint (unique per node) until
+  its owner renames it. The joiner still sends its label (it is validated, then ignored), and the
+  inviter no longer answers `label_taken`. **Invite relay (SEC-7).** An invite whose `relay_url` is
+  not `https://` is refused as `invalid_invite`; a private https host is not refused.
+- **Startup (RR-16).** The root `axon` records its port, binds, and only then does the slower
+  startup work (hooks, first snapshot, federation), so the port is open within milliseconds.
+- **Not carried to pre-fix databases (RR-6, RR-10).** `lifecycle_seq`, `remote_lifecycle_seq` and
+  the earlier fix-round columns are in the table definition only. Federation has never shipped
+  (`job/fed` is unmerged), so no database outside development has `fed_inbox` rows or racing
+  duplicate labels, and none needs an upgrade path.
+- **Accepted, not fixed (P3).** Reasons are the residual risk, not a claim that it is absent.
+  - BUG-11: thread names stay as sent on the wire; frozen tests assert it.
+  - BUG-12: dial backoff already doubles from 1 s to 60 s with jitter. A message that fails to
+    send retries after 1 s doubling to a fixed 10 s, without jitter; many queued rows to one peer
+    retry together, which is harmless at the volumes this carries.
+  - BUG-13: the outbox sends sequentially. After a failed send to a peer it skips that peer's other
+    rows for the tick, so one unreachable peer costs at most one 10 s request timeout per tick; the
+    messages to other peers are delayed by that much, not blocked.
+  - SEC-8: the pair code is the owner's attestation that the digits matched, not something the
+    server can verify; the manual says so.
+  - SEC-9: the `peer:` partition keeps case-insensitive `LIKE` in the FK-replacement triggers and
+    two filters. A local sender id spelled `PEER:x` skips the sender check and its messages leave
+    local delivery. It is local-only (an agent registers its own ids), and fixing it means
+    replacing triggers in `store.rs`, which is at its line limit.
+  - SEC-10: four findings remain open (rustls 0.23.40 TLS 1.3 key-change handling, webbrowser
+    1.2.1 URL handling, anyhow `downcast_mut`, and the unmaintained `paste`). Impact: the rustls
+    transcript is still authenticated; the URL given to webbrowser is a fixed loopback link; the
+    branch calls nothing unsound. A bump needs registry access and a rebuild of the dist size
+    number. With `relay = "default"` the node's presence and home relay are published to n0's
+    DNS and relays; the federation card in Settings should say so (UI, designer).
+  - SEC-11: an unknown invite id now takes no write lock. Anyone who has seen an invite can still
+    hold the 8 pairing slots for 15 s each, which blocks pairing (not messaging) while they do,
+    and each wrong secret costs one write until the fifth kills the invite.
+  - SEC-13(b): the pairing nonce is single-use and lives 60 s; it is visible in process arguments
+    to processes of the same user, who can already read the database.
+  - REL-5: the Windows ACL path has no test; CI builds and tests on `windows-latest` but the ACL
+    assertion needs a Windows host to write and verify.
+  - TEST-n: acceptance tests are Codex's; the implementer does not add or edit them.
