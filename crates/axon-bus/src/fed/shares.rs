@@ -271,8 +271,9 @@ fn close(tx: &Connection, share: &Share, revision: i64) -> rusqlite::Result<()> 
     )?;
     tx.execute(
         "DELETE FROM messages WHERE delivered_at IS NULL
-           AND id IN (SELECT local_message_id FROM fed_inbox WHERE peer_id=?2)
-           AND to_id IN (SELECT agent_id FROM fed_sessions WHERE share_id=?1)",
+           AND id IN (SELECT local_message_id FROM fed_inbox WHERE peer_id=?2
+                      AND (share_id=?1 OR (share_id IS NULL
+                           AND to_id IN (SELECT agent_id FROM fed_sessions WHERE share_id=?1))))",
         params![id, share.peer_id],
     )?;
     Ok(())

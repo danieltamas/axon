@@ -81,7 +81,7 @@ fn remove_ends_every_grant_in_one_step_and_keeps_what_was_already_delivered() {
             .unwrap();
         fx.conn
             .execute(
-                "INSERT INTO fed_inbox VALUES ('p1',7,?1,'h',?1,1,2)",
+                "INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at) VALUES ('p1',7,?1,'h',?1,1,2)",
                 [local],
             )
             .unwrap();

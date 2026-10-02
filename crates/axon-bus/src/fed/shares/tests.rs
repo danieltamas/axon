@@ -58,11 +58,27 @@ fn unshare_cancels_queued_rows_and_deletes_only_undelivered_inbound() {
             .unwrap();
         fx.conn
             .execute(
-                "INSERT INTO fed_inbox VALUES ('p1',7,?1,'h',?1,1,2)",
-                [local],
+                "INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at,share_id)
+                 VALUES ('p1',7,?1,'h',?1,1,2,?2)",
+                params![local, share],
             )
             .unwrap();
     }
+    // Pending, from the same peer to the same agent, but accepted through another share.
+    fx.conn
+        .execute(
+            "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body)
+             VALUES ('other-share','t',2,'peer:p1/bbbbbbbbbbbb','agent','sync','hi')",
+            [],
+        )
+        .unwrap();
+    fx.conn
+        .execute(
+            "INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at,share_id)
+             VALUES ('p1',7,'other-share','h','other-share',1,2,?1)",
+            [id('c')],
+        )
+        .unwrap();
     let tx = store::write_tx(&mut fx.conn).unwrap();
     let removed = remove(&tx, &share).unwrap();
     tx.commit().unwrap();
@@ -78,11 +94,16 @@ fn unshare_cancels_queued_rows_and_deletes_only_undelivered_inbound() {
         ),
         1
     );
-    let left: String = fx
+    let mut left: Vec<String> = fx
         .conn
-        .query_row("SELECT id FROM messages", [], |r| r.get(0))
+        .prepare("SELECT id FROM messages ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(left, "shown");
+    left.sort();
+    assert_eq!(left, ["other-share", "shown"]);
 }
 
 fn frame(kind: &str, share: &str, revision: i64, inbound: bool) -> serde_json::Value {

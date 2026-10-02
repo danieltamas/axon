@@ -344,8 +344,8 @@ fn store_message(tx: &Connection, from: &Sender, recipient: &str, msg: &Msg) -> 
         ],
     )?;
     tx.execute(
-        "INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at,share_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             from.peer_id,
             msg.generation,
@@ -353,7 +353,8 @@ fn store_message(tx: &Connection, from: &Sender, recipient: &str, msg: &Msg) -> 
             msg.content_hash(),
             local_id,
             now,
-            msg.expires_at
+            msg.expires_at,
+            msg.share_id
         ],
     )?;
     Ok(())

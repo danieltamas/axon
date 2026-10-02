@@ -285,14 +285,14 @@ fn drop_sender_foreign_key(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)
 }
 
-/// Columns added after their table first shipped; `CREATE TABLE IF NOT EXISTS`
-/// leaves an existing table as it was.
+/// Columns added after their table first shipped (`CREATE TABLE IF NOT EXISTS` skips them).
 fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
     for (table, column, kind) in [
         ("agents", "effort", "TEXT"),
         ("agents", "introduced_at", "INTEGER"),
         ("usage", "received_at", "INTEGER"),
         ("messages", "sent_at", "INTEGER"),
+        ("fed_inbox", "share_id", "TEXT"),
     ] {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",

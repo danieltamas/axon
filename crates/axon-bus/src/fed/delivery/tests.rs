@@ -26,7 +26,7 @@ fn arrive(conn: &Connection, n: usize, kind: &str, body: &str, expires_in_ms: i6
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO fed_inbox VALUES ('p1',7,?1,'h',?2,?3,?4)",
+        "INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at) VALUES ('p1',7,?1,'h',?2,?3,?4)",
         params![format!("m{n}"), local, now, now + expires_in_ms],
     )
     .unwrap();
