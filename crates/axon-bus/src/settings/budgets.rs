@@ -2,9 +2,8 @@
 //! `budget_eur_per_*` in `config.toml`), so there is one source for the CLI and the page.
 //! Edits keep the owner's other keys and comments.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
 use anyhow::Context;
 use serde_json::{json, Value};
@@ -12,8 +11,6 @@ use toml_edit::{value, DocumentMut};
 
 use super::input::BUDGET_FIELDS;
 
-/// Serializes the read-modify-write of `config.toml`, so two edits never lose each other.
-static WRITING: Mutex<()> = Mutex::new(());
 static STAGED: AtomicU64 = AtomicU64::new(0);
 
 pub fn config_path() -> PathBuf {
@@ -41,9 +38,23 @@ pub fn read() -> Value {
 /// Apply `changes` (a cap, or `None` to remove it). A file that does not parse is refused
 /// rather than overwritten: the owner's hand edits are not ours to discard.
 pub fn write(changes: &[(&str, Option<f64>)]) -> anyhow::Result<()> {
-    let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
-    let path = config_path();
-    let text = match std::fs::read_to_string(&path) {
+    write_at(&config_path(), changes)
+}
+
+fn write_at(path: &Path, changes: &[(&str, Option<f64>)]) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    }
+    // An advisory file lock, not a mutex: it also serializes other `axon` processes, and two
+    // opens of the lock file exclude each other even inside this one. Released on drop.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.with_extension("toml.lock"))
+        .context("open the config lock")?;
+    lock.lock().context("lock the config")?;
+    let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(err) => return Err(err).with_context(|| format!("read {}", path.display())),
@@ -60,9 +71,6 @@ pub fn write(changes: &[(&str, Option<f64>)]) -> anyhow::Result<()> {
             }
         }
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    }
     // Rename over the file so a crash never leaves half a config for `axon` to misread.
     let staged = path.with_extension(format!(
         "toml.{}.{}.tmp",
@@ -70,5 +78,34 @@ pub fn write(changes: &[(&str, Option<f64>)]) -> anyhow::Result<()> {
         STAGED.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&staged, doc.to_string())?;
-    std::fs::rename(&staged, &path).with_context(|| format!("replace {}", path.display()))
+    std::fs::rename(&staged, path).with_context(|| format!("replace {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_edits_each_keep_their_own_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("axon").join("config.toml");
+        let writers: Vec<_> = BUDGET_FIELDS
+            .iter()
+            .flat_map(|field| (0..8).map(move |n| (*field, f64::from(n))))
+            .map(|(field, n)| {
+                let path = path.clone();
+                std::thread::spawn(move || write_at(&path, &[(field, Some(n))]).unwrap())
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let doc: DocumentMut = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        for field in BUDGET_FIELDS {
+            assert!(
+                doc.get(&format!("budget_{field}")).is_some(),
+                "{field} lost"
+            );
+        }
+    }
 }
