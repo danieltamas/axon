@@ -170,3 +170,106 @@ pub fn frame(bus: &Bus, peer_id: &str, mut envelope: Value) -> Value {
     envelope["generation"] = json!(generation);
     envelope
 }
+
+/// A separately addressable connection, so a newer session cannot hide an older one.
+pub struct ProbeConnection {
+    runtime: tokio::runtime::Handle,
+    connection: iroh::endpoint::Connection,
+}
+
+pub struct PartialRequest {
+    runtime: tokio::runtime::Handle,
+    send: iroh::endpoint::SendStream,
+    recv: iroh::endpoint::RecvStream,
+    suffix: Vec<u8>,
+}
+
+impl Probe {
+    pub fn initial_connection(&self) -> ProbeConnection {
+        ProbeConnection {
+            runtime: self.runtime.handle().clone(),
+            connection: self.connection.clone(),
+        }
+    }
+
+    pub fn another_connection(&self) -> ProbeConnection {
+        let connection = self.runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                self.endpoint
+                    .connect(self.connection.remote_id(), b"axon/fed/1"),
+            )
+            .await
+            .expect("second connection deadline")
+            .expect("second authenticated connection")
+        });
+        assert_ne!(connection.stable_id(), self.connection.stable_id());
+        ProbeConnection {
+            runtime: self.runtime.handle().clone(),
+            connection,
+        }
+    }
+}
+
+impl ProbeConnection {
+    pub fn id(&self) -> usize {
+        self.connection.stable_id()
+    }
+
+    pub fn close(&self) {
+        self.connection.close(0u32.into(), b"fixture reconnect");
+    }
+
+    pub fn partial(&self, frame: &Value) -> PartialRequest {
+        let body = serde_json::to_vec(frame).unwrap();
+        assert!(body.len() > 1 && body.len() <= 8192);
+        let (send, recv) = self.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let (mut send, recv) = self.connection.open_bi().await.unwrap();
+                send.write_all(&(body.len() as u32).to_be_bytes())
+                    .await
+                    .unwrap();
+                send.write_all(&body[..body.len() - 1]).await.unwrap();
+                (send, recv)
+            })
+            .await
+            .expect("partial frame write deadline")
+        });
+        PartialRequest {
+            runtime: self.runtime.clone(),
+            send,
+            recv,
+            suffix: body[body.len() - 1..].to_vec(),
+        }
+    }
+
+    pub fn request(&self, frame: &Value) -> Value {
+        self.partial(frame)
+            .finish()
+            .expect("live connection must answer")
+    }
+}
+
+impl PartialRequest {
+    /// EOF, stream reset, connection closure and timeout are all non-success outcomes.
+    pub fn finish(mut self) -> Option<Value> {
+        self.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                // Still read if the last write fails: an already-buffered success must fail tests.
+                if self.send.write_all(&self.suffix).await.is_ok() {
+                    let _ = self.send.finish();
+                }
+                let mut prefix = [0; 4];
+                self.recv.read_exact(&mut prefix).await.ok()?;
+                let length = u32::from_be_bytes(prefix) as usize;
+                assert!(length <= 8192, "bounded response frame");
+                let mut reply = vec![0; length];
+                self.recv.read_exact(&mut reply).await.ok()?;
+                Some(serde_json::from_slice(&reply).expect("wire response JSON"))
+            })
+            .await
+            .ok()
+            .flatten()
+        })
+    }
+}

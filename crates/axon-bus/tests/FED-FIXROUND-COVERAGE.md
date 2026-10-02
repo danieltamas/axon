@@ -134,3 +134,56 @@ Round 2 harness and verification limits:
   orchestrator must compile and execute these additions, including the root test alone
   when measuring the one-process startup contract. Red results are expected for unfixed
   requirements; they must not be relaxed to fit current source behavior.
+
+## Round 3
+
+Authority: the **Round 3** done-when column in the work order and the owner's explicit
+Round 3 test scenarios. Wire framing, lifecycle sequence fields, neutral labels and
+the HTTP contracts come from `docs/P2P-SPEC.md`, including section 12. Assertions were
+derived without reading the feature implementation being changed in parallel.
+Existing test cases remain frozen; existing helper changes are additive.
+
+| R2 id | New acceptance coverage |
+|---|---|
+| R2-4 | `acceptance_fed_fixround3_peers.rs`: `heartbeat_responsive_peer_with_twenty_four_stalled_messages_cannot_starve_healthy_peer`. Three real paired instances establish a working sender-to-Y path. Replace X with the loopback wire probe, enqueue 24 messages using a -60,000 ms federation clock offset, observe a message and a subsequent heartbeat response while all message acks remain held, then enqueue one message to Y. Y must commit its inbox row within **5 seconds**, measured before the CLI send starts. All 24 X messages must still be queued and older than Y's message; Y's stored body is checked. |
+| R2-5 | `acceptance_fed_fixround3_peers.rs`: `neutral_label_collision_creates_a_confirmable_peer_or_preserves_the_invite`. Rename an existing active peer through HTTP to `axon-` plus the new joiner's 16 fingerprint hex digits. A successful join must immediately have exactly one live row for that node, a distinct label, matching confirmation codes and a successful two-sided confirmation. A clean client error must leave no new live rows and the original invite unconsumed, uncancelled and with no failed attempts; renaming the incumbent away must permit joining with that exact same invite. The incumbent cannot be silently renamed and a success response without a row always fails. |
+| R2-3 | `acceptance_fed_fixround3_connections.rs`: `remote_pause_reconciliation_never_sends_queued_messages_on_its_control_probe`. Queue eight messages against a probe holding acks, send a valid newer remote pause, and verify `remote_paused=true`. Close existing connections and positively observe a newly opened connection exchanging lifecycle state within 15 seconds. Hold its reply to identify the control connection, then answer with a newer resumed state. **No message frame may use that connection**, including during reconciliation. Require recovery, delivery over another connection, and acceptance of all queued messages within a further 15 seconds. |
+| R2-2 | `acceptance_fed_fixround3_connections.rs`: `older_partial_ping_and_message_cannot_succeed_after_pause_returns` and `older_partial_ping_and_message_cannot_succeed_after_remove_returns`. Prove normal ping/message acceptance, send the length and all but the last byte of another ping and valid message on that connection, then open and exercise a distinct newer connection. Complete the two older requests concurrently only after the owner API returns. EOF/reset/closure/timeout or explicit rejection is allowed; pong or a successful ack fails. The partial message must not have an inbox row and the server must remain healthy. |
+| R2-1 | `acceptance_fed_fixround3_restart.rs`: `relay_change_racing_pause_keeps_the_busy_outbox_wire_barrier`. Three fresh pairings independently queue 16 messages and prove positive wire receipt with unsent backlog while acks are held. A three-party barrier races `PUT /api/settings/federation` changing relay from `default` to loopback HTTPS, owner pause, and ack release. Both HTTP calls must succeed, relay/state must persist, and every observed message arrival must precede the pause response. Observe all connections, including replacements, for 12 seconds after pause. |
+
+Round 3 harness and verification limits:
+
+- Every instance uses the existing isolated HOME/XDG directories,
+  `AXON_FED_RELAY=disabled`, and `AXON_FED_BIND=127.0.0.1:0`. The relay URL in R2-1 is
+  a settings input; the debug transport override keeps actual relay/discovery access
+  disabled. The fairness test uses `AXON_TEST_NOW_OFFSET_MS` only on real CLI enqueue
+  operations to establish older messages without seeding rows or advancing expiry.
+- `common/wire_probe.rs` adds separately addressable authenticated connections and
+  partial length-prefixed requests. Three-second completion deadlines bound negative
+  response observation; both response types also have positive controls before the
+  revocation. These assertions do not expose or prove internal task cancellation.
+- `common/wire_observer.rs` adds timestamped frame/connection logs, heartbeat-response
+  observation and configurable lifecycle replies. It retains connection handles to
+  prevent numeric connection IDs being reused during a test. Existing helper callers
+  retain their control responses and message-ack behavior.
+- R2-1 is achievable as a real HTTP concurrency regression through existing settings
+  and wire seams. It does not force the narrow internal gate-replacement interleaving,
+  expose service generation IDs, or prove which lock survives replacement. A passing
+  schedule is not proof of every schedule. As in Round 2, receiver timestamps cannot
+  distinguish a late arrival of previously buffered bytes from a later transmission.
+- R2-2 covers pause/remove and incomplete frames on an older connection. Reload denial
+  remains uncovered: no existing boundary seam deterministically injects a reload
+  failure or a worker join failure. A silent three-second window is not proof that
+  the handler task has been joined; the observable contract here is no success.
+- R2-3 covers the service's outgoing probe of a remotely paused peer, including a
+  resume learned through its response. It does not invent a new wire probe marker or
+  require a particular implementation of the internal control-only flag. Positive
+  probe and subsequent traffic observations prevent a disconnected sender from passing.
+- R2-4's five-second bound is the owner's requested acceptance scenario, rather than
+  the old section 12 BUG-13 claim. It checks end-to-end fairness, not a particular SQL
+  batch size or algorithm. Documentation corrections R2-6 through R2-9 remain review
+  work; these tests cannot establish the accuracy of platform/security rationale.
+- **Not runtime verified:** no Cargo command, build or test was run. Formatting and
+  static diff/scope/line-count checks do not establish compilation or red/green runtime
+  results. The orchestrator must compile and execute the six new test functions;
+  failures for unfixed requirements must be corrected in source.
