@@ -17,11 +17,14 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# Without an explicit AXON the debug binary is rebuilt, so a stale one is never what runs.
+BUILD_DEBUG=
+[ -z "${AXON:-}" ] && BUILD_DEBUG=1
 AXON=${AXON:-target/debug/axon}
 SHIPPED=target/dist/axon
 SIZE_BUDGET=15000000
 LATENCY_BUDGET_MS=1000
-SAMPLES=8
+SAMPLES=24
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/axon-fed-e2e.XXXXXX")
 FAILED=0
@@ -54,7 +57,7 @@ v = eval(sys.argv[1])
 print(v if isinstance(v, str) else json.dumps(v))' "$1"
 }
 
-if [ ! -x "$AXON" ]; then cargo build -p axon || fail "build the debug binary"; fi
+if [ -n "$BUILD_DEBUG" ] || [ ! -x "$AXON" ]; then cargo build -p axon || fail "build the debug binary"; fi
 AXON=$(cd "$(dirname "$AXON")" && pwd -P)/$(basename "$AXON")
 
 # --- one isolated instance -------------------------------------------------------------
@@ -245,14 +248,13 @@ echo "          (includes ~30 ms of polling and python timer overhead; the quest
 
 if [ -z "${FED_E2E_SKIP_SIZE:-}" ]; then
   # What users get is the dist profile (dist-workspace.toml), not the release profile.
-  cargo build --profile dist -p axon >/dev/null 2>&1
-  if [ -x "$SHIPPED" ]; then
+  if cargo build --profile dist -p axon >/dev/null 2>&1; then
     bytes=$(wc -c <"$SHIPPED" | tr -d ' ')
     printf 'size    : %s is %s bytes (%s MB) of the %s MB budget (decimal)\n' "$SHIPPED" "$bytes" \
       "$(python3 -c "print(f'{$bytes / 1e6:.2f}')")" "$((SIZE_BUDGET / 1000000))"
     [ "$bytes" -le "$SIZE_BUDGET" ] && pass "size: dist binary within the 15 MB budget" || fail "size: dist binary within the 15 MB budget"
   else
-    fail "size: dist binary" "cargo build --profile dist -p axon failed"
+    fail "size: dist binary" "cargo build --profile dist -p axon failed; no stale binary is measured"
   fi
 fi
 
