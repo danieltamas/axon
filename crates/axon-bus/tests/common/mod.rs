@@ -48,6 +48,21 @@ pub struct Bus {
     deadline: Instant,
 }
 
+/// `path` with links resolved. Git and slash-separated fixture paths need a non-verbatim
+/// drive path on Windows, which is also how the bus spells paths.
+pub fn canonical(path: &Path) -> PathBuf {
+    let resolved = path.canonicalize().unwrap();
+    #[cfg(windows)]
+    if let Some(plain) = resolved
+        .to_str()
+        .and_then(|path| path.strip_prefix(r"\\?\"))
+        .filter(|path| path.as_bytes().get(1) == Some(&b':'))
+    {
+        return PathBuf::from(plain);
+    }
+    resolved
+}
+
 impl Bus {
     pub fn new() -> Self {
         Self::with_limit(Duration::from_secs(4))
@@ -55,17 +70,7 @@ impl Bus {
 
     pub fn with_limit(limit: Duration) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        // Git and slash-separated fixture paths need a non-verbatim drive path on Windows.
-        #[cfg(windows)]
-        let root = {
-            let path = root.to_str().unwrap();
-            PathBuf::from(
-                path.strip_prefix(r"\\?\")
-                    .filter(|path| path.as_bytes().get(1) == Some(&b':'))
-                    .unwrap_or(path),
-            )
-        };
+        let root = canonical(temp.path());
         for dir in ["home", "data", "config", "cache", "work", "tmp"] {
             fs::create_dir(root.join(dir)).unwrap();
         }
