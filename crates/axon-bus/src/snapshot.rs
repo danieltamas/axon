@@ -70,7 +70,7 @@ pub(crate) fn repo_of(cwd: &Path) -> Option<PathBuf> {
 
 /// `path` with links resolved, spelled as harnesses report cwds: on Windows without the
 /// `\\?\` prefix `canonicalize` puts on drive paths, so repo keys match session paths.
-fn resolve(path: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Option<PathBuf> {
     let resolved = path.canonicalize().ok()?;
     #[cfg(windows)]
     if let Some(plain) = resolved

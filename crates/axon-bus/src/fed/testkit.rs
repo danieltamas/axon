@@ -63,7 +63,8 @@ pub fn repo(parent: &Path, name: &str) -> PathBuf {
             .unwrap();
         assert!(status.success());
     }
-    path.canonicalize().unwrap()
+    // Spelled as the bus keys repos: on Windows without the `\\?\` prefix.
+    crate::snapshot::resolve(&path).unwrap()
 }
 
 /// Register `agent` working in `cwd`.
