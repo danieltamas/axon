@@ -87,8 +87,8 @@ impl Dialers {
 
 /// Re-read the peers table: refresh the gate, the health entries, and start or stop the
 /// dial task of each peer as it becomes live or stops being so. False when the table could
-/// not be read; the gate then admits nobody and every connection is closed, because the
-/// old map may still allow a peer the owner just paused or removed.
+/// not be read, or the read worker failed; the gate then admits nobody and every connection
+/// is closed, because the old map may still allow a peer the owner just paused or removed.
 async fn sync_peers(shared: &Arc<Shared>, dialers: &mut Dialers) -> bool {
     let db_path = shared.db_path.clone();
     let rows = match tokio::task::spawn_blocking(move || load_peers(&db_path)).await {
@@ -98,7 +98,11 @@ async fn sync_peers(shared: &Arc<Shared>, dialers: &mut Dialers) -> bool {
             deny_all(shared, dialers);
             return false;
         }
-        Err(_) => return true,
+        Err(err) => {
+            eprintln!("axon-bus: federation peer reload died, denying all: {err}");
+            deny_all(shared, dialers);
+            return false;
+        }
     };
     let mut access = HashMap::new();
     let mut paused_by_peer = Vec::new();
