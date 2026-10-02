@@ -314,8 +314,14 @@ pub async fn dial_loop(shared: Arc<Shared>, node: EndpointId) {
 async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> anyhow::Result<()> {
     // A peer that reached us is reachable over that connection even when a fresh dial to its
     // address would not be (the old path to a moved peer can swallow the dial's first packets).
-    let conn = match shared.live_connection(&node) {
-        Some(conn) => conn,
+    let reused = shared.live_connection(&node);
+    let conn = match reused.clone() {
+        Some(conn) => {
+            // Not connected until a heartbeat is answered; a stalled peer must not look so.
+            let gives_up = now_ms() + REQUEST_TIMEOUT.as_millis() as i64;
+            shared.update(&node, |h| h.next_retry_at = Some(gives_up));
+            conn
+        }
         None => {
             let addr: EndpointAddr = shared.dial_address(node);
             // While this attempt is in flight the next one is due when it gives up.
@@ -327,18 +333,19 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
                 .context("connect")?;
             shared.set_connection(node, conn.clone());
             tokio::spawn(serve(shared.clone(), conn.clone(), false));
+            shared.update(&node, |h| {
+                h.connected = true;
+                h.next_retry_at = None;
+                h.last_handshake_at = Some(now_ms());
+            });
             conn
         }
     };
-    shared.update(&node, |h| {
-        h.connected = true;
-        h.next_retry_at = None;
-        h.last_handshake_at = Some(now_ms());
-    });
 
     trade_state(shared, node, &conn, false).await;
     let mut beat = interval(HEARTBEAT_EVERY);
     beat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut answered = false;
     let outcome = loop {
         tokio::select! {
             _ = conn.closed() => break Ok(()),
@@ -347,7 +354,15 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
                     break Err(err);
                 }
                 shared.vouch_for(&node, &conn);
-                shared.update(&node, |h| h.connected = true);
+                let first_answer = reused.is_some() && !answered;
+                answered = true;
+                shared.update(&node, |h| {
+                    h.connected = true;
+                    h.next_retry_at = None;
+                    if first_answer {
+                        h.last_handshake_at = Some(now_ms());
+                    }
+                });
                 *failures = 0;
             }
         }
