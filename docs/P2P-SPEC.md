@@ -566,3 +566,12 @@ reports are in `docs/audits/`.
 - **Settings errors** answer a fixed `unavailable` and log the cause; `config.toml` budget edits are
   serialized and staged under unique names.
 
+- **Accepted, not fixed (P3).** Thread names stay as sent on the wire (BUG-11; frozen tests
+  assert it). Dial backoff caps at 10 s without jitter (BUG-12). A slow message at the head of a
+  peer's queue delays the ones behind it (BUG-13). The pair code is an attestation, not a secret
+  channel, and the manual says so (SEC-8). Dependency advisories are tracked by CI, not
+  here (SEC-10). SEC-6 and SEC-11 need a larger redesign than the risk warrants for a local
+  tool. Invite relay URLs are checked for `https://` only, not against private hosts (SEC-7;
+  the relay is chosen by the owner). The `peer:` address partition stays case-insensitive in
+  triggers already created in existing databases (SEC-9). QA TEST-n items belong to the
+  acceptance suites. Release items REL-4 and REL-5 are packaging steps outside this repo.
