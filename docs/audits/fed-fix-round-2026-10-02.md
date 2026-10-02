@@ -72,3 +72,29 @@ SEC-6..SEC-14, CDX-18 (`..` in refs with `:L`/`@` suffixes), CDX-19 (duplicate `
 REL P2/P3 docs items (README API pointer, stale SPEC:453, PLAN test name, dead login link on busy
 port, FED-MANUAL gaps, MSRV job without `--all-targets`, Windows key ACL untested). Fix where cheap;
 otherwise list as accepted in spec §12 with the reason.
+
+## Round 2 — from the Codex re-review (RR-n) and the orchestrator's verification
+
+Verification at fccd1d7 (orchestrator, independent): clippy `-D warnings` clean; `cargo test --workspace
+--no-fail-fast` 37 targets green, 1 red (`acceptance_root`: "root axon never opened its dashboard" — the
+root binary takes 3.3–5.8 s to listen when run alone, so it misses the 5 s deadline under suite load);
+`scripts/fed-e2e.sh` ALL STEPS PASSED, p95 under 1000 ms; `target/dist/axon` 13,680,272 bytes. Browser
+evidence for CDX-8 and C2: designer two-instance run on 8aedc94 + ab0b5ff (sign-in without token, form
+switches persist, "Paused by", "Removed by them").
+
+| id | finding | done when |
+|---|---|---|
+| RR-16 (P1) | root `axon` binds seconds after start | the dashboard listens within 1 s of spawn (work before bind moved after it or made lazy); `acceptance_root` green inside the full suite |
+| RR-1 (P1) | outbox clearance not serialized with revocation | in the owning process, no frame is transmitted after a pause/remove/unshare/outbound-off commit returns (shared per-peer ordering boundary; no SQLite write txn held across network awaits); cross-process residual window recorded in §12 with its bound |
+| RR-2 (P1) | SSE revalidation has no deadline | revalidation is a bounded read-only check (timeout ⇒ close); revoke/expiry ends a live stream within 1 s even with a writer holding the DB; activity bookkeeping separate |
+| RR-3/RR-4 (P2) | lifecycle can stick: mutual pause, lost resume, stale notice wins, error ack ends retries | lifecycle carries a per-pairing monotonic sequence; peers reconcile current lifecycle state on every (re)connection, including a control-only connection a remotely paused peer still makes periodically (no message traffic); error acks retried; mutual pause then both resume ⇒ both Connected without re-pairing |
+| RR-5 (P2) | reload worker join error keeps stale admission | every reload error variant denies, closes and retries next tick |
+| RR-7 (P2) | retention prunes inbox provenance of undelivered messages | pending rows expired/removed in the same transaction before their inbox records; cap never counts unreachable rows |
+| RR-8 (P2) | aborted dialers never reaped | completed tasks reaped during operation; shutdown aborts and joins every dialer |
+| RR-9 (P2) | budget lock is per process | a shared file lock covers read-modify-rename across processes |
+| RR-11 (P2) | ping/unknown frames and address writes bypass the limiter | one admission rate limit before address persistence and dispatch, covering built-ins and unknown types |
+| RR-12 (P2) | size check measures a stale binary; 9 latency samples | build failure fails the script; ≥20 latency samples (REL-15) |
+| RR-14 (P3) | SEC-12 claimed fixed but key is repaired; SEC-13(b); REL-13 | key file readable by others is refused with a fix-it message; SEC-13(b) accepted in §12 (single-use 60 s nonce, same-user process args); `axon bus guide` states the ref separator per REL-13 |
+| RR-13 (P3) | §12 acceptance reasons rest on false facts | SEC-7: relay URL scheme enforced https; SEC-6: neutral local placeholder label instead of the remote-chosen one; SEC-10/BUG-13/SEC-11/REL-4/REL-5/TEST-n: reasons corrected to the true residual risk, or mitigated |
+| RR-6, RR-10 | upgrade paths for pre-fix federation databases | accepted in §12: federation has never shipped (job/fed is unmerged), so no database outside development has `fed_inbox` rows or racing duplicate labels |
+| RR-15 | execution evidence | recorded above |
