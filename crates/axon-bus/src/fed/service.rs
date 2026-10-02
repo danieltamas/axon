@@ -142,6 +142,31 @@ impl Shared {
         locked(&self.connections).insert(node, conn);
     }
 
+    /// A peer that connected to us is alive at that address now, which a connection to its
+    /// former process is not: send over the newest connection, whichever side opened it.
+    pub(super) fn adopt_connection(&self, node: EndpointId, conn: &Connection) {
+        let mut connections = locked(&self.connections);
+        if connections.get(&node).map(Connection::stable_id) != Some(conn.stable_id()) {
+            connections.insert(node, conn.clone());
+        }
+    }
+
+    /// An adopted connection ended: stop sending over it unless a newer one replaced it.
+    pub(super) fn forget_connection(&self, node: &EndpointId, conn: &Connection) {
+        let mut connections = locked(&self.connections);
+        if connections.get(node).map(Connection::stable_id) == Some(conn.stable_id()) {
+            connections.remove(node);
+            drop(connections);
+            self.update(node, |h| h.connected = false);
+        }
+    }
+
+    /// A session ended: close its connection and forget it unless a newer one replaced it.
+    pub(super) fn release_connection(&self, node: &EndpointId, conn: &Connection) {
+        conn.close(0u32.into(), b"bye");
+        self.forget_connection(node, conn);
+    }
+
     pub(super) fn drop_connection(&self, node: &EndpointId) {
         if let Some(conn) = locked(&self.connections).remove(node) {
             conn.close(0u32.into(), b"bye");

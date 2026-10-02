@@ -74,31 +74,45 @@ impl fmt::Debug for FedProtocol {
 
 impl ProtocolHandler for FedProtocol {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
-        let node = conn.remote_id();
-        while let Ok((send, mut recv)) = conn.accept_bi().await {
-            // Re-checked per stream: a peer paused or removed since the handshake is cut off.
-            let Some(access) = self.0.access_of(&node).filter(Access::is_live) else {
-                conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
-                break;
-            };
-            if !rate::admit(&self.0.admission, &node.to_string()) {
-                let busy = json!({"type": "error", "reason": "rate_limited"});
-                tokio::spawn(respond(send, busy));
-                continue;
-            }
-            self.0.note_paths(&node, &conn);
-            let (shared, conn) = (self.0.clone(), conn.clone());
-            tokio::spawn(async move {
-                let request = match timeout(REQUEST_TIMEOUT, read_frame(&mut recv)).await {
-                    Ok(Ok(request)) => request,
-                    // Oversized, malformed or stalled: drop the whole connection.
-                    _ => return conn.close(VarInt::from_u32(CLOSE_BAD_FRAME), b"bad frame"),
-                };
-                let response = shared.dispatch(&node, &access, request).await;
-                respond(send, response).await;
-            });
-        }
+        serve(self.0.clone(), conn, true).await;
         Ok(())
+    }
+}
+
+/// Answer the requests the peer opens on `conn`, whichever side dialed it: a peer that
+/// reaches us is where we send over next, so both ends serve every connection. An
+/// `inbound` connection becomes the send path on its first request.
+async fn serve(shared: Arc<Shared>, conn: Connection, inbound: bool) {
+    let node = conn.remote_id();
+    let mut adopted = false;
+    while let Ok((send, mut recv)) = conn.accept_bi().await {
+        // Re-checked per stream: a peer paused or removed since the handshake is cut off.
+        let Some(access) = shared.access_of(&node).filter(Access::is_live) else {
+            conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
+            break;
+        };
+        if inbound && !std::mem::replace(&mut adopted, true) {
+            shared.adopt_connection(node, &conn);
+        }
+        if !rate::admit(&shared.admission, &node.to_string()) {
+            let busy = json!({"type": "error", "reason": "rate_limited"});
+            tokio::spawn(respond(send, busy));
+            continue;
+        }
+        shared.note_paths(&node, &conn);
+        let (shared, conn) = (shared.clone(), conn.clone());
+        tokio::spawn(async move {
+            let request = match timeout(REQUEST_TIMEOUT, read_frame(&mut recv)).await {
+                Ok(Ok(request)) => request,
+                // Oversized, malformed or stalled: drop the whole connection.
+                _ => return conn.close(VarInt::from_u32(CLOSE_BAD_FRAME), b"bad frame"),
+            };
+            let response = shared.dispatch(&node, &access, request).await;
+            respond(send, response).await;
+        });
+    }
+    if adopted {
+        shared.forget_connection(&node, &conn);
     }
 }
 
@@ -232,7 +246,6 @@ pub async fn dial_loop(shared: Arc<Shared>, node: EndpointId) {
             Ok(()) => shared.update(&node, |h| h.last_error = Some("connection closed".into())),
             Err(err) => shared.update(&node, |h| h.last_error = Some(format!("{err:#}"))),
         }
-        shared.drop_connection(&node);
         let delay = backoff(failures, jitter());
         failures = failures.saturating_add(1);
         let retry_at = now_ms() + delay.as_millis() as i64;
@@ -253,6 +266,7 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
         .map_err(|_| anyhow!("connect timed out"))?
         .context("connect")?;
     shared.set_connection(node, conn.clone());
+    tokio::spawn(serve(shared.clone(), conn.clone(), false));
     shared.update(&node, |h| {
         h.connected = true;
         h.next_retry_at = None;
@@ -262,15 +276,19 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
     trade_state(shared, node, &conn).await;
     let mut beat = interval(HEARTBEAT_EVERY);
     beat.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    loop {
+    let outcome = loop {
         tokio::select! {
-            _ = conn.closed() => return Ok(()),
+            _ = conn.closed() => break Ok(()),
             _ = beat.tick() => {
-                ping(shared, node, &conn).await?;
+                if let Err(err) = ping(shared, node, &conn).await {
+                    break Err(err);
+                }
                 *failures = 0;
             }
         }
-    }
+    };
+    shared.release_connection(&node, &conn);
+    outcome
 }
 
 /// Tell `node` where our side of the pairing stands and learn where its side does, on every
@@ -286,7 +304,8 @@ async fn trade_state(shared: &Arc<Shared>, node: EndpointId, conn: &Connection) 
     let Ok(Ok(Some((generation, frame)))) = hello else {
         return;
     };
-    let Ok(reply) = request(conn, &frame, || {}).await else {
+    let reply = request(conn, &frame, || {}).await;
+    let Ok(reply) = reply else {
         return;
     };
     let learned = tokio::task::spawn_blocking(move || {

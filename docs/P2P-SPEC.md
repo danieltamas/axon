@@ -590,6 +590,11 @@ reports are in `docs/audits/`.
   followed by a resume on both ends leaves two peers that reconnect without pairing again. Notices
   retry until acknowledged, an error answer included, except `unknown_peer` and
   `stale_generation`. A removal notice lost to an outage is still not repaired (see Shares above).
+- **One connection serves both ways (RR-1).** Whichever side dialed a connection, both ends answer
+  the requests the other opens on it, and a connection a live peer opens to us becomes the path we
+  send over from its first request. A peer that restarts on a new port and reaches us is therefore
+  used at once, instead of our sends going to the dead connection until its idle timeout. A session
+  that ends closes only its own connection.
 - **Reload (RR-5).** A failed read of the peers table and a failed reload worker both deny, close
   and retry at the next tick. **Retention (RR-7).** An old undelivered inbound message is deleted
   with its inbox record in the same transaction, never the record alone. **Dialers (RR-8).**

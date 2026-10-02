@@ -347,7 +347,12 @@ async fn run(handle: Handle, db: PathBuf) {
         let Ok(Ok(ready)) = ready else {
             continue;
         };
+        let mut failed = std::collections::HashSet::new();
         for mut row in ready {
+            // One unreachable peer costs a request timeout per tick, not one per queued row.
+            if failed.contains(&row.node) {
+                continue;
+            }
             // Shared with nothing but a revocation: held from the re-check to the write.
             let transmitting = handle.transmit_gate().read_owned().await;
             let cleared = tokio::task::spawn_blocking({
@@ -361,6 +366,9 @@ async fn run(handle: Handle, db: PathBuf) {
             let answer = handle
                 .request_then(&row.node, &row.frame, move || drop(transmitting))
                 .await;
+            if answer.is_err() {
+                failed.insert(row.node);
+            }
             let result = judge(&answer);
             let db = db.clone();
             let _ = tokio::task::spawn_blocking(move || settle(&db, &row, &result)).await;
