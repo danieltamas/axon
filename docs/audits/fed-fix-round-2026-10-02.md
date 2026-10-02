@@ -98,3 +98,17 @@ switches persist, "Paused by", "Removed by them").
 | RR-13 (P3) | §12 acceptance reasons rest on false facts | SEC-7: relay URL scheme enforced https; SEC-6: neutral local placeholder label instead of the remote-chosen one; SEC-10/BUG-13/SEC-11/REL-4/REL-5/TEST-n: reasons corrected to the true residual risk, or mitigated |
 | RR-6, RR-10 | upgrade paths for pre-fix federation databases | accepted in §12: federation has never shipped (job/fed is unmerged), so no database outside development has `fed_inbox` rows or racing duplicate labels |
 | RR-15 | execution evidence | recorded above |
+
+## Round 3 — from the Codex round-2 review (R2-n), the last automated round
+
+Evidence at 24e48b7 (orchestrator): clippy clean; full workspace suite exit 0, 45 targets; fed-e2e ALL
+STEPS PASSED, p95 825 ms over 25 samples; dist 13,812,752 bytes. b4373cf landed after; re-verify at the end.
+
+| id | finding | done when |
+|---|---|---|
+| R2-1 (P1) | federation restart swaps the per-peer send gate, so a revocation can race the replacement outbox | one ordering boundary survives service generations (gate owned outside the service handle), or replacement is serialized with revocation until it completes |
+| R2-2 (P2) | older connections and in-flight streams survive pause/remove/reload denial | every connection of a peer is tracked; revocation and reload denial close all of them and cancel their handlers; admission is re-checked after a frame is read, before dispatch |
+| R2-3 (P2) | control probes are adopted as message send paths | control (probe) connections are marked before adoption and never carry application sends |
+| R2-4 (P2) | a stalled peer's backlog starves other peers under the global LIMIT 20 | outbox selection is fair across peers (per-peer cap within the batch) and a failed peer is backed off before it can fill the next batch; §12 BUG-13 states the real bound |
+| R2-5 (P2) | the neutral label can collide, consuming the invite without creating a peer | an unused neutral label is allocated in the admission transaction; the invite is consumed only if the peer row was inserted |
+| R2-6..R2-9 (P3) | §12 reasons inaccurate: Windows ACL, dashboard nonce in argv, wait/retry bounds, TEST-n | each rewritten to the actual residual (who can exploit it, what bound actually holds); TEST-n lists the remaining gaps (e.g. TEST-3 cap tolerance) with reasons |
