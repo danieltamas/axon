@@ -24,6 +24,7 @@ pub mod pairing_checks;
 pub mod settings;
 pub mod share_checks;
 pub mod sse;
+pub mod wire_observer;
 pub mod wire_probe;
 
 #[allow(unused_imports)] // Each integration-test crate uses a different subset of helpers.

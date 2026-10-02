@@ -69,3 +69,68 @@ SEC-3 permits the security report's rejection or namespacing of a colliding thre
 but always requires the local ask to return its default. The raw overflow case also
 requires a subsequent valid frame to succeed on the same connection. Browser UI and
 power-loss behavior are outside these additions.
+
+## Round 2
+
+Authority: the **Round 2** done-when column in the work order above, with
+`docs/P2P-SPEC.md` for the HTTP, wire, retention and capacity contracts. In particular,
+RR-3/RR-4 supersede section 12's earlier acceptance of a permanently lost resume.
+Assertions were derived from those contracts and existing test helpers, without reading
+the feature implementation being changed in parallel. Existing test cases are unchanged;
+the two existing shared helper files have additions only.
+
+The table names exact Rust test functions. Files are under `crates/axon-bus/tests/`.
+
+| RR id | New acceptance coverage or explicit gap |
+|---|---|
+| RR-16 | `acceptance_root_fixround2.rs`: `root_dashboard_listens_within_one_second_plus_two_hundred_ms_slack`. Starts the prebuilt root binary in a fresh home, with no preceding init/warm-up process; TCP must accept within 1,200 ms measured before spawn. Authenticated HTTP health and process survival follow outside the latency budget. |
+| RR-1 | `acceptance_fed_fixround2_revocation.rs`: `pause_return_is_a_wire_barrier_for_a_busy_outbox`, `remove_return_is_a_wire_barrier_for_a_busy_outbox`, `unshare_return_is_a_wire_barrier_for_a_busy_outbox`, `outbound_off_return_is_a_wire_barrier_for_a_busy_outbox`. Twelve real CLI sends, a positive wire receipt, held message acknowledgements and an unsent-backlog precondition precede the owner API call. A barrier releases the acks as that call begins, racing transmission with revocation. Observe for 12 seconds after its return, including reconnections; every later message frame fails. |
+| RR-2 | `acceptance_session_fixround2.rs`: `revoked_stream_closes_within_one_second_while_another_connection_holds_the_writer`. Revoke through HTTP, immediately hold `BEGIN IMMEDIATE` on a separate real SQLite connection, prove another writer is blocked, and require the SSE socket to close by one second from revocation return. Repeat three times and verify the surviving session still works. Expiry under contention is not covered because this addition targets the requested revocation case; the federation clock seam does not specify a dashboard-session clock. |
+| RR-3 | `acceptance_fed_fixround2_lifecycle.rs`: `both_paused_peers_resume_to_connected_without_repairing` and `lost_resume_notice_reconciles_remote_paused_after_the_other_owner_resumes`. Both sides must report `connected` with `remote_paused=false` within 30 seconds; original peer ids, generations and the single pairing remain. Stale sequence injection is not covered because no lifecycle sequence field is specified in the current wire contract. |
+| RR-4 | The same two lifecycle tests. The lost-notice case resumes B while A remains paused, then resumes A while B is stopped and restarts B to discard buffered notices. Recovery must follow reconnection without another resume or pairing. Explicit error-ack retry injection is not covered because the existing probe does not impersonate both ends of a real paired lifecycle exchange. |
+| RR-5 | Not covered because no existing seam injects a reload worker join failure at the service boundary; corruption/read faults do not establish that specific failure branch. |
+| RR-6 | Not covered because the work order accepts the pre-fix development-database upgrade path rather than defining a new runtime requirement. |
+| RR-7 | `acceptance_fed_fixround2_wire.rs`: `retention_of_undelivered_inbox_provenance_does_not_steal_the_hundredth_slot`. Receive a real pending message, restart the receiver with `AXON_TEST_NOW_OFFSET_MS` advanced 91 days, observe the old inbox row disappear, accept 100 fresh wire messages to the same recipient, and reject the 101st with `recipient_full`. The expired local row must be gone. No hook drains the recipient and no message rows are seeded. |
+| RR-8 | Not covered because task reaping/join completion has no process-level task inventory or fault seam; a surviving process would not prove dialers were reaped. |
+| RR-9 | `acceptance_settings_fixround2.rs`: `concurrent_processes_updating_different_budgets_preserve_both_writes`. Two real servers with separate DBs share one config directory through a Unix symlink. Forty synchronized pairs of HTTP writes change different budget keys; each pair must persist both fresh values, retain the third budget and owner comments, and survive restart. Separate DBs prevent SQLite serialization from masking a process-local config lock. |
+| RR-10 | Not covered because the work order explicitly accepts the pre-fix development-only duplicate-label upgrade path. |
+| RR-11 | `acceptance_fed_fixround2_wire.rs`: `ping_flood_is_rate_limited_and_rejections_are_counted` and `unknown_frame_flood_is_rate_limited_and_rejections_are_counted`. A normal frame establishes the expected response; 100 concurrent requests on the authenticated connection must complete within three seconds and include `rate_limited` errors, reflected in `counters.rejected`. Receiver remains healthy. Address-persistence ordering is not covered because the public boundary exposes no per-frame write trace. |
+| RR-12 | Not covered because build-failure propagation and release-script sample counts are tooling checks outside these process/HTTP acceptance additions; this work order prohibits running builds. |
+| RR-13 | `acceptance_fed_fixround2_policy.rs`: `join_refuses_http_relay_invite_without_consuming_the_valid_invite`. Change only a valid invitation's relay URL to loopback `http://`; expect `invalid_invite`, no peer rows, and successful joining with the original invite. Neutral join labels are **not covered because** section 12 still accepts SEC-6 without defining a local placeholder or its naming rule; skipped as requested, rather than inventing one. Other acceptance-reason/documentation corrections are not covered because they require review of the corrected rationale, not an HTTP assertion. |
+| RR-14 | `acceptance_fed_fixround2_policy.rs`: `enabling_federation_refuses_0644_identity_without_repairing_it` and `starting_federation_refuses_0644_identity_without_repairing_it`. Create a genuine key through Settings, make it 0644, require refusal with a diagnostic naming `identity.key` and the 0600 repair, and preserve both mode and key bytes. Diagnostic may be in the response, health or stderr (section 12 permits fixed public `unavailable` errors). The accepted nonce-argv risk and guide separator wording are not covered because they are outside the requested key/relay cases. |
+| RR-15 | Not covered because this is orchestrator execution evidence, not a new acceptance behavior; no runtime pass/fail claim is made here. |
+
+Round 2 harness and verification limits:
+
+- All subprocesses retain the existing disposable HOME/XDG isolation and
+  `AXON_FED_RELAY=disabled` / `AXON_FED_BIND=127.0.0.1:0` seams. No external network,
+  production home, schema fabrication or feature-source import is used.
+- `common/wire_probe.rs` adds a bounded concurrent burst and an observer entry point;
+  accepting the federation ALPN lets the probe observe reconnects too.
+  `common/wire_observer.rs` records completed message frames with monotonic timestamps,
+  answers control traffic and releases held message acks as the revocation call begins.
+  The hello response is captured from the real peer because its response DTO is not
+  specified. Test-created observer tasks are aborted and joined on drop.
+- RR-1 observes the owning process at a real receiver, not only inbox persistence.
+  Holding a received request's ack first establishes a busy outbox; releasing it alongside
+  the API call avoids serializing away the race. The cutoff uses receiver timestamps, as
+  requested; it cannot identify when buffered network bytes were originally transmitted.
+  It does not exhaust every scheduler interleaving, prove the internal lock placement,
+  or measure the cross-process residual revocation window.
+  The coverage obligation for documenting that window remains with the implementer.
+- RR-2 acquires the writer immediately **after** the revoke commit; SQLite cannot commit
+  revocation while a different writer retains its reservation. This covers the contended
+  revalidation interval, with a scheduling window between the HTTP return and lock
+  acquisition. The writer is never released just to let the stream assertion pass.
+- RR-7 spaces fresh arrivals by 510 ms to avoid conflating the recipient's 2/s token
+  bucket with its 100-message pending cap. A probe control responder handles heartbeats
+  during this longer case. Atomic cleanup at every possible intermediate interleaving
+  is not separately proven by the final capacity/row assertions.
+- The lost-notice, shared-config and mode-bit cases are Unix-only (signals, symlink and
+  Unix permissions). Windows ACLs and a Windows shared-config fixture remain uncovered.
+  RR-9 is a repeated real concurrency regression, not exhaustive proof of a file lock.
+- **Not runtime verified:** no cargo command, build or test was run, as instructed.
+  Only formatting and static diff/scope/line-count checks were performed. The
+  orchestrator must compile and execute these additions, including the root test alone
+  when measuring the one-process startup contract. Red results are expected for unfixed
+  requirements; they must not be relaxed to fit current source behavior.

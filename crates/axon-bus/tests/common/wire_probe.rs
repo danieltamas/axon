@@ -55,6 +55,7 @@ impl Probe {
         let (endpoint, connection) = runtime.block_on(async {
             tokio::time::timeout(bus.remaining().min(Duration::from_secs(10)), async {
                 let endpoint = Endpoint::builder(presets::Minimal)
+                    .alpns(vec![b"axon/fed/1".to_vec()])
                     .secret_key(SecretKey::from_bytes(&key))
                     .relay_mode(RelayMode::Disabled)
                     .clear_ip_transports()
@@ -104,6 +105,55 @@ impl Probe {
 impl Drop for Probe {
     fn drop(&mut self) {
         self.runtime.block_on(self.endpoint.close());
+    }
+}
+
+impl Probe {
+    pub fn observe(&self, generation: i64) -> super::wire_observer::WireObserver {
+        // Capture the real control response rather than inventing an undocumented hello DTO.
+        let hello = self.request(&json!({"type":"hello","v":1,"generation":generation}));
+        super::wire_observer::WireObserver::start(
+            &self.runtime,
+            self.endpoint.clone(),
+            self.connection.clone(),
+            hello,
+        )
+    }
+
+    pub fn burst(&self, frame: &Value, count: usize) -> Vec<Value> {
+        assert!(count <= 128);
+        self.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let mut pending = tokio::task::JoinSet::new();
+                for _ in 0..count {
+                    let connection = self.connection.clone();
+                    let body = serde_json::to_vec(frame).unwrap();
+                    assert!(body.len() <= 8192);
+                    pending.spawn(async move {
+                        let (mut send, mut recv) = connection.open_bi().await.unwrap();
+                        send.write_all(&(body.len() as u32).to_be_bytes())
+                            .await
+                            .unwrap();
+                        send.write_all(&body).await.unwrap();
+                        send.finish().unwrap();
+                        let mut prefix = [0; 4];
+                        recv.read_exact(&mut prefix).await.unwrap();
+                        let length = u32::from_be_bytes(prefix) as usize;
+                        assert!(length <= 8192);
+                        let mut reply = vec![0; length];
+                        recv.read_exact(&mut reply).await.unwrap();
+                        serde_json::from_slice::<Value>(&reply).unwrap()
+                    });
+                }
+                let mut replies = Vec::new();
+                while let Some(reply) = pending.join_next().await {
+                    replies.push(reply.expect("wire burst task"));
+                }
+                replies
+            })
+            .await
+            .expect("all burst responses within three seconds")
+        })
     }
 }
 
