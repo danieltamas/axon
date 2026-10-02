@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use iroh::EndpointId;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use super::audit::{self, Decision};
-use super::{identity, now_ms};
+use super::{identity, now_ms, shares};
 use crate::fed::service::Handle;
 use crate::store;
 
@@ -26,6 +26,9 @@ pub fn install(handle: &Handle, db: &Path) {
 
 struct Due {
     message_id: String,
+    peer_id: String,
+    share_id: String,
+    sender: String,
     node: EndpointId,
     generation: i64,
     frame: Value,
@@ -59,9 +62,18 @@ fn audit_outcome(
     )
 }
 
-/// Housekeeping, then the rows ready to send. A row ends here when it expired, or when its
-/// peer was removed or paired again (a new generation is a new relationship).
-fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
+/// Tell the sending agent what became of its message; a failure here must not undo the outcome.
+fn tell_sender(conn: &Connection, sender: &str, text: &str) {
+    if let Err(err) = crate::msg::from_bus(conn, sender, sender, "sync", text) {
+        eprintln!("axon-bus: could not tell {sender} about an undelivered message: {err:#}");
+    }
+}
+
+/// End the rows that can no longer be sent: expired ones, and those whose peer was removed or
+/// paired again (a new generation is a new relationship). Expiry, audit, sender notice and
+/// cancellation commit together or not at all.
+fn housekeeping(conn: &mut Connection, now: i64) -> anyhow::Result<()> {
+    let conn = store::write_tx(conn)?;
     let mut stmt = conn.prepare(
         "SELECT o.message_id, o.from_agent, o.generation, p.node_id FROM fed_outbox o
          JOIN peers p ON p.peer_id=o.peer_id WHERE o.state='queued' AND o.expires_at <= ?1",
@@ -69,16 +81,18 @@ fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
     let lapsed: Vec<(String, String, i64, String)> = stmt
         .query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<Result<_, _>>()?;
+    drop(stmt);
     for (message_id, sender, generation, node) in lapsed {
         conn.execute(
             "UPDATE fed_outbox SET state='expired' WHERE message_id=?1",
             [&message_id],
         )?;
-        audit_outcome(conn, &node, generation, &message_id, "expired", None)?;
-        let text = format!("remote delivery of {message_id} expired");
-        if let Err(err) = crate::msg::from_bus(conn, &sender, &sender, "sync", &text) {
-            eprintln!("axon-bus: could not tell {sender} about an expired message: {err:#}");
-        }
+        audit_outcome(&conn, &node, generation, &message_id, "expired", None)?;
+        tell_sender(
+            &conn,
+            &sender,
+            &format!("remote delivery of {message_id} expired"),
+        );
     }
     conn.execute(
         "UPDATE fed_outbox SET state='cancelled', last_error='peer_changed' WHERE state='queued'
@@ -87,8 +101,16 @@ fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
                            AND p.state IN ('active','paused'))",
         [],
     )?;
+    conn.commit()?;
+    Ok(())
+}
+
+/// The rows ready to send, oldest first.
+fn due(conn: &mut Connection, now: i64) -> anyhow::Result<Vec<Due>> {
+    housekeeping(conn, now)?;
     let mut stmt = conn.prepare(
-        "SELECT o.message_id, p.node_id, o.generation, o.envelope_json, o.attempts
+        "SELECT o.message_id, o.peer_id, o.share_id, o.from_agent, p.node_id, o.generation,
+                o.envelope_json, o.attempts
          FROM fed_outbox o JOIN peers p ON p.peer_id=o.peer_id
          WHERE o.state='queued' AND p.state='active'
            AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?1)
@@ -98,14 +120,17 @@ fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
-            r.get::<_, i64>(2)?,
+            r.get::<_, String>(2)?,
             r.get::<_, String>(3)?,
-            r.get::<_, i64>(4)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, String>(6)?,
+            r.get::<_, i64>(7)?,
         ))
     })?;
     let mut ready = Vec::new();
     for row in rows {
-        let (message_id, node, generation, envelope, attempts) = row?;
+        let (message_id, peer_id, share_id, sender, node, generation, envelope, attempts) = row?;
         let (Ok(node), Ok(mut frame)) = (node.parse(), serde_json::from_str::<Value>(&envelope))
         else {
             continue;
@@ -115,6 +140,9 @@ fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
         frame["generation"] = json!(generation);
         ready.push(Due {
             message_id,
+            peer_id,
+            share_id,
+            sender,
             node,
             generation,
             frame,
@@ -122,6 +150,114 @@ fn due(conn: &Connection, now: i64) -> anyhow::Result<Vec<Due>> {
         });
     }
     Ok(ready)
+}
+
+/// What the authorization state says about a queued message right now.
+enum Gate {
+    Send,
+    /// Not sendable yet, but not dead either (the peer is paused).
+    Wait,
+    End(&'static str),
+}
+
+/// Whether the share, peer and sender still allow this message, read in the caller's
+/// transaction. A share revision bumped since queueing is re-stamped, not a reason to drop.
+fn gate(conn: &Connection, row: &mut Due) -> anyhow::Result<Gate> {
+    if !super::enabled(conn) {
+        return Ok(Gate::Wait);
+    }
+    let peer: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT state, generation FROM peers WHERE peer_id=?1",
+            [&row.peer_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    match peer {
+        Some((state, generation)) if generation == row.generation && state == "paused" => {
+            return Ok(Gate::Wait)
+        }
+        Some((state, generation)) if generation == row.generation && state == "active" => {}
+        _ => return Ok(Gate::End("peer_changed")),
+    }
+    let Some(share) = shares::get(conn, &row.share_id)?
+        .filter(|s| s.state == "active" && s.peer_id == row.peer_id)
+    else {
+        return Ok(Gate::End("unshared"));
+    };
+    let member = match &share.local_repo {
+        Some(repo) => shares::is_member(conn, &row.sender, repo)?,
+        None => false,
+    };
+    if !member {
+        return Ok(Gate::End("not_a_member"));
+    }
+    if !share.outbound {
+        return Ok(Gate::End("outbound_off"));
+    }
+    if !share.remote_inbound {
+        return Ok(Gate::End("remote_inbound_off"));
+    }
+    if row.frame["revision"].as_i64() != Some(share.revision) {
+        conn.execute(
+            "UPDATE fed_outbox SET revision=?2, envelope_json=json_set(envelope_json,'$.revision',?2)
+             WHERE message_id=?1",
+            params![row.message_id, share.revision],
+        )?;
+        row.frame["revision"] = json!(share.revision);
+    }
+    Ok(Gate::Send)
+}
+
+/// Re-check, in one write transaction right before the transmit, that the message is still
+/// authorized (docs/P2P-SPEC.md §8); a revocation committed first ends the row here, one
+/// committed later finds the message already sent. False means do not send now.
+fn clear_to_send(db: &Path, row: &mut Due) -> anyhow::Result<bool> {
+    let mut conn = store::open(db)?;
+    let tx = store::write_tx(&mut conn)?;
+    let expires_at: Option<i64> = tx
+        .query_row(
+            "SELECT expires_at FROM fed_outbox WHERE message_id=?1 AND state='queued'",
+            [&row.message_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(expires_at) = expires_at else {
+        return Ok(false);
+    };
+    let ended = if expires_at <= now_ms() {
+        Some(("expired", None))
+    } else {
+        match gate(&tx, row)? {
+            Gate::Send => None,
+            Gate::Wait => return Ok(false),
+            Gate::End(reason) => Some(("cancelled", Some(reason))),
+        }
+    };
+    let Some((state, reason)) = ended else {
+        tx.commit()?;
+        return Ok(true);
+    };
+    tx.execute(
+        "UPDATE fed_outbox SET state=?2, last_error=?3 WHERE message_id=?1",
+        params![row.message_id, state, reason],
+    )?;
+    audit_outcome(
+        &tx,
+        &row.node.to_string(),
+        row.generation,
+        &row.message_id,
+        state,
+        reason,
+    )?;
+    let why = reason.map(|r| format!(": {r}")).unwrap_or_default();
+    tell_sender(
+        &tx,
+        &row.sender,
+        &format!("remote delivery of {} {state}{why}", row.message_id),
+    );
+    tx.commit()?;
+    Ok(false)
 }
 
 /// What the peer answered, or why we are still waiting.
@@ -177,6 +313,11 @@ fn settle(db: &Path, row: &Due, result: &Verdict) -> anyhow::Result<()> {
             )?;
             if changed > 0 {
                 audit("rejected", Some(reason))?;
+                tell_sender(
+                    &tx,
+                    &row.sender,
+                    &format!("remote delivery of {} rejected: {reason}", row.message_id),
+                );
             }
         }
         Verdict::Retry => {
@@ -197,13 +338,21 @@ async fn run(handle: Handle, db: PathBuf) {
         sleep(TICK).await;
         let ready = tokio::task::spawn_blocking({
             let db = db.clone();
-            move || due(&store::open(&db)?, now_ms())
+            move || due(&mut store::open(&db)?, now_ms())
         })
         .await;
         let Ok(Ok(ready)) = ready else {
             continue;
         };
-        for row in ready {
+        for mut row in ready {
+            let cleared = tokio::task::spawn_blocking({
+                let db = db.clone();
+                move || clear_to_send(&db, &mut row).map(|ok| (ok, row))
+            })
+            .await;
+            let Ok(Ok((true, row))) = cleared else {
+                continue;
+            };
             let answer = handle.request(&row.node, &row.frame).await;
             let result = judge(&answer);
             let db = db.clone();
@@ -211,3 +360,6 @@ async fn run(handle: Handle, db: PathBuf) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
