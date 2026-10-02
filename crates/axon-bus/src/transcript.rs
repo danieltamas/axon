@@ -18,6 +18,8 @@ const MAX_DETAIL_CHARS: usize = 200;
 
 #[derive(Debug, PartialEq)]
 pub enum Row {
+    /// The brief a parent gave a subagent: the first line of its transcript.
+    Task(String),
     Assistant(String),
     /// Text a model shows between tool calls; never reasoning (§7).
     Progress(String),
@@ -96,6 +98,12 @@ pub fn rows(harness: &str, record: &Value, reasoning_tokens: Option<i64>) -> Vec
 }
 
 fn claude(record: &Value, tokens: Option<i64>) -> Vec<Row> {
+    if record["type"] == "user" && record["isSidechain"] == true && record["parentUuid"].is_null() {
+        return brief(&record["message"]["content"])
+            .map(Row::Task)
+            .into_iter()
+            .collect();
+    }
     if record["type"] != "assistant" {
         return Vec::new();
     }
@@ -110,10 +118,29 @@ fn claude(record: &Value, tokens: Option<i64>) -> Vec<Row> {
                 readable(block["thinking"].as_str()).map(Row::Progress)
             }
             "thinking" | "redacted_thinking" => Some(reasoning(block["thinking"].as_str(), tokens)),
+            // A background subagent reports to its parent through this tool, not in text.
+            "tool_use" if block["name"] == "SubagentHandback" => {
+                readable(block["input"]["message"].as_str()).map(Row::Assistant)
+            }
             "tool_use" => Some(tool(block["name"].as_str()?, &block["input"], false)),
             _ => None,
         })
         .collect()
+}
+
+/// A user message's text, a string or a list of text blocks.
+fn brief(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => readable(Some(text)),
+        Value::Array(blocks) => readable(Some(
+            &blocks
+                .iter()
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )),
+        _ => None,
+    }
 }
 
 fn codex(payload: &Value, tokens: Option<i64>) -> Vec<Row> {
@@ -289,6 +316,15 @@ pub fn store_rows(
                 None,
                 false,
             ),
+            Row::Task(text) => (
+                "task",
+                kept(&Some(text.clone())),
+                None,
+                None,
+                None,
+                None,
+                false,
+            ),
             Row::Progress(text) => (
                 "progress",
                 kept(&Some(text.clone())),
@@ -369,117 +405,5 @@ pub fn expire_if_due(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn redact_masks_tokens_and_keeps_prose() {
-        assert_eq!(
-            redact("use sk-abcdefghijklmnopqrstu now"),
-            "use [redacted] now"
-        );
-        assert_eq!(
-            redact("KEY=sk-abcdefghijklmnopqrstu `ghp_abcdefghijklmnopqrst`"),
-            "KEY=[redacted] `[redacted]`"
-        );
-        for (text, expected) in [
-            (
-                "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuv'",
-                "Bearer [redacted]",
-            ),
-            (
-                "postgres://app:hunter22@db/main",
-                "postgres://app:[redacted]@db/main",
-            ),
-            (
-                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENG",
-                "AWS_SECRET_ACCESS_KEY=[redacted]",
-            ),
-            ("password: 'correct-horse'", "password: '[redacted]'"),
-            (
-                "jwt eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q",
-                "jwt [redacted]",
-            ),
-            (
-                "ghs_abcdefghijklmnop and hf_abcdefghijklmnop",
-                "[redacted] and [redacted]",
-            ),
-        ] {
-            let redacted = redact(text);
-            assert!(redacted.contains(expected), "{text} -> {redacted}");
-        }
-        assert_eq!(redact("input_tokens: 123456"), "input_tokens: 123456");
-        assert_eq!(
-            redact(r#"{"output_tokens":123456}"#),
-            r#"{"output_tokens":123456}"#
-        );
-        assert_eq!(
-            redact(r#"{"password":"correct-horse-battery"}"#),
-            r#"{"password":"[redacted]"}"#
-        );
-        assert_eq!(redact("password=12345678"), "password=[redacted]");
-        assert_eq!(redact("plain words stay"), "plain words stay");
-    }
-
-    #[test]
-    fn claude_signature_only_thinking_is_not_recorded() {
-        let record = json!({"type":"assistant","message":{"content":[
-            {"type":"thinking","thinking":"","signature":"sig"}]}});
-        assert_eq!(
-            rows("claude", &record, Some(3)),
-            vec![Row::Reasoning {
-                text: None,
-                tokens: Some(3)
-            }]
-        );
-    }
-}
-
-#[cfg(test)]
-mod acceptance_review2 {
-    use super::redact;
-
-    #[test]
-    fn r10_numeric_access_token_is_masked() {
-        assert_eq!(
-            redact(r#"{"access_token":"12345678"}"#),
-            r#"{"access_token":"[redacted]"}"#
-        );
-    }
-
-    #[test]
-    fn r10_numeric_id_token_is_masked() {
-        assert_eq!(redact("id_token=987654"), "id_token=[redacted]");
-    }
-
-    #[test]
-    fn r10_numeric_refresh_token_is_masked() {
-        assert_eq!(redact("refresh_token: 555555"), "refresh_token: [redacted]");
-    }
-
-    #[test]
-    fn r10_explicit_usage_counts_remain_readable() {
-        for text in [
-            r#""input_tokens": 1234"#,
-            "max_tokens=4096",
-            "token_count: 99",
-            r#""input_tokens": 12345678"#,
-            "max_tokens=12345678",
-            "token_count: 12345678",
-        ] {
-            assert_eq!(redact(text), text);
-        }
-    }
-
-    #[test]
-    fn r10_secret_named_fields_are_not_usage_counts() {
-        for key in ["password_tokens", "secret_token_count", "access_tokens"] {
-            assert_eq!(
-                redact(&format!("{key}=12345678")),
-                format!("{key}=[redacted]"),
-                "{key}"
-            );
-        }
-    }
-}
+#[path = "transcript_tests.rs"]
+mod tests;

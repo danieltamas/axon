@@ -3,7 +3,7 @@
 // conversation is opened. Never an empty column. Agent text only goes through textContent.
 
 import { activityChart, activityFacts } from "./activity.js";
-import { doingNow, harnessName, metricsLine } from "./board.js";
+import { doingNow, harnessName, metricsLine, roleLabel } from "./board.js";
 import { bytes, clock, el, isProcess, mark, oneLine, setRing, since, STATUS, tokens, money } from "./dom.js";
 import { prose } from "./md.js";
 import { createComposer, createEnder } from "./send.js";
@@ -173,7 +173,7 @@ export function createContext(container, { onThread, onAgent, onBack }) {
       const ring = mark(node.harness);
       setRing(ring, node.budget);
       const names = el("div", "names");
-      names.append(el("h2", null, cap(node.role || "agent")), el("span", "agent-id", node.observed ? `${harnessName(node.harness)} · pid ${node.pid || "—"}` : `${harnessName(node.harness)} · ${node.id}`));
+      names.append(el("h2", null, roleLabel(node, found.parent ? "sub" : "root")), el("span", "agent-id", node.observed ? `${harnessName(node.harness)} · pid ${node.pid || "—"}` : `${harnessName(node.harness)} · ${node.id}`));
       const status = el("span", "state-word", STATUS[node.status] || node.status);
       status.dataset.status = node.status;
       who.append(ring, names, status);
@@ -252,6 +252,15 @@ export function createContext(container, { onThread, onAgent, onBack }) {
       for (const t of row.tools) list.append(el("li", t.failed ? "failed" : null, t.detail ? `${t.name}  ${t.detail}` : t.name));
       run.append(summary, list);
       return run;
+    }
+    if (row.kind === "task") {
+      // The brief is long and written for the subagent; folded, its first line names it.
+      const task = el("details", "row brief");
+      const summary = el("summary");
+      summary.append(el("span", "row-kind", "Task"), el("span", "brief-line", row.text ? oneLine(row.text) : "Text withheld: content capture is off."));
+      task.append(summary);
+      if (row.text) task.append(prose(row.text));
+      return task;
     }
     const recorded = row.kind !== "reasoning" || row.recorded;
     const item = el("article", `row ${row.kind}${recorded ? "" : " unrecorded"}`);

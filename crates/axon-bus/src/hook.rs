@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::Path;
 
 use anyhow::{bail, Context};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::registry::{self, Agent, Status};
@@ -402,12 +402,24 @@ fn record_claude_usage(
     transcript: Option<&usage::Pending>,
 ) {
     let spawned = &payload["tool_response"];
+    let asked = &payload["tool_input"];
     let recorded = (|| -> anyhow::Result<()> {
         if let (Some(child), Some(model)) = (
             spawned["agentId"].as_str(),
             spawned["resolvedModel"].as_str(),
         ) {
             conn.execute("UPDATE agents SET model=?2 WHERE id=?1", [child, model])?;
+        }
+        // The spawn names the child's type and task: the board's label and line for it.
+        if let Some(child) = spawned["agentId"].as_str() {
+            conn.execute(
+                "UPDATE agents SET role=?2, mission=?3 WHERE id=?1",
+                params![
+                    child,
+                    asked["subagent_type"].as_str(),
+                    asked["description"].as_str()
+                ],
+            )?;
         }
         if let Some(pending) = transcript {
             usage::store(conn, pending)?;

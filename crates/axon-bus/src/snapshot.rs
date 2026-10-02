@@ -333,10 +333,16 @@ pub(crate) fn push_line(out: &mut Vec<Value>, line: Line) {
 /// one `tool_run` chip.
 /// Without content capture, text stored while it was on is withheld too (§7 privacy).
 fn narrative(conn: &Connection, agent: &str, content: bool) -> rusqlite::Result<Vec<Value>> {
+    // A subagent's brief opens its transcript; it stays first however long the agent runs.
     let mut stmt = conn.prepare(
         "SELECT kind,source,CASE WHEN ?4 THEN text END,recorded,tokens,tool_name,
          CASE WHEN ?4 THEN tool_detail END,failed,ts FROM
-         (SELECT * FROM narrative WHERE agent_id=?1 AND ts>=?3 ORDER BY id DESC LIMIT ?2) ORDER BY id",
+         (SELECT * FROM (SELECT * FROM narrative WHERE agent_id=?1 AND ts>=?3 AND kind='task'
+                         ORDER BY id LIMIT 1)
+          UNION
+          SELECT * FROM (SELECT * FROM narrative WHERE agent_id=?1 AND ts>=?3
+                         ORDER BY id DESC LIMIT ?2))
+         ORDER BY id",
     )?;
     let mut rows = stmt.query(rusqlite::params![
         agent,

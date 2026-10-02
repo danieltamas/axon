@@ -182,6 +182,7 @@ fn parse(harness: &str, text: &str, content: bool) -> (Vec<Value>, Option<String
         let ts = transcript::timestamp(harness, &record).unwrap_or(0);
         for row in transcript::rows(harness, &record, None) {
             let (kind, text, recorded, tokens, tool) = match row {
+                Row::Task(text) => ("task", kept(Some(text)), None, None, None),
                 Row::Assistant(text) => ("assistant", kept(Some(text)), None, None, None),
                 Row::Progress(text) => ("progress", kept(Some(text)), None, None, None),
                 Row::Reasoning { text, tokens } => (

@@ -66,9 +66,9 @@ export function createBoard(container, scroller, onSelect) {
     if (b.dataset.status !== node.status) b.dataset.status = node.status;
     b.classList.toggle("observed", Boolean(node.observed));
     b.setAttribute("aria-pressed", String(selected === node.id));
-    b.setAttribute("aria-label", `${node.role || "agent"} ${node.id}, ${STATUS[node.status] || node.status}`);
+    b.setAttribute("aria-label", `${roleLabel(node, entry.kind)} ${node.id}, ${STATUS[node.status] || node.status}`);
     setRing(entry.ring, node.budget);
-    setText(entry.role, roleLabel(node));
+    setText(entry.role, roleLabel(node, entry.kind));
     setText(entry.id, node.observed ? `pid ${node.pid || node.id.split("-").pop()}` : shortId(node.id));
     entry.id.title = node.id;
     setText(entry.status, STATUS[node.status] || node.status);
@@ -263,8 +263,9 @@ export function createBoard(container, scroller, onSelect) {
   };
 }
 
-function roleLabel(node) {
-  const role = node.role || "agent";
+// A typed agent reads as its type; otherwise as what it is in the tree.
+export function roleLabel(node, kind) {
+  const role = node.role || (kind === "sub" ? "subagent" : "session");
   // Two-letter roles are initialisms (QA, PM), not words.
   return role.length <= 2 ? role.toUpperCase() : role.charAt(0).toUpperCase() + role.slice(1);
 }

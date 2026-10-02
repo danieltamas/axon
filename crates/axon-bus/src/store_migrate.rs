@@ -82,3 +82,27 @@ pub(super) fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
     }
     Ok(())
 }
+
+/// Narrative from earlier builds has no `task` kind, and SQLite cannot widen a CHECK in
+/// place: the old table is renamed, `SCHEMA` creates the current one, and its rows move over.
+pub(super) fn allow_task_narrative(conn: &Connection) -> rusqlite::Result<()> {
+    let sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='narrative'",
+        [],
+        |r| r.get(0),
+    )?;
+    if sql.contains("'task'") {
+        return Ok(());
+    }
+    conn.execute_batch(&format!(
+        "BEGIN IMMEDIATE;
+         DROP INDEX idx_narrative_agent;
+         ALTER TABLE narrative RENAME TO narrative_old;
+         {}
+         INSERT INTO narrative SELECT * FROM narrative_old;
+         DROP TABLE narrative_old;
+         COMMIT;",
+        super::SCHEMA
+    ))
+    .inspect_err(|_| drop(conn.execute_batch("ROLLBACK")))
+}

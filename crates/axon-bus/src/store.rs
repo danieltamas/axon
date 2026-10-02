@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS narrative (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id    TEXT NOT NULL REFERENCES agents(id),
     ts          INTEGER NOT NULL,
-    kind        TEXT NOT NULL CHECK (kind IN ('assistant','reasoning','progress','tool')),
+    kind        TEXT NOT NULL CHECK (kind IN ('task','assistant','reasoning','progress','tool')),
     source      TEXT NOT NULL,
     text        TEXT,
     recorded    INTEGER,
@@ -249,6 +249,7 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
     conn.execute_batch(SCHEMA)?;
     migrate::add_missing_columns(&conn)?;
     migrate::drop_sender_foreign_key(&conn)?;
+    migrate::allow_task_narrative(&conn)?;
     Ok(conn)
 }
 

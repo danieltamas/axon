@@ -384,12 +384,13 @@ a.crumb:hover { color: var(--ink-strong); }
 .row.progress .row-kind { color: var(--signal); }
 .row.unrecorded .row-kind { font-size: 12px; color: var(--faint); }
 .row .structure { color: var(--faint); font-size: 12px; }
-.tools summary { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; cursor: pointer; }
-.tools summary::-webkit-details-marker { display: none; }
-.chip { font: 12px var(--mono); padding: 1px 8px; border-radius: 4px; background: var(--line); color: var(--muted); }
+.tools summary, .brief summary { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; cursor: pointer; }
+.tools summary::-webkit-details-marker, .chip { font: 12px var(--mono); padding: 1px 8px; border-radius: 4px; background: var(--line); color: var(--muted); }
 .tools summary:hover .chip { color: var(--ink); }
 .chip.failed, .tools li.failed { color: var(--stop); }
 .tools ul { margin: 8px 0 0; padding-left: 18px; font: 12px/1.7 var(--mono); color: var(--muted); }
+.brief-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.brief[open] .brief-line { display: none; }
 
 /* ---- composer ---- */
 .composer { display: flex; flex-direction: column; gap: 10px; padding: 14px var(--gutter) 16px; }
