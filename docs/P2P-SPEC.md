@@ -510,7 +510,9 @@ acceptance tests or by what the sections left unsaid.
   reaches it.
 - `next_retry_at` is set when a dial attempt starts, to the time the attempt gives up
   (now plus the connect timeout), and cleared on connect. §10 left it empty during an
-  in-flight dial.
+  in-flight dial. A session reusing an adopted connection initially sets `next_retry_at` to ten seconds ahead and
+  clears it after a successful heartbeat. The lifecycle exchange precedes that heartbeat, so this timestamp is not
+  an enforced deadline for the whole session.
 - `counters` and `queue` come from the database: `queue` is the `queued` outbox rows; `sent_accepted`,
   `expired`, `rejected` and `cancelled` come from the outbox and `received` from `fed_inbox`.
 - `/api/stream` emits `event: fed` on every service change and every 4 s, which satisfies "at
@@ -574,10 +576,11 @@ reports are in `docs/audits/`.
   pause, remove, unshare or flag change takes it exclusively around its commit. So in the owning
   process no frame is written after such a commit returns, and no SQLite write transaction is held
   across a network await (the gate is released when the write finishes, not when the peer answers).
-  The gate is global rather than per peer: a revocation may wait for in-flight writes to any peer,
-  at most the 10 s request timeout. A revocation made by another process (the `axon bus` CLI) is
-  seen by the owner's next re-check; the residual window is the time between that re-check and the
-  frame's write, normally milliseconds and never more than the same 10 s.
+  The gate is global, so a revocation can wait for another peer’s database clearance and frame write. The
+  ten-second timeout bounds the transport exchange after it starts; database work and waiting to acquire the gate
+  have no enclosing deadline. Cross-process revocations bypass this gate and are observed at the next authorization
+  recheck. A revocation committed after clearance can therefore precede the frame write; the whole
+  clearance-to-write interval has no separately enforced deadline.
 - **Streams (RR-2).** An open `/api/stream` re-reads its session every 500 ms with a read-only query
   that must answer within 400 ms; a missing session, an error or a timeout closes the stream, so
   revoking or expiring a session ends it within 1 s even while a writer holds the database. The
@@ -585,10 +588,13 @@ reports are in `docs/audits/`.
 - **Lifecycle (RR-3, RR-4).** Each pairing carries `lifecycle_seq`, bumped by every pause, resume and
   removal of ours, and `remote_lifecycle_seq`, the newest of the peer's that we applied. `paused`,
   `resumed` and `state` notices carry `seq`; one that is not newer is ignored, so a late pause
-  cannot undo a later resume. The acknowledgement carries the answerer's own `{paused, seq}`, which
-  the sender learns. On every connection each side sends a `state` notice, so a notice lost while
-  apart is repaired at the next connect. A peer that paused us is not dialed for traffic but is
-  probed every 5 s (connect, trade `state`, close; silent when it refuses): a pause on both sides
+  cannot undo a later resume. For `paused`, `resumed` and `state` notices, the acknowledgement is
+  `{"type":"ack","status":"accepted","paused":bool,"seq":n}`, with the answerer’s own lifecycle fields at the top
+  level. The sender applies those fields only when their sequence advances its stored remote state for that
+  pairing generation. A traffic session for an active pairing sends a `state` notice, including when it reuses an adopted
+  connection; the reply carries the receiver’s state. A remotely paused peer is probed after a five-second
+  sleep following the previous probe’s completion. Each probe allows up to fifteen seconds to connect and ten
+  seconds for the state exchange, separately from database work, then closes its connection. So a pause on both sides
   followed by a resume on both ends leaves two peers that reconnect without pairing again. Notices
   retry until acknowledged, an error answer included, except `unknown_peer` and
   `stale_generation`. A removal notice lost to an outage is still not repaired (see Shares above).
@@ -598,11 +604,18 @@ reports are in `docs/audits/`.
   that paused us opens (R2-3) says so, and a marked connection never carries our sends. A peer that
   restarts on a new port and reaches us is therefore used at once, instead of our sends going to
   the dead connection until its idle timeout. A session that ends closes only its own connection.
+  A new heartbeat session reuses an open adopted send connection when available. For a reused connection, its
+  first successful heartbeat sets `connected`, clears `next_retry_at`, and records the current time as
+  `last_handshake_at`. Switching between traffic and probe mode aborts the previous task and closes the peer’s
+  tracked connections and send path before starting the replacement task. Observed direct addresses also refresh
+  the in-memory address lookup.
   Every connection being served is tracked (R2-2): when a peer stops being live, or a reload is
   denied, all of them close and their handlers are cancelled, not only the one we dialed; and a
   frame is admitted again after it is read, before it is dispatched, so a revocation applied while
-  a frame arrived refuses it. The check reads the service's view of the peers, which a local
-  revocation updates by reload, after the notice to the peer; the window is that reload.
+  a frame arrived refuses it. After reading a frame, admission rechecks the service’s live-peer map and then
+  queries the database for that node, the same pairing generation, and state `active` or `pending_confirm`. A
+  missing match, database error or worker failure closes the connection before dispatch. This check does not wait
+  for the service reload; it is not serialized against a revocation committed after the check.
 - **Reload (RR-5).** A failed read of the peers table and a failed reload worker both deny, close
   and retry at the next tick. **Retention (RR-7).** An old undelivered inbound message is deleted
   with its inbox record in the same transaction, never the record alone. **Dialers (RR-8).**
@@ -615,11 +628,11 @@ reports are in `docs/audits/`.
   rate of Rates and limits stays behind it.
 - **Identity key (RR-14, SEC-12).** A key file readable by group or others is refused at start with
   the `chmod 600` fix; the mode is not repaired, because the key may already have been copied.
-  A new key is created 0600 in a 0700 directory. Windows has no mode to read back, so there the
-  owner-only ACL is set at creation and never read back: a later loosening (an administrator, a
-  restore, a sync tool) is not detected, and the key is then readable by whoever that change
-  admitted. Only a local account can exploit it, and one that can read the key can also read the
-  database and the dashboard session. **Refs (REL-13).** `axon bus guide` states that
+  A new key is created 0600 in a 0700 directory. On Windows, key creation and `require_private` both run `icacls /inheritance:r /grant:r USERNAME:(F)`. Loading an
+  existing key therefore reapplies permissions; it does not inspect the ACL to detect prior exposure or
+  independently verify the resulting permissions. Anyone able to copy the key can impersonate that federation
+  identity; access to the database or dashboard credentials is a separate permission question. The Windows ACL
+  path remains without an automated assertion. **Refs (REL-13).** `axon bus guide` states that
   a ref uses `/` only.
 - **Joiner label (SEC-6).** The inviter never stores the label the joiner chose; it names the
   pending peer `axon-` plus the 16 hex digits of the joiner's fingerprint until its owner renames
@@ -636,17 +649,17 @@ reports are in `docs/audits/`.
   duplicate labels, and none needs an upgrade path.
 - **Accepted, not fixed (P3).** Reasons are the residual risk, not a claim that it is absent.
   - BUG-11: thread names stay as sent on the wire; frozen tests assert it.
-  - BUG-12: dial backoff already doubles from 1 s to 60 s with jitter. A message that fails to
-    send retries after 1 s doubling to a fixed 10 s, without jitter, and its peer's other rows wait
-    for the same time; rows to one peer retry together, which is harmless at the volumes this
-    carries.
-  - BUG-13 (R2-4): the outbox still sends one row at a time. A batch holds at most 20 rows and at
-    most 4 per peer, so a deep backlog to one peer cannot fill it. A peer whose send failed is left
-    out of the batches for that row's retry wait (1 s doubling to 10 s). A peer that accepts
-    connections but never answers costs one 10 s request timeout per attempt, during which other
-    peers wait; the worst case is therefore that they are served about half the time (10 s stalled
-    per 10 s of back-off), delayed and never blocked. A peer that is not connected fails at once
-    and costs nothing.
+  - BUG-12: message retry delays are 1, 2, 4, 8 and then 10 seconds, without jitter. A transport error or timeout
+    also excludes that peer from the remaining batch and subsequent batches until its in-memory backoff expires.
+    Retryable protocol replies delay the individual row but do not activate this peer exclusion.
+  - BUG-13 (R2-4): batches contain at most twenty rows and four per peer, ordered by age. Each peer with due rows
+    is sent to by its own task: rows of one peer go out in order, a peer with a task still running is left out of
+    later batches, and peers never wait on each other's answers. The transmit gate is held shared only from a
+    row's clearance until its frame is written, not through the peer's answer, so a stalled peer holds neither
+    the gate nor the loop. A stalled peer delays only its own rows by up to the ten-second request timeout, then
+    is backed off. A healthy peer's row is therefore picked up on the next 500 ms tick and sent after its
+    clearance; this meets the five-second healthy-peer bound by design, except while a local revocation holds the
+    gate exclusively or database clearance is slow, neither of which has an enforced deadline.
   - SEC-8: the pair code is the owner's attestation that the digits matched, not something the
     server can verify; the manual says so.
   - SEC-9: the `peer:` partition keeps case-insensitive `LIKE` in the FK-replacement triggers and
