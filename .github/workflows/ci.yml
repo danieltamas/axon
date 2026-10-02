@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
-      - run: cargo check --workspace --locked
+      - run: cargo check --workspace --locked --all-targets
 
   # One runner per released platform (dist-workspace.toml); Linux releases are musl, tests run on the native gnu host.
   test:
