@@ -4,23 +4,42 @@
 
 # Axon
 
-**See every AI coding agent on your machine, what it costs, and steer it, from one local dashboard.**
+**The coordination bus for the coding agents on your machine, and on your teammate's.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Status: early access](https://img.shields.io/badge/status-early%20access-orange.svg)](#roadmap)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg?logo=rust)](https://www.rust-lang.org)
 
-Axon reads the logs your coding-agent harnesses already write (Claude Code, Codex, OpenCode,
-Hermes) and wires itself into their hooks. One `axon` binary then shows which sessions and
-subagents are running in which project, what each one is doing and costs, and lets you message,
-budget, stop or end them.
+<p align="center">
+  <a href="https://github.com/danieltamas/axon/raw/main/assets/media/axon-demo.mp4">
+    <img src="assets/media/axon-demo.jpg" alt="Axon in 45 seconds: agents register through a hook, ask and answer each other, run on budgets, and talk across two paired machines" width="100%">
+  </a>
+  <br><sub>▶ Watch Axon in 45 seconds</sub>
+</p>
 
-**100% local. No account. Nothing leaves your machine.**
+Claude Code, Codex, OpenCode and Hermes can run side by side in the same repo without exchanging
+a word. Axon wires itself into their hooks and gives them a bus:
+
+- **Every agent learns its id and whom it can reach.** It is told at session start, along with
+  the other sessions in its repository it could link with.
+- **Agents ask and answer each other.** `link`, `send --kind question`, `reply`, but only along
+  links both sides accepted. Every message goes into a hash-chained audit log.
+- **Every token is priced.** You set budgets per tree or agent: a warning at 80 %, a stop gate at 100 %.
+- **Agents can work across machines.** Pair your Axon with a teammate's and share a project. Its
+  agents then message each other over a direct, end-to-end encrypted link (QUIC, TLS 1.3,
+  Ed25519 node ids), managed from the dashboard's Settings page.
+
+One `axon` binary also reads the logs those harnesses already write, and shows every session and
+subagent, what it is doing and what it costs. From the same dashboard you can message, budget,
+stop or end them.
+
+**100% local. No account. Nothing leaves your machine, until you pair it with one you trust.**
 
 ## What it does
 
 | Capability | |
 |---|---|
+| **Working across machines**: pair your Axon with a teammate's, share a project, and the agents in it message each other over an encrypted peer-to-peer link; live connection health, pause, resume or disconnect from Settings ([guide](#working-across-machines)) | ✅ |
 | **Live topology**: every project, its sessions grouped as Needs you / Working / Idle / Closed, subagents beside their session, a 24 h activity chart | ✅ |
 | **Observed sessions**: harness processes started before Axon are found from the process table, with transcript narrative ("Now / Said / Ran"), model, tokens, cost and memory | ✅ |
 | **End sessions**: end one idle session from its card or every idle one in a project; two-click confirm, re-checked by the server | ✅ |
@@ -33,7 +52,6 @@ budget, stop or end them.
 | **RTK**: Rust Token Killer's token savings, if installed | ✅ |
 | **Desktop app**: install the dashboard as an app from the browser; when `axon` is not running it shows how to start it and comes back by itself | ✅ |
 | **Settings page**: capture and retention, usage retention, budgets, hook install state, database size and compact, the federation switch and its Peers panel, all from the dashboard | ✅ |
-| **Working across machines**: pair your Axon with a teammate's, share a project, and the agents in it message each other over an encrypted peer-to-peer link; live connection health, pause, resume or disconnect from Settings ([guide](#working-across-machines)) | ✅ |
 | Shareable cards, OTEL export | planned |
 
 ## Install
@@ -61,6 +79,10 @@ The first run wires Axon into the harnesses it finds: hooks in their own configs
 move or reinstall `axon`, the hooks are repointed on its next run.
 
 > [!NOTE]
+> **Upgrading to 0.4** rebuilds the bus `messages` table once on the first start, so remote
+> senders can be stored. The rows are kept byte for byte. Federation stays off until you turn it
+> on in Settings.
+>
 > **Upgrading from 0.2.x** moves Axon's usage rows to a new table and re-reads your logs once on
 > the first start (in the background; the dashboard is up immediately). The migration is
 > one-way: don't run 0.2.x against the database afterwards.
