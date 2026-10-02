@@ -10,6 +10,7 @@ pub struct Server {
     pub address: std::net::SocketAddr,
     pub url: String,
     pub cookie: String,
+    pub token: String,
 }
 pub struct Response {
     pub status: u16,
@@ -19,13 +20,13 @@ pub struct Response {
 impl Server {
     pub fn start(bus: &Bus, content: bool) -> Self {
         let mut server = Self::anonymous(bus, content, 0);
-        server.cookie = server.login(bus);
+        (server.cookie, server.token) = server.login(bus);
         server
     }
 
     pub fn shifted(bus: &Bus, content: bool, offset_ms: i64) -> Self {
         let mut server = Self::anonymous(bus, content, offset_ms);
-        server.cookie = server.login(bus);
+        (server.cookie, server.token) = server.login(bus);
         server
     }
 
@@ -82,6 +83,7 @@ impl Server {
             address,
             url,
             cookie: String::new(),
+            token: String::new(),
         }
     }
 
@@ -113,15 +115,15 @@ impl Server {
         )
     }
 
-    pub fn login(&self, bus: &Bus) -> String {
+    pub fn login(&self, bus: &Bus) -> (String, String) {
         let response = self.exchange(bus, &self.nonce(bus));
         assert_eq!(
             response.status,
-            204,
+            200,
             "{}",
             String::from_utf8_lossy(&response.body)
         );
-        assert!(response.body.is_empty());
+        let token = response.session_token();
         assert_eq!(
             response.headers.get("cache-control").map(String::as_str),
             Some("no-store")
@@ -139,7 +141,7 @@ impl Server {
         for attribute in ["HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=2592000"] {
             assert!(fields.contains(&attribute), "missing {attribute}: {header}");
         }
-        cookie.to_owned()
+        (cookie.to_owned(), token)
     }
 
     pub fn request(
@@ -158,6 +160,20 @@ impl Server {
         {
             authenticated.push(("Cookie", &self.cookie));
         }
+        if !self.token.is_empty()
+            && !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("x-axon-session"))
+        {
+            authenticated.push(("x-axon-session", &self.token));
+        }
+        let stream_path;
+        let path = if path == "/api/stream" && !self.token.is_empty() {
+            stream_path = format!("{path}?t={}", self.token);
+            stream_path.as_str()
+        } else {
+            path
+        };
         self.raw_request(bus, method, path, &authenticated, body)
     }
 
@@ -252,4 +268,20 @@ pub fn response_headers(
         headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
     }
     (status, headers)
+}
+
+impl Response {
+    pub fn session_token(&self) -> String {
+        assert_eq!(
+            self.status, 200,
+            "C1: login returns 200 with a session token"
+        );
+        let value = parse_json(&self.body);
+        let token = value["token"].as_str().expect("C1: token in login JSON");
+        assert_eq!(token.len(), 43, "C1: 32 random bytes in unpadded base64url");
+        assert!(token
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+        token.to_owned()
+    }
 }

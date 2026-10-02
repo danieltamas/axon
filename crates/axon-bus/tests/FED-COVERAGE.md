@@ -1,5 +1,9 @@
 # Federation acceptance contract handoff
 
+The [2026-10-02 fix-round supplement](FED-FIXROUND-COVERAGE.md) supersedes this
+handoff's cookie-only login and unavailable raw-probe notes. Earlier coverage below
+remains historical; the supplement lists the amended contract and verification limits.
+
 Source of truth: `docs/P2P-SPEC.md`, followed by its §11 acceptance mapping.
 These are independent process/HTTP/hook tests. No feature source module is imported,
 no new dependency is required to compile the integration targets, and no Cargo command
