@@ -330,3 +330,26 @@ fn stamps_whose_difference_overflows_are_bad_time() {
         "bad_time",
     );
 }
+
+#[test]
+fn a_retransmission_is_a_duplicate_even_once_the_inbox_is_full() {
+    let mut fx = ready();
+    let frame = message();
+    assert_eq!(
+        run(&mut fx.conn, &Limits::default(), frame.clone())["status"],
+        "accepted"
+    );
+    for n in 0..PENDING_PER_RECIPIENT {
+        put(
+            &fx.conn,
+            &format!("old-{n}"),
+            "peer:p1/alicesessio1",
+            "bob",
+            "sync",
+            "t",
+            "[]",
+        );
+    }
+    let again = run(&mut fx.conn, &Limits::default(), frame);
+    assert_eq!(again["status"], "duplicate", "{again}");
+}

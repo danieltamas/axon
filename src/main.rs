@@ -120,6 +120,8 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
         events: std::sync::RwLock::new(Vec::new()),
     });
 
+    let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
+    let listener = server::bind(addr).await?;
     let db = db_path();
     axon_bus::init(&db)?;
     // Installing Axon is the whole setup: each harness is wired to this binary once.
@@ -134,9 +136,8 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
         open_in_browser(&link);
     }
     println!("  live (file-watch) — press Ctrl-C to stop\n");
-    let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
     federation.restart().await;
-    let served = server::serve(addr, state, &db, dashboard).await;
+    let served = server::serve(listener, state, &db, dashboard).await;
     federation.shutdown().await;
     served
 }

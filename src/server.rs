@@ -48,16 +48,21 @@ pub fn build_router(state: Arc<AppState>, db: &std::path::Path, dashboard: Route
         .layer(CompressionLayer::new())
 }
 
-/// Bind `addr` (loopback) and serve until the process is stopped.
+/// Bind `addr` (loopback). Done before anything is printed or issued, so a port that is
+/// taken ends the run with a hint instead of a dead login link.
+pub async fn bind(addr: SocketAddr) -> anyhow::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(addr).await.with_context(|| {
+        format!("bind {addr}: in use? pick another port with --port, or run `axon open` for the one that is running")
+    })
+}
+
+/// Serve on `listener` until the process is stopped.
 pub async fn serve(
-    addr: SocketAddr,
+    listener: tokio::net::TcpListener,
     state: Arc<AppState>,
     db: &std::path::Path,
     dashboard: Router,
 ) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind {addr}"))?;
     axum::serve(listener, build_router(state, db, dashboard))
         .await
         .context("axum serve")?;
@@ -173,7 +178,7 @@ mod tests {
             summary: std::sync::RwLock::new(build_summary(&[])),
             events: std::sync::RwLock::new(Vec::new()),
         });
-        build_router(state, &db, dashboard);
+        let _merged = build_router(state, &db, dashboard);
         std::fs::remove_dir_all(&dir).ok();
     }
 

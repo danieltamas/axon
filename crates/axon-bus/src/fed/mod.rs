@@ -28,7 +28,9 @@ mod transport;
 use std::path::Path;
 
 use anyhow::Context;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
+
+use crate::store::setting;
 
 /// ALPN of the one-time pairing exchange.
 pub const PAIR_ALPN: &[u8] = b"axon/pair/1";
@@ -37,13 +39,6 @@ pub const FED_ALPN: &[u8] = b"axon/fed/1";
 
 const SETTING_ENABLED: &str = "fed_enabled";
 const SETTING_RELAY: &str = "fed_relay";
-
-fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
-        r.get(0)
-    })
-    .optional()
-}
 
 /// A connection for a handler whose commit precedes a wire ack: the peer's acknowledgement is
 /// a promise, so the change must survive power loss (`synchronous=FULL`, unlike the hub's NORMAL).

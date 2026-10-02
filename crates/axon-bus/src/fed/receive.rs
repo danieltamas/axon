@@ -221,6 +221,21 @@ fn check(tx: &Connection, limits: &Limits, node: &str, msg: &Msg) -> anyhow::Res
     {
         return reject("bad_message");
     }
+    // The same message again is acknowledged, not stored; the same id with other content is a
+    // conflict. This comes before the checks a retransmission can no longer pass (the message
+    // expired, the inbox filled, the share moved on): the receiver already holds it.
+    let seen: Option<String> = tx
+        .query_row(
+            "SELECT content_hash FROM fed_inbox WHERE peer_id=?1 AND generation=?2 AND message_id=?3",
+            params![peer_id, generation, msg.message_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match seen {
+        Some(hash) if hash == msg.content_hash() => return Ok(Verdict::Duplicate),
+        Some(_) => return reject("conflict"),
+        None => {}
+    }
     // 3. Only the four conversational kinds.
     if !KINDS.contains(&msg.kind.as_str()) {
         return reject("kind_not_allowed");
@@ -283,20 +298,6 @@ fn check(tx: &Connection, limits: &Limits, node: &str, msg: &Msg) -> anyhow::Res
     }
     if !limits.allow(&peer_id, &recipient) {
         return reject("rate_limited");
-    }
-    // 9. The same message again is acknowledged, not stored; the same id with other content
-    // is a conflict.
-    let seen: Option<String> = tx
-        .query_row(
-            "SELECT content_hash FROM fed_inbox WHERE peer_id=?1 AND generation=?2 AND message_id=?3",
-            params![peer_id, generation, msg.message_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    match seen {
-        Some(hash) if hash == msg.content_hash() => return Ok(Verdict::Duplicate),
-        Some(_) => return reject("conflict"),
-        None => {}
     }
     Ok(Verdict::Store {
         from: Sender { peer_id, label },

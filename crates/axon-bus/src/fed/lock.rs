@@ -18,12 +18,13 @@ pub enum Acquire {
 }
 
 pub fn acquire(fed_dir: &Path) -> std::io::Result<Acquire> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(fed_dir.join(LOCK_FILE))?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    // Like every other file in `fed/`; it holds only a pid, but a lock nobody else can open
+    // cannot be used to confuse the owner.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(fed_dir.join(LOCK_FILE))?;
     match file.try_lock() {
         Ok(()) => {
             file.set_len(0)?;

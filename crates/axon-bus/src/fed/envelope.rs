@@ -16,11 +16,17 @@ pub const LIFETIME_MS: i64 = 24 * 60 * 60 * 1000;
 /// How far ahead of the receiver's clock a creation time may be.
 pub const CLOCK_SKEW_MS: i64 = 120_000;
 
+/// Line and paragraph separators and the bidirectional controls: they would let a body fake
+/// a line or reorder the text around it in a renderer that honours them.
+fn is_framing_char(c: char) -> bool {
+    matches!(c, '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 pub fn body_ok(body: &str) -> bool {
     body.chars().count() <= MAX_BODY_CHARS
         && body
             .chars()
-            .all(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+            .all(|c| (!c.is_control() || matches!(c, '\n' | '\t')) && !is_framing_char(c))
 }
 
 pub fn thread_ok(thread: &str) -> bool {
@@ -38,14 +44,16 @@ fn ref_shape() -> &'static Regex {
     })
 }
 
-/// A path-like pointer, metadata only: no `..` segment and no leading `/`.
+/// A path-like pointer, metadata only: no `..` segment (also before a `:L` or `@` suffix),
+/// no leading `/` and no leading `-` (which a tool would read as an option).
 pub fn refs_ok(refs: &[String]) -> bool {
     refs.len() <= MAX_REFS
         && refs.iter().all(|r| {
+            let path = r.split([':', '@']).next().unwrap_or_default();
             r.len() <= MAX_REF_BYTES
                 && ref_shape().is_match(r)
-                && !r.starts_with('/')
-                && !r.split('/').any(|segment| segment == "..")
+                && !r.starts_with(['/', '-'])
+                && !path.split('/').any(|segment| segment == "..")
         })
 }
 
@@ -84,6 +92,9 @@ mod tests {
         assert!(body_ok("line one\n\tline two"));
         assert!(!body_ok("bell\u{7}"));
         assert!(!body_ok("escape\u{1b}[2J"));
+        for framing in ['\u{2028}', '\u{2029}', '\u{202E}', '\u{2066}', '\u{2069}'] {
+            assert!(!body_ok(&format!("a{framing}b")), "{framing:?}");
+        }
         assert!(body_ok(&"é".repeat(MAX_BODY_CHARS)));
         assert!(!body_ok(&"é".repeat(MAX_BODY_CHARS + 1)));
     }
@@ -95,6 +106,9 @@ mod tests {
         assert!(ok("src/lib.rs:L10-20@abcdef1"));
         assert!(!ok("/etc/passwd"));
         assert!(!ok("a/../b"));
+        assert!(!ok("a/..:L10"), "a suffix does not hide a parent segment");
+        assert!(!ok("..@abcdef1"));
+        assert!(!ok("-rf"));
         assert!(!ok("a b"));
         assert!(!ok("https://example.invalid/x"));
         assert!(!refs_ok(&vec!["a".to_owned(); MAX_REFS + 1]));
