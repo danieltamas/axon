@@ -135,7 +135,7 @@ pub fn repo(bus: &Bus, name: &str) -> PathBuf {
     std::fs::create_dir(&path).unwrap();
     git(bus, &path, &["init", "--initial-branch=main"]);
     git(bus, &path, &["commit", "--allow-empty", "-m", name]);
-    path.canonicalize().unwrap()
+    super::canonical(&path)
 }
 
 pub struct Pair {

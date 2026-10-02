@@ -92,7 +92,7 @@ fn untrusted_body_is_exactly_quoted_refs_are_inert_and_receipt_executes_nothing(
         &body,
         &[reference],
     );
-    let executable = std::fs::canonicalize(assert_cmd::cargo::cargo_bin!("axon-bus")).unwrap();
+    let executable = canonical(assert_cmd::cargo::cargo_bin!("axon-bus"));
     let executable = executable.display().to_string();
     let bus_command = if executable.contains(' ') {
         format!("\"{executable}\"")
