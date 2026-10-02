@@ -69,4 +69,5 @@ strip = true
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"
+lto = true
+codegen-units = 1

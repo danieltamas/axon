@@ -169,7 +169,7 @@ BUS-PLAN §2 and §7 (U0 replaces SEC-7), and the release notes.
 
 ## 4. How it is measured
 
-1. **Acceptance:** `cargo test --test acceptance_fed` on the 3-OS CI matrix. Two isolated
+1. **Acceptance:** `cargo test -p axon-bus --test 'acceptance_fed_*'` on the 3-OS CI matrix. Two isolated
    data dirs, controlled keys, clocks and network faults, real hook payloads.
 2. **End-to-end:** `scripts/fed-e2e.sh` runs two `axon` instances on one machine (different
    ports and data dirs). It drives pair → share → question → answer → pause → resume →

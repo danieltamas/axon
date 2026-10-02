@@ -450,8 +450,8 @@ acceptance tests or by what the sections left unsaid.
 - `GET /api/fed` exposes `pair_code` on each peer in `pending_confirm`. §10's example omits it;
   §4 requires both screens to show it.
 - `GET /api/fed` reports `enabled: false` whenever the service is not running.
-- Creating invites, joining, confirming and sharing have no Settings UI yet. Settings shows the
-  federation switch and the Peers panel. This is a gap against the plan, not a decision.
+- Creating invites, joining, confirming and sharing are in Settings (commit 92b5a23); the
+  gap this entry once recorded is closed.
 
 **Shares and the message path (§§6–8).**
 - A share's two owners bump one shared `revision`, so changes can cross. A `share_update` with

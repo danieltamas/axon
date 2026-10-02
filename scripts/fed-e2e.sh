@@ -2,7 +2,8 @@
 # Two Axon instances on one machine, driven end to end:
 #   pair -> share -> send both ways -> pause -> resume -> remove
 # Prints PASS/FAIL per step, the measured send-to-inbox latency (docs/P2P-PLAN.md section 4:
-# <= 1 s p95 on a direct path) and the release binary size against its 15 MB budget.
+# <= 1 s p95 on a direct path) and the shipped (dist profile) binary size against its 15 MB
+# budget, in decimal megabytes.
 #
 # Needs a DEBUG build of `axon`: the loopback-only, no-relay seams (AXON_FED_RELAY,
 # AXON_FED_BIND) do not exist in release builds, which would dial the public relays.
@@ -11,14 +12,14 @@
 #
 #   scripts/fed-e2e.sh                 build what is missing, run, exit 0 when every step passes
 #   AXON=path/to/debug/axon            use another debug binary
-#   FED_E2E_SKIP_SIZE=1                skip the release build and size check
+#   FED_E2E_SKIP_SIZE=1                skip the dist build and size check
 
 set -u
 cd "$(dirname "$0")/.."
 
 AXON=${AXON:-target/debug/axon}
-RELEASE=target/release/axon
-SIZE_BUDGET=$((15 * 1024 * 1024))
+SHIPPED=target/dist/axon
+SIZE_BUDGET=15000000
 LATENCY_BUDGET_MS=1000
 SAMPLES=8
 
@@ -72,11 +73,12 @@ isolated() { # instance, command...
 bus() { local n=$1; shift; (cd "$ROOT/$n/repo" && isolated "$n" "$AXON" bus "$@" 2>&1); }
 
 api() { # instance, method, path, [body]: prints the response body, fails on non-2xx
-  local n=$1 method=$2 path=$3 body=${4:-} url cookie reply status
+  local n=$1 method=$2 path=$3 body=${4:-} url cookie token reply status
   url=$(cat "$ROOT/$n/url")
   cookie=$(cat "$ROOT/$n/cookie")
+  token=$(cat "$ROOT/$n/token")
   reply=$(curl -s -w '\n%{http_code}' -X "$method" "$url$path" -H "Cookie: $cookie" \
-    -H "Origin: $url" -H 'Content-Type: application/json' ${body:+-d "$body"})
+    -H "x-axon-session: $token" -H "Origin: $url" -H 'Content-Type: application/json' ${body:+-d "$body"})
   status=${reply##*$'\n'}
   case $status in 2??) printf '%s' "${reply%$'\n'*}" ;; *) echo "$method $path -> $status ${reply%$'\n'*}" >&2; return 1 ;; esac
 }
@@ -114,10 +116,12 @@ start_instance() {
   local url nonce
   url=$(cat "$ROOT/$n/url")
   nonce=$(bus "$n" open --print | sed -n 's/.*#login=//p')
-  curl -s -D "$ROOT/$n/headers" -o /dev/null -X POST "$url/api/session" -H "Origin: $url" \
+  # The cookie alone is not enough: the response body carries the session token (C1).
+  curl -s -D "$ROOT/$n/headers" -o "$ROOT/$n/session.json" -X POST "$url/api/session" -H "Origin: $url" \
     -H 'Content-Type: application/json' -d "{\"nonce\":\"$nonce\"}"
   sed -n 's/^[Ss]et-[Cc]ookie: \(axon_session=[^;]*\).*/\1/p' "$ROOT/$n/headers" >"$ROOT/$n/cookie"
-  test -s "$ROOT/$n/cookie"
+  json 'd["token"]' <"$ROOT/$n/session.json" >"$ROOT/$n/token"
+  test -s "$ROOT/$n/cookie" && test -s "$ROOT/$n/token"
 }
 
 # The peer row of instance $1 as JSON, and one field of it.
@@ -240,14 +244,15 @@ echo "          (includes ~30 ms of polling and python timer overhead; the quest
 [ "$p95" -le "$LATENCY_BUDGET_MS" ] && pass "speed: p95 within ${LATENCY_BUDGET_MS} ms" || fail "speed: p95 within ${LATENCY_BUDGET_MS} ms" "p95 ${p95} ms"
 
 if [ -z "${FED_E2E_SKIP_SIZE:-}" ]; then
-  [ -x "$RELEASE" ] || cargo build --release -p axon >/dev/null 2>&1
-  if [ -x "$RELEASE" ]; then
-    bytes=$(wc -c <"$RELEASE" | tr -d ' ')
-    printf 'size    : %s is %s bytes (%s MB) of the %s MB budget\n' "$RELEASE" "$bytes" \
-      "$(python3 -c "print(f'{$bytes / 1048576:.2f}')")" "$((SIZE_BUDGET / 1048576))"
-    [ "$bytes" -le "$SIZE_BUDGET" ] && pass "size: within the 15 MB budget" || fail "size: within the 15 MB budget"
+  # What users get is the dist profile (dist-workspace.toml), not the release profile.
+  cargo build --profile dist -p axon >/dev/null 2>&1
+  if [ -x "$SHIPPED" ]; then
+    bytes=$(wc -c <"$SHIPPED" | tr -d ' ')
+    printf 'size    : %s is %s bytes (%s MB) of the %s MB budget (decimal)\n' "$SHIPPED" "$bytes" \
+      "$(python3 -c "print(f'{$bytes / 1e6:.2f}')")" "$((SIZE_BUDGET / 1000000))"
+    [ "$bytes" -le "$SIZE_BUDGET" ] && pass "size: dist binary within the 15 MB budget" || fail "size: dist binary within the 15 MB budget"
   else
-    fail "size: release binary" "cargo build --release -p axon failed"
+    fail "size: dist binary" "cargo build --profile dist -p axon failed"
   fi
 fi
 

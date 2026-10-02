@@ -75,7 +75,7 @@ axon --scan-only          # headless: scan the logs, print a JSON summary, exit
 
 axon open --print         # a fresh dashboard login link
 axon bus --help           # the control plane: send, ask, budget, claim, audit, doctor…
-axon bus budget set <root> 2Mtok --usd 20
+axon bus budget set <agent-id> 2Mtok --usd 20  # a registered agent (its tree's root)
 axon bus doctor           # which harnesses are wired
 axon bus guide            # the playbook every agent is pointed to
 ```
@@ -124,7 +124,14 @@ undo.
    Axons then show the same 24 digits, the pair code, and the two key fingerprints. Compare
    the code out loud or in a chat you already trust, choose Confirm, it matches on both
    sides within 10 minutes, or Reject. A wrong code removes the pairing. The same steps
-   are available over the local API (`/api/fed`, see `crates/axon-bus/tests/acceptance_m5.rs`).
+   are available over the local API: sign in with `axon open --print`, `POST /api/session`
+   `{"nonce":"<from the link>"}` answers `{"token":"…"}` and sets the cookie, and every call
+   then needs both (`Cookie: axon_session=…` and `x-axon-session: <token>`), a matching
+   `Origin` and, on POST and PUT, `Content-Type: application/json`. The routes:
+   `PUT /api/settings/federation {"enabled":true}`, `POST /api/fed/invites {}`,
+   `POST /api/fed/join {"invite","label"}`, `POST /api/fed/peers/<id>/confirm {"pair_code"}`
+   and `GET /api/fed` (see `crates/axon-bus/tests/acceptance_fed_pairing.rs` and
+   `acceptance_fed_auth.rs`).
 3. **Share a project, in each direction.** Pairing shares nothing. On a peer's card, Share a
    project: pick one of your projects (or enter a folder), choose Send and Receive, and offer
    it. The other side sees the offer, picks their own checkout and flags, and accepts. A
