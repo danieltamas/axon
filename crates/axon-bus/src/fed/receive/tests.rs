@@ -267,3 +267,45 @@ fn a_full_inbox_is_a_final_rejection_unlike_a_busy_receiver() {
         (Some("rejected"), Some("recipient_full"))
     );
 }
+
+fn put(conn: &Connection, id: &str, from: &str, to: &str, kind: &str, thread: &str, refs: &str) {
+    conn.execute(
+        "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body,refs_json,needs_reply,sent_at)
+         VALUES (?1,?2,(SELECT coalesce(max(seq),0)+1 FROM messages WHERE thread=?2),?3,?4,?5,?6,?7,0,1)",
+        rusqlite::params![id, thread, from, to, kind, format!("from {from}"), refs],
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_remote_answer_never_satisfies_a_local_blocking_ask() {
+    let fx = ready();
+    let project = repo(fx.dir.path(), "other");
+    agent(&fx.conn, "asker", &project, "active");
+    put(&fx.conn, "m-q1", "asker", "bob", "question", "m-q1", "[]");
+    // The wire lets a peer choose thread and refs, so it can name a local question.
+    put(
+        &fx.conn,
+        "r-forged",
+        "peer:alice/aaaaaaaaaaaa",
+        "asker",
+        "answer",
+        "m-q1",
+        r#"["m-q1"]"#,
+    );
+    let wait = std::time::Duration::ZERO;
+    let result = crate::msg::await_answer(&fx.conn, "m-q1", "m-q1", wait, "none").unwrap();
+    assert_eq!(result["timed_out"], true, "{result}");
+    // Only the question's addressee answers it, and that still works.
+    put(
+        &fx.conn,
+        "m-a1",
+        "bob",
+        "asker",
+        "answer",
+        "m-q1",
+        r#"["m-q1"]"#,
+    );
+    let result = crate::msg::await_answer(&fx.conn, "m-q1", "m-q1", wait, "none").unwrap();
+    assert_eq!(result["body"], "from bob");
+}

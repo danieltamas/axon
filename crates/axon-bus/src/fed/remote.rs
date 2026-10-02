@@ -79,6 +79,7 @@ pub fn reply(
         .query_row(
             "SELECT m.from_id, m.thread, i.message_id, i.peer_id,
                     (SELECT a.share_id FROM fed_audit a
+                     JOIN peer_shares s ON s.share_id=a.share_id AND s.peer_id=i.peer_id
                      WHERE a.message_id=i.message_id AND a.generation=i.generation
                        AND a.direction='in' AND a.decision='accepted')
              FROM messages m

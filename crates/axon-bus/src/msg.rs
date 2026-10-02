@@ -286,7 +286,7 @@ pub fn await_answer(
         let answer: Option<String> = conn
             .query_row(
                 "SELECT body FROM messages WHERE kind='answer' AND thread=?2
-                 AND refs_json=json_array(?1) ORDER BY seq LIMIT 1",
+                 AND refs_json=json_array(?1) AND from_id=(SELECT to_id FROM messages WHERE id=?1) ORDER BY seq LIMIT 1",
                 params![question, thread],
                 |r| r.get(0),
             )
