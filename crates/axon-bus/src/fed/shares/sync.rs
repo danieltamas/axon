@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 
 use super::{apply_frame, frame_of, get};
-use crate::fed::service::{FrameHandler, Handle};
+use crate::fed::service::{FrameHandler, Handle, WeakHandle};
 use crate::store;
 
 const PUSH_TRIES: u32 = 5;
@@ -28,12 +28,12 @@ pub fn install(handle: &Handle, db: &Path) {
         "share_update",
         "share_remove",
     ] {
-        handle.on_frame(kind, frame_handler(handle.clone(), db.to_owned()));
+        handle.on_frame(kind, frame_handler(handle.downgrade(), db.to_owned()));
     }
     tokio::spawn(resend_on_connect(handle.clone(), db.to_owned()));
 }
 
-fn frame_handler(handle: Handle, db: PathBuf) -> FrameHandler {
+fn frame_handler(handle: WeakHandle, db: PathBuf) -> FrameHandler {
     Arc::new(move |node: String, frame: Value| {
         let (handle, db) = (handle.clone(), db.clone());
         Box::pin(async move {
@@ -47,7 +47,7 @@ fn frame_handler(handle: Handle, db: PathBuf) -> FrameHandler {
                     // A change that moved our revision may have crossed one of ours still in
                     // flight, which the sender then dropped as older: say it again at the new
                     // revision. An equal revision with other flags is accepted, so this ends.
-                    if let Some(share_id) = answer_back {
+                    if let (Some(share_id), Some(handle)) = (answer_back, handle.upgrade()) {
                         tokio::spawn(push(handle, db, share_id, true));
                     }
                     reply

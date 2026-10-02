@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -69,11 +69,16 @@ pub fn require_owner(routes: Router, db: &Path) -> Router {
         db.to_owned(),
         |State(db): State<PathBuf>, request: Request, next: Next| async move {
             let credentials = Credentials::of(request.headers(), request.uri());
-            if signed_in(&db, credentials).await {
+            let mut response = if signed_in(&db, credentials).await {
                 next.run(request).await
             } else {
                 sign_in_required()
-            }
+            };
+            // The host's API carries the owner's data like the dashboard's: never cached.
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
         },
     ))
 }

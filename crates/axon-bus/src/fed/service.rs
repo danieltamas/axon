@@ -201,101 +201,6 @@ fn ping_reply(access: &Access, request: Value) -> Value {
     }
 }
 
-struct PeerRow {
-    peer_id: String,
-    node_id: String,
-    label: String,
-    generation: i64,
-    state: String,
-}
-
-fn load_peers(db_path: &Path) -> anyhow::Result<Vec<PeerRow>> {
-    let conn = store::open(db_path)?;
-    let mut stmt = conn.prepare(
-        "SELECT peer_id, node_id, label, generation, state FROM peers WHERE state <> 'removed'",
-    )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(PeerRow {
-            peer_id: r.get(0)?,
-            node_id: r.get(1)?,
-            label: r.get(2)?,
-            generation: r.get(3)?,
-            state: r.get(4)?,
-        })
-    })?;
-    Ok(rows.collect::<Result<_, _>>()?)
-}
-
-/// Re-read the peers table: refresh the gate, the health entries, and start or stop the
-/// dial task of each peer as it becomes live or stops being so.
-async fn sync_peers(shared: &Arc<Shared>, dialers: &mut HashMap<EndpointId, JoinHandle<()>>) {
-    let db_path = shared.db_path.clone();
-    let rows = match tokio::task::spawn_blocking(move || load_peers(&db_path)).await {
-        Ok(Ok(rows)) => rows,
-        Ok(Err(err)) => return eprintln!("axon-bus: federation could not read peers: {err:#}"),
-        Err(_) => return,
-    };
-    let mut access = HashMap::new();
-    for row in rows {
-        let Ok(node) = row.node_id.parse::<EndpointId>() else {
-            eprintln!(
-                "axon-bus: peer {} has an unreadable node id; ignored",
-                row.peer_id
-            );
-            continue;
-        };
-        {
-            let mut health = locked(&shared.health);
-            let entry = health.entry(node).or_insert_with(|| {
-                let print = identity::fingerprint(&node);
-                PeerHealth::new(row.peer_id.clone(), row.label.clone(), print)
-            });
-            entry.label.clone_from(&row.label);
-            entry.stored_state.clone_from(&row.state);
-        }
-        access.insert(
-            node,
-            Access {
-                peer_id: row.peer_id,
-                generation: row.generation,
-                state: row.state,
-            },
-        );
-    }
-    locked(&shared.health).retain(|node, _| access.contains_key(node));
-    for (node, entry) in &access {
-        if entry.is_live() {
-            dialers
-                .entry(*node)
-                .or_insert_with(|| tokio::spawn(transport::dial_loop(shared.clone(), *node)));
-        }
-    }
-    dialers.retain(|node, task| {
-        let keep = access.get(node).is_some_and(Access::is_live);
-        if !keep {
-            task.abort();
-            shared.drop_connection(node);
-        }
-        keep
-    });
-    // A peer that became active may have been seen while still pairing, when no address is kept:
-    // forget what was seen so the next connection records it.
-    locked(&shared.observed).clear();
-    *shared.access.write().unwrap_or_else(|p| p.into_inner()) = access;
-    shared.changed.send_modify(|version| *version += 1);
-}
-
-async fn manage(shared: Arc<Shared>) {
-    let mut dialers = HashMap::new();
-    let mut push = tokio::time::interval(PUSH_EVERY);
-    loop {
-        tokio::select! {
-            _ = shared.reload.notified() => sync_peers(&shared, &mut dialers).await,
-            _ = push.tick() => shared.notify_if_live(),
-        }
-    }
-}
-
 /// A running service. Cloning shares it; `shutdown` stops it for every clone.
 #[derive(Clone)]
 pub struct Handle {
@@ -388,8 +293,11 @@ impl Handle {
     }
 
     pub async fn shutdown(&self) {
-        if let Some(manager) = locked(&self.stop.manager).take() {
+        let manager = locked(&self.stop.manager).take();
+        if let Some(manager) = manager {
             manager.abort();
+            // Joined, so its dialers (aborted as it drops them) are gone before the router is.
+            let _ = manager.await;
         }
         let _ = self.stop.router.shutdown().await;
         locked(&self.stop.lock).take();
@@ -481,7 +389,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         .accept(FED_ALPN, FedProtocol(shared.clone()))
         .spawn();
     shared.reload.notify_one();
-    let manager = tokio::spawn(manage(shared.clone()));
+    let manager = tokio::spawn(peers::manage(shared.clone()));
     Ok(Some(Handle {
         shared,
         stop: Arc::new(Stop {
@@ -495,6 +403,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
 
 mod addrs;
 mod link;
-pub use link::Link;
+mod peers;
+pub use link::{Link, WeakHandle};
 #[cfg(test)]
 mod tests;

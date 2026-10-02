@@ -112,6 +112,35 @@ async fn two_nodes_on_loopback_ping_and_report_health() {
 }
 
 #[tokio::test]
+async fn a_peer_that_paused_us_is_not_redialed_and_is_not_a_fault() {
+    let (a, ha, b, hb) = connected_pair().await;
+    a.conn()
+        .execute("UPDATE peers SET state='paused'", [])
+        .unwrap();
+    ha.reload();
+    b.conn()
+        .execute("UPDATE peers SET remote_paused=1", [])
+        .unwrap();
+    hb.reload();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let peer = &hb.health()["peers"][0];
+    assert_eq!(peer["state"], "offline");
+    assert_eq!(peer["last_error"], Value::Null, "{peer}");
+    assert_eq!(peer["next_retry_at"], Value::Null);
+    b.conn()
+        .execute("UPDATE peers SET remote_paused=0", [])
+        .unwrap();
+    a.conn()
+        .execute("UPDATE peers SET state='active'", [])
+        .unwrap();
+    ha.reload();
+    hb.reload();
+    wait_for(&hb, |peer| peer["state"] == "connected").await;
+    ha.shutdown().await;
+    hb.shutdown().await;
+}
+
+#[tokio::test]
 async fn frames_route_by_type_and_a_wrong_generation_is_refused() {
     let (_a, ha, b, hb) = connected_pair().await;
     hb.on_frame(

@@ -94,10 +94,14 @@ impl IntoResponse for Fail {
             ),
             Fail::Busy => (StatusCode::CONFLICT, json!({"error": "busy"})),
             Fail::Refused(why) => (StatusCode::CONFLICT, json!({"error": why})),
-            Fail::Failed(err) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error": format!("{err:#}")}),
-            ),
+            Fail::Failed(err) => {
+                // The chain can hold paths; the page gets a fixed word, the log the cause.
+                eprintln!("axon-bus: a settings request failed: {err:#}");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error": "unavailable"}),
+                )
+            }
         };
         (status, Json(body)).into_response()
     }

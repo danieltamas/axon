@@ -163,3 +163,31 @@ fn a_label_is_unique_among_live_peers_and_changes_nothing_else() {
         Change::Unknown
     ));
 }
+
+#[test]
+fn forgetting_a_peer_that_removed_us_is_accepted_once_and_only_then() {
+    let mut fx = fixture();
+    fx.conn
+        .execute(
+            "UPDATE peers SET state='removed', removed_reason='remote_removed' WHERE peer_id='p1'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        remove(&mut fx.conn, "p1").unwrap(),
+        Change::Done(_)
+    ));
+    let reason: String = fx
+        .conn
+        .query_row(
+            "SELECT removed_reason FROM peers WHERE peer_id='p1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "remote_removed_forgotten");
+    assert!(matches!(
+        remove(&mut fx.conn, "p1").unwrap(),
+        Change::Unknown
+    ));
+}

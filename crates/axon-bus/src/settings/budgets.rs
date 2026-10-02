@@ -3,12 +3,18 @@
 //! Edits keep the owner's other keys and comments.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use anyhow::Context;
 use serde_json::{json, Value};
 use toml_edit::{value, DocumentMut};
 
 use super::input::BUDGET_FIELDS;
+
+/// Serializes the read-modify-write of `config.toml`, so two edits never lose each other.
+static WRITING: Mutex<()> = Mutex::new(());
+static STAGED: AtomicU64 = AtomicU64::new(0);
 
 pub fn config_path() -> PathBuf {
     crate::install::env_dir("XDG_CONFIG_HOME", &[".config"])
@@ -35,6 +41,7 @@ pub fn read() -> Value {
 /// Apply `changes` (a cap, or `None` to remove it). A file that does not parse is refused
 /// rather than overwritten: the owner's hand edits are not ours to discard.
 pub fn write(changes: &[(&str, Option<f64>)]) -> anyhow::Result<()> {
+    let _writing = WRITING.lock().unwrap_or_else(|p| p.into_inner());
     let path = config_path();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -57,7 +64,11 @@ pub fn write(changes: &[(&str, Option<f64>)]) -> anyhow::Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     // Rename over the file so a crash never leaves half a config for `axon` to misread.
-    let staged = path.with_extension("toml.tmp");
+    let staged = path.with_extension(format!(
+        "toml.{}.{}.tmp",
+        std::process::id(),
+        STAGED.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&staged, doc.to_string())?;
     std::fs::rename(&staged, &path).with_context(|| format!("replace {}", path.display()))
 }

@@ -105,6 +105,16 @@ pub fn resume(conn: &mut Connection, peer_id: &str) -> anyhow::Result<Change> {
 /// told us about its sessions is forgotten. Delivered messages and the audit stay, keyed by
 /// the peer's immutable identity. Removal is local authority: the peer is not asked.
 pub fn remove(conn: &mut Connection, peer_id: &str) -> anyhow::Result<Change> {
+    // "Forget" on a pairing the peer already ended: nothing is left to undo, the owner only
+    // acknowledges it, and the page stops listing it.
+    let forgotten = conn.execute(
+        "UPDATE peers SET removed_reason='remote_removed_forgotten'
+         WHERE peer_id=?1 AND state='removed' AND removed_reason='remote_removed'",
+        [peer_id],
+    )?;
+    if forgotten > 0 {
+        return Ok(find(conn, peer_id)?.map_or(Change::Unknown, |(peer, _)| Change::Done(peer)));
+    }
     remove_because(conn, peer_id, "removed")
 }
 

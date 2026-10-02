@@ -20,10 +20,14 @@ pub struct Decision<'a> {
 }
 
 /// Record `decision` in the caller's transaction. A rejection past the per-minute budget of
-/// its peer is dropped, so a peer that floods us cannot also flood the audit.
+/// its peer is dropped, so a peer that floods us cannot also flood the audit. Only inbound rejections spend it:
+/// our own outbound rejections are bounded by the queue and must never lock a peer out.
 pub fn record(conn: &Connection, d: &Decision) -> anyhow::Result<()> {
     let ts = now_ms();
-    if d.decision == "rejected" && !rate::may_audit_rejection(conn.path(), d.peer_fingerprint) {
+    if d.decision == "rejected"
+        && d.direction == "in"
+        && !rate::may_audit_rejection(conn.path(), d.peer_fingerprint)
+    {
         return Ok(());
     }
     conn.execute(
