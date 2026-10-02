@@ -53,7 +53,7 @@ pub fn read_key(path: &Path) -> anyhow::Result<Option<SecretKey>> {
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).with_context(|| format!("read {}", path.display())),
     };
-    restrict_to_owner(path)?;
+    require_private(path)?;
     let bytes: [u8; KEY_LEN] = bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("{} is not a {KEY_LEN}-byte key", path.display()))?;
@@ -89,6 +89,28 @@ pub(super) fn ensure_private_dir(dir: &Path) -> anyhow::Result<()> {
         .create(dir)
         .with_context(|| format!("create {}", dir.display()))?;
     restrict_to_owner(dir)
+}
+
+/// Refuse a key file other users can read: it was exposed, so repairing the mode would hide
+/// that it may already be compromised. The owner decides (and may replace the key).
+#[cfg(unix)]
+fn require_private(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::metadata(path)?.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        bail!(
+            "{} is readable by other users (mode {mode:o}); run `chmod 600 {}`, or delete it to start with a new identity and pair again",
+            path.display(),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Windows has no mode bits to read back; the key's access is set to the user alone.
+#[cfg(windows)]
+fn require_private(path: &Path) -> anyhow::Result<()> {
+    restrict_to_owner(path)
 }
 
 /// Make `path` owner-only, or fail: federation must not run on a key others can read.
@@ -171,6 +193,23 @@ mod tests {
         SecretKey::from_bytes(&[seed; 32]).public()
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_key_other_users_can_read_is_refused_with_the_fix_not_repaired() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(KEY_FILE);
+        create_key(&path).unwrap();
+        assert!(read_key(&path).unwrap().is_some());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let err = read_key(&path).unwrap_err().to_string();
+        assert!(err.contains("chmod 600"), "{err}");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
     #[test]
     fn fingerprint_is_four_groups_of_four_hex() {
         let print = fingerprint(&node(1));
@@ -246,7 +285,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn key_file_is_0600_in_a_0700_dir_and_loose_modes_are_tightened() {
+    fn dir_is_0700_and_key_0600_a_loose_dir_is_tightened_a_loose_key_refused() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         load_or_create(dir.path(), false).unwrap();
@@ -256,7 +295,13 @@ mod tests {
         assert_eq!((mode(&fed), mode(&key)), (0o700, 0o600));
         fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
         fs::set_permissions(&fed, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(load_or_create(dir.path(), true).is_err());
+        assert_eq!(
+            (mode(&fed), mode(&key)),
+            (0o700, 0o644),
+            "the key is not repaired"
+        );
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
         load_or_create(dir.path(), true).unwrap();
-        assert_eq!((mode(&fed), mode(&key)), (0o700, 0o600));
     }
 }
