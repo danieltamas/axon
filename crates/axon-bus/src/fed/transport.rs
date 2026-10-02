@@ -283,6 +283,8 @@ async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> 
                 if let Err(err) = ping(shared, node, &conn).await {
                     break Err(err);
                 }
+                shared.vouch_for(&node, &conn);
+                shared.update(&node, |h| h.connected = true);
                 *failures = 0;
             }
         }

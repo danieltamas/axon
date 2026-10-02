@@ -151,20 +151,26 @@ impl Shared {
         }
     }
 
-    /// An adopted connection ended: stop sending over it unless a newer one replaced it.
+    /// An adopted connection ended: stop sending over it unless a newer one replaced it. The
+    /// session's heartbeat puts its own connection back (`vouch_for`).
     pub(super) fn forget_connection(&self, node: &EndpointId, conn: &Connection) {
         let mut connections = locked(&self.connections);
         if connections.get(node).map(Connection::stable_id) == Some(conn.stable_id()) {
             connections.remove(node);
-            drop(connections);
-            self.update(node, |h| h.connected = false);
         }
+    }
+
+    /// A heartbeat answered on `conn`: the peer is connected, and sends have a path again if
+    /// an adopted connection that carried them has since ended.
+    pub(super) fn vouch_for(&self, node: &EndpointId, conn: &Connection) {
+        locked(&self.connections).entry(*node).or_insert_with(|| conn.clone());
     }
 
     /// A session ended: close its connection and forget it unless a newer one replaced it.
     pub(super) fn release_connection(&self, node: &EndpointId, conn: &Connection) {
         conn.close(0u32.into(), b"bye");
         self.forget_connection(node, conn);
+        self.update(node, |h| h.connected = false);
     }
 
     pub(super) fn drop_connection(&self, node: &EndpointId) {
