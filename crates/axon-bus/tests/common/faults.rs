@@ -47,7 +47,7 @@ pub fn unreadable_database() {
 pub fn second_server_cannot_own_the_same_federation_service_lock() {
     let pair = Pair::paired(Duration::from_secs(30));
     let mut second = Server::anonymous(&pair.a, true, 0);
-    second.cookie = second.login(&pair.a);
+    (second.cookie, second.token) = second.login(&pair.a);
     // A second dashboard may be available, but cannot become another transport owner.
     assert!(pair.a.root.join("data/axon/fed/service.lock").exists());
     assert_eq!(peer(&pair.a, &pair.sa, &pair.pa)["state"], "connected");

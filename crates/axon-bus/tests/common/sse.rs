@@ -13,8 +13,8 @@ pub struct Events {
 impl Events {
     pub fn open(bus: &Bus, server: &Server) -> Self {
         let mut socket = server.connect(bus.remaining().min(Duration::from_secs(7)));
-        write!(socket, "GET /api/stream HTTP/1.1\r\nHost: {}\r\nCookie: {}\r\nAccept: text/event-stream\r\n\r\n",
-            server.address, server.cookie).unwrap();
+        write!(socket, "GET /api/stream?t={} HTTP/1.1\r\nHost: {}\r\nCookie: {}\r\nAccept: text/event-stream\r\n\r\n",
+            server.token, server.address, server.cookie).unwrap();
         let mut reader = BufReader::new(socket);
         let (status, headers) = response_headers(&mut reader);
         assert_eq!(status, 200);
@@ -66,6 +66,40 @@ impl Events {
                 self.decoded.push_str(&line);
             }
             self.decoded = self.decoded.replace("\r\n", "\n");
+        }
+    }
+
+    pub fn assert_closed_within(&mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "SEC-2: revoked SSE remained open");
+            self.reader.get_ref().set_read_timeout(Some(left)).unwrap();
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::UnexpectedEof
+                    ) =>
+                {
+                    return
+                }
+                Err(error) => panic!("SEC-2: SSE did not close before deadline: {error}"),
+            }
+            if self.chunked {
+                let length = usize::from_str_radix(line.trim().split(';').next().unwrap(), 16)
+                    .expect("HTTP chunk length");
+                if length == 0 {
+                    return;
+                }
+                assert!(length <= 1024 * 1024);
+                let mut chunk = vec![0; length + 2];
+                self.reader.read_exact(&mut chunk).unwrap();
+                assert_eq!(&chunk[length..], b"\r\n");
+            }
         }
     }
 }

@@ -99,6 +99,7 @@ fn origin_failures_get_403_and_session_failures_get_401() {
     ];
     for (mut headers, expected) in cases {
         headers.push(("Content-Type", "application/json"));
+        headers.push(("x-axon-session", &server.token));
         let response = server.raw_request(&bus, "POST", "/api/msg", &headers, &body);
         assert_eq!(response.status, expected);
         if expected == 401 {
@@ -250,8 +251,8 @@ fn new_registration_reaches_the_existing_sse_stream_within_one_second() {
     let mut socket = server.connect(Duration::from_millis(900));
     write!(
         socket,
-        "GET /api/stream HTTP/1.1\r\nHost: {}\r\nCookie: {}\r\nAccept: text/event-stream\r\n\r\n",
-        server.address, server.cookie
+        "GET /api/stream?t={} HTTP/1.1\r\nHost: {}\r\nCookie: {}\r\nAccept: text/event-stream\r\n\r\n",
+        server.token, server.address, server.cookie
     )
     .unwrap();
     let mut reader = BufReader::new(socket);
@@ -489,9 +490,10 @@ fn content_off_keeps_structure_but_neither_exposes_nor_stores_assistant_text() {
 #[test]
 fn restarting_serve_preserves_the_owner_session() {
     let (bus, first) = server(false);
-    let cookie = first.cookie.clone();
+    let session = (first.cookie.clone(), first.token.clone());
     drop(first);
-    let second = Server::start(&bus, false);
-    let response = second.raw_request(&bus, "GET", "/api/snapshot", &[("Cookie", &cookie)], "");
+    let mut second = Server::start(&bus, false);
+    (second.cookie, second.token) = session;
+    let response = second.request(&bus, "GET", "/api/snapshot", &[], "");
     assert_eq!(response.status, 200);
 }

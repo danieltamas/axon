@@ -110,7 +110,8 @@ fn login_nonces_are_random_single_use_and_sessions_are_hashed_with_thirty_day_ex
     }
     let before = now_ms();
     let response = server.exchange(&bus, &first);
-    assert_eq!(response.status, 204);
+    assert_eq!(response.status, 200);
+    let token = response.session_token();
     let cookie = response.headers["set-cookie"].split(';').next().unwrap();
     let secret = cookie.strip_prefix("axon_session=").unwrap();
     assert_eq!(secret.len(), 43);
@@ -130,7 +131,13 @@ fn login_nonces_are_random_single_use_and_sessions_are_hashed_with_thirty_day_ex
     assert!(used >= created);
     denied(&server.exchange(&bus, &first), true);
     denied(&server.exchange(&bus, &"x".repeat(43)), true);
-    let authenticated = server.raw_request(&bus, "GET", "/api/settings", &[("Cookie", cookie)], "");
+    let authenticated = server.raw_request(
+        &bus,
+        "GET",
+        "/api/settings",
+        &[("Cookie", cookie), ("x-axon-session", &token)],
+        "",
+    );
     assert_eq!(authenticated.status, 200);
     let after: i64 = db(&bus)
         .query_row("SELECT last_used_at FROM dashboard_sessions", [], |r| {
@@ -139,7 +146,7 @@ fn login_nonces_are_random_single_use_and_sessions_are_hashed_with_thirty_day_ex
         .unwrap();
     assert!(after >= used);
     // The helper separately checks every required cookie attribute.
-    assert_ne!(server.login(&bus), cookie);
+    assert_ne!(server.login(&bus).0, cookie);
 }
 
 #[test]
@@ -153,7 +160,7 @@ fn nonce_is_usable_before_sixty_seconds_and_expired_after_sixty_seconds() {
         bus.remaining();
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert_eq!(server.exchange(&bus, &early).status, 204);
+    assert_eq!(server.exchange(&bus, &early).status, 200);
     while start.elapsed() < Duration::from_secs(61) {
         bus.remaining();
         std::thread::sleep(Duration::from_millis(100));
@@ -176,13 +183,13 @@ fn login_requires_loopback_host_and_matching_origin_without_consuming_nonce_on_f
         assert_eq!(response.status, 403);
         assert_eq!(count(&bus, "SELECT count(*) FROM dashboard_sessions"), 0);
     }
-    assert_eq!(server.exchange(&bus, &nonce).status, 204);
+    assert_eq!(server.exchange(&bus, &nonce).status, 200);
 }
 
 #[test]
 fn authenticated_writes_still_enforce_host_and_origin_and_dashboard_is_loopback() {
     let (bus, mut server) = anonymous(12);
-    server.cookie = server.login(&bus);
+    (server.cookie, server.token) = server.login(&bus);
     assert!(server.address.ip().is_loopback());
     for (method, path) in [
         ("PUT", "/api/settings/capture"),
@@ -203,19 +210,25 @@ fn authenticated_writes_still_enforce_host_and_origin_and_dashboard_is_loopback(
 #[test]
 fn restart_keeps_sessions_and_revoke_others_preserves_exactly_the_calling_browser() {
     let (bus, mut first) = anonymous(20);
-    first.cookie = first.login(&bus);
-    let retained = first.cookie.clone();
+    (first.cookie, first.token) = first.login(&bus);
+    let retained = (first.cookie.clone(), first.token.clone());
     let other = first.login(&bus);
     drop(first);
     let mut second = Server::anonymous(&bus, true, 0);
-    second.cookie = retained.clone();
+    (second.cookie, second.token) = retained.clone();
     assert_eq!(
         second.request(&bus, "GET", "/api/settings", &[], "").status,
         200
     );
     assert_eq!(
         second
-            .raw_request(&bus, "GET", "/api/settings", &[("Cookie", &other)], "")
+            .raw_request(
+                &bus,
+                "GET",
+                "/api/settings",
+                &[("Cookie", &other.0), ("x-axon-session", &other.1)],
+                ""
+            )
             .status,
         200
     );
@@ -229,7 +242,13 @@ fn restart_keeps_sessions_and_revoke_others_preserves_exactly_the_calling_browse
     assert_eq!(settings["storage"]["sessions"], 1);
     assert_eq!(count(&bus, "SELECT count(*) FROM dashboard_sessions"), 1);
     denied(
-        &second.raw_request(&bus, "GET", "/api/settings", &[("Cookie", &other)], ""),
+        &second.raw_request(
+            &bus,
+            "GET",
+            "/api/settings",
+            &[("Cookie", &other.0), ("x-axon-session", &other.1)],
+            "",
+        ),
         false,
     );
     assert_eq!(
@@ -241,7 +260,7 @@ fn restart_keeps_sessions_and_revoke_others_preserves_exactly_the_calling_browse
 #[test]
 fn operator_send_refuses_remote_principals_without_creating_any_message() {
     let (bus, mut server) = anonymous(12);
-    server.cookie = server.login(&bus);
+    (server.cookie, server.token) = server.login(&bus);
     bus.register("local", "claude", None);
     let before = count(&bus, "SELECT count(*) FROM messages");
     let response = request(
