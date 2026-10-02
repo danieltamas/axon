@@ -1,11 +1,13 @@
-//! One federation service per data dir: an OS advisory lock on `fed/service.lock`, dropped
-//! by the kernel if the holder dies.
+//! One federation service per data dir: an OS lock on `fed/service.lock`, dropped by the
+//! kernel if the holder dies. The holder is named in `fed/service.pid`, a separate file,
+//! because Windows locks are mandatory and the locked file cannot be read by anyone else.
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{Read, Seek, Write};
+use std::io::Write;
 use std::path::Path;
 
 pub const LOCK_FILE: &str = "service.lock";
+const PID_FILE: &str = "service.pid";
 
 /// Held for as long as the service runs.
 #[derive(Debug)]
@@ -24,17 +26,15 @@ pub fn acquire(fed_dir: &Path) -> std::io::Result<Acquire> {
     // cannot be used to confuse the owner.
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(fed_dir.join(LOCK_FILE))?;
+    let file = options.open(fed_dir.join(LOCK_FILE))?;
     match file.try_lock() {
         Ok(()) => {
-            file.set_len(0)?;
-            file.rewind()?;
-            write!(file, "pid {}", std::process::id())?;
+            let mut pid = options.truncate(true).open(fed_dir.join(PID_FILE))?;
+            write!(pid, "pid {}", std::process::id())?;
             Ok(Acquire::Held(ServiceLock(file)))
         }
         Err(TryLockError::WouldBlock) => {
-            let mut holder = String::new();
-            file.read_to_string(&mut holder)?;
+            let holder = std::fs::read_to_string(fed_dir.join(PID_FILE)).unwrap_or_default();
             Ok(Acquire::HeldBy(holder))
         }
         Err(TryLockError::Error(err)) => Err(err),
