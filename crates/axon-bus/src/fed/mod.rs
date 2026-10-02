@@ -17,6 +17,7 @@ pub mod pairing;
 mod rate;
 mod receive;
 pub mod remote;
+mod retention;
 pub mod service;
 pub mod shares;
 mod stats;
@@ -112,6 +113,7 @@ pub fn install(handle: &service::Handle, db: &Path) {
     discovery::install(handle, db);
     receive::install(handle, db);
     outbox::install(handle, db);
+    retention::install(handle, db);
 }
 
 /// 16 random bytes as 32 hex characters: the id of an invite or a peer row.

@@ -126,12 +126,14 @@ pub async fn push(handle: Handle, db: PathBuf, share_id: String, update: bool) {
     }
 }
 
-/// The shares of `peer_id` the peer may need to hear about again.
+/// The shares of `peer_id` the peer may need to hear about again. A removed share is not:
+/// its removal was pushed when it happened, and resending tombstones on every connect would
+/// let a peer that cycles offers multiply our traffic.
 fn unsettled(db: &Path, peer_id: &str) -> anyhow::Result<Vec<String>> {
     let conn = store::open(db)?;
     let mut stmt = conn.prepare(
         "SELECT share_id FROM peer_shares WHERE peer_id=?1
-         AND state IN ('offered_out','active','removed')",
+         AND state IN ('offered_out','active')",
     )?;
     let rows = stmt.query_map([peer_id], |r| r.get(0))?;
     Ok(rows.collect::<Result<_, _>>()?)

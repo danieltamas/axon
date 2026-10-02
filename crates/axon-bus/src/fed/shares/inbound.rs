@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{close, get, label_ok, Share, MAX_PER_PEER};
+use super::{close, get, label_ok, Share, MAX_PER_PEER, MAX_TOMBSTONES};
 use crate::store;
 
 #[derive(Deserialize)]
@@ -150,12 +150,13 @@ fn offered(tx: &Connection, peer_id: &str, offer: &Offer) -> anyhow::Result<Valu
             error("conflict")
         });
     }
-    let held: i64 = tx.query_row(
-        "SELECT count(*) FROM peer_shares WHERE peer_id=?1 AND state<>'removed'",
+    let (held, tombstones): (i64, i64) = tx.query_row(
+        "SELECT coalesce(sum(state<>'removed'),0), coalesce(sum(state='removed'),0)
+         FROM peer_shares WHERE peer_id=?1",
         [peer_id],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    if held >= MAX_PER_PEER {
+    if held >= MAX_PER_PEER || tombstones >= MAX_TOMBSTONES {
         return Ok(error("too_many_shares"));
     }
     tx.execute(

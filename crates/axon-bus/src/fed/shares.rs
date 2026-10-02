@@ -21,6 +21,10 @@ pub use sync::{install, push};
 
 /// Most shares (any state) one peer may hold with us; bounds what a peer can make us store.
 pub const MAX_PER_PEER: i64 = 50;
+/// Most removed shares (tombstones) of one peer kept, and so the most it can leave behind by
+/// offering and removing; the retention sweep trims them to `TOMBSTONES_KEPT`.
+pub const MAX_TOMBSTONES: i64 = 50;
+pub const TOMBSTONES_KEPT: i64 = 25;
 
 #[derive(Clone, Debug)]
 pub struct Share {

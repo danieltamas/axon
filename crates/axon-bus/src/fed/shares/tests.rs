@@ -220,3 +220,17 @@ fn membership_is_resolved_from_the_cwd_each_time() {
         "a vanished repo holds no one"
     );
 }
+
+#[test]
+fn removed_shares_count_toward_the_offer_quota() {
+    let mut fx = fixture();
+    for n in 0..MAX_TOMBSTONES {
+        let share = format!("{n:032}");
+        share_row(&fx.conn, &share, "p1", "removed", 2);
+    }
+    let offer = json!({"type": "share_offer", "v": 1, "generation": 7, "share_id": id('e'),
+                       "label": "project", "revision": 1, "inbound": true, "outbound": false,
+                       "root_commit": null});
+    let reply = apply_frame(&mut fx.conn, &node(1), offer).unwrap();
+    assert_eq!(reply["reason"], "too_many_shares");
+}
