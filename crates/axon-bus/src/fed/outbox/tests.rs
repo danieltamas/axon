@@ -36,6 +36,28 @@ fn queued() -> (Fixture, Due) {
     (fx, due)
 }
 
+#[test]
+fn a_batch_holds_at_most_a_few_rows_of_one_peer_and_none_of_a_backed_off_peer() {
+    let (fx, row) = queued();
+    for n in 2..=30 {
+        fx.conn
+            .execute(
+                "INSERT INTO fed_outbox (message_id,peer_id,generation,share_id,revision,from_agent,
+                   envelope_json,bytes,created_at,expires_at,state)
+                 VALUES (?1,'p1',7,?2,2,'ann','{\"revision\":2}',2,?3,?4,'queued')",
+                params![format!("m{n}"), SHARE, n, now_ms() + 60_000],
+            )
+            .unwrap();
+    }
+    let mut conn = store::open(&db(&fx)).unwrap();
+    assert_eq!(
+        due(&mut conn, now_ms(), &[]).unwrap().len(),
+        PER_PEER as usize
+    );
+    let skip = [row.node.to_string()];
+    assert!(due(&mut conn, now_ms(), &skip).unwrap().is_empty());
+}
+
 fn db(fx: &Fixture) -> std::path::PathBuf {
     fx.dir.path().join("axon.db")
 }

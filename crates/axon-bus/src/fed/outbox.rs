@@ -2,8 +2,9 @@
 //! row to its peer while the connection is up, retries transient failures with backoff under
 //! the original `expires_at`, and ends a row on the peer's answer: `accepted` or `rejected`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::EndpointId;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -18,6 +19,8 @@ use crate::store;
 const TICK: Duration = Duration::from_millis(500);
 /// Rows sent per tick.
 const BATCH: i64 = 20;
+/// Rows of one peer in a batch, so a peer with a deep backlog leaves room for the others.
+const PER_PEER: i64 = 4;
 const MAX_BACKOFF_MS: i64 = 10_000;
 
 pub fn install(handle: &Handle, db: &Path) {
@@ -105,18 +108,28 @@ fn housekeeping(conn: &mut Connection, now: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The rows ready to send, oldest first.
-fn due(conn: &mut Connection, now: i64) -> anyhow::Result<Vec<Due>> {
+/// How long a failed send keeps the message, and its peer, out of the next batches.
+fn retry_wait_ms(attempts: i64) -> i64 {
+    (1000i64 << attempts.clamp(0, 4)).min(MAX_BACKOFF_MS)
+}
+
+/// The rows ready to send, oldest first, at most `PER_PEER` per peer and none for the peers
+/// in `backed_off` (node ids), whose last send failed.
+fn due(conn: &mut Connection, now: i64, backed_off: &[String]) -> anyhow::Result<Vec<Due>> {
     housekeeping(conn, now)?;
     let mut stmt = conn.prepare(
-        "SELECT o.message_id, o.peer_id, o.share_id, o.from_agent, p.node_id, o.generation,
-                o.envelope_json, o.attempts
-         FROM fed_outbox o JOIN peers p ON p.peer_id=o.peer_id
-         WHERE o.state='queued' AND p.state='active' AND p.remote_paused=0
-           AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?1)
-         ORDER BY o.created_at, o.rowid LIMIT ?2",
+        "SELECT message_id, peer_id, share_id, from_agent, node_id, generation, envelope_json, attempts
+         FROM (SELECT o.message_id, o.peer_id, o.share_id, o.from_agent, p.node_id, o.generation,
+                      o.envelope_json, o.attempts, o.created_at, o.rowid AS seq,
+                      ROW_NUMBER() OVER (PARTITION BY o.peer_id ORDER BY o.created_at, o.rowid) AS n
+               FROM fed_outbox o JOIN peers p ON p.peer_id=o.peer_id
+               WHERE o.state='queued' AND p.state='active' AND p.remote_paused=0
+                 AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?1)
+                 AND p.node_id NOT IN (SELECT value FROM json_each(?4)))
+         WHERE n <= ?3 ORDER BY created_at, seq LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![now, BATCH], |r| {
+    let skip = serde_json::to_string(backed_off)?;
+    let rows = stmt.query_map(params![now, BATCH, PER_PEER, skip], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
@@ -324,7 +337,7 @@ fn settle(db: &Path, row: &Due, result: &Verdict) -> anyhow::Result<()> {
             }
         }
         Verdict::Retry => {
-            let wait = (1000i64 << row.attempts.clamp(0, 4)).min(MAX_BACKOFF_MS);
+            let wait = retry_wait_ms(row.attempts);
             tx.execute(
                 "UPDATE fed_outbox SET attempts=attempts+1, next_attempt_at=?2, last_error='unreachable'
                  WHERE message_id=?1 AND state='queued'",
@@ -337,20 +350,23 @@ fn settle(db: &Path, row: &Due, result: &Verdict) -> anyhow::Result<()> {
 }
 
 async fn run(handle: Handle, db: PathBuf) {
+    // Peers whose last send failed, and until when they are left alone.
+    let mut backed_off: HashMap<EndpointId, Instant> = HashMap::new();
     while !handle.stopped() {
         sleep(TICK).await;
+        backed_off.retain(|_, until| *until > Instant::now());
         let ready = tokio::task::spawn_blocking({
             let db = db.clone();
-            move || due(&mut store::open(&db)?, now_ms())
+            let skip: Vec<String> = backed_off.keys().map(ToString::to_string).collect();
+            move || due(&mut store::open(&db)?, now_ms(), &skip)
         })
         .await;
         let Ok(Ok(ready)) = ready else {
             continue;
         };
-        let mut failed = std::collections::HashSet::new();
         for mut row in ready {
-            // One unreachable peer costs a request timeout per tick, not one per queued row.
-            if failed.contains(&row.node) {
+            // One unreachable peer costs a request timeout per back-off, not one per row.
+            if backed_off.contains_key(&row.node) {
                 continue;
             }
             // Shared with nothing but a revocation: held from the re-check to the write.
@@ -367,7 +383,8 @@ async fn run(handle: Handle, db: PathBuf) {
                 .request_then(&row.node, &row.frame, move || drop(transmitting))
                 .await;
             if answer.is_err() {
-                failed.insert(row.node);
+                let wait = Duration::from_millis(retry_wait_ms(row.attempts) as u64);
+                backed_off.insert(row.node, Instant::now() + wait);
             }
             let result = judge(&answer);
             let db = db.clone();
