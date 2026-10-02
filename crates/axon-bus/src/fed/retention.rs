@@ -67,6 +67,13 @@ fn sweep_in(conn: &Connection, now: i64) -> anyhow::Result<()> {
         "DELETE FROM fed_outbox WHERE state<>'queued' AND created_at < ?1",
         [now - MESSAGES_KEPT_MS],
     )?;
+    // An undelivered message is reachable only through its inbox record (a peer's removal
+    // finds it there), so it goes first, never the record alone.
+    conn.execute(
+        "DELETE FROM messages WHERE delivered_at IS NULL AND id IN
+           (SELECT local_message_id FROM fed_inbox WHERE accepted_at < ?1)",
+        [now - MESSAGES_KEPT_MS],
+    )?;
     conn.execute(
         "DELETE FROM fed_inbox WHERE accepted_at < ?1",
         [now - MESSAGES_KEPT_MS],

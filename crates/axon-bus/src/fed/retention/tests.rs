@@ -84,3 +84,38 @@ fn only_the_newest_tombstones_of_each_peer_stay() {
         "the newest survive"
     );
 }
+
+#[test]
+fn an_old_undelivered_message_goes_with_its_inbox_record_never_without_it() {
+    let fx = fixture();
+    let (conn, now) = (&fx.conn, 400 * DAY_MS);
+    conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    conn.execute_batch(&format!(
+        "INSERT INTO messages (id,thread,seq,from_id,to_id,kind,body,delivered_at)
+           VALUES ('old-pending','t',1,'peer:x','a','note','b',NULL),
+                  ('old-read','t',2,'peer:x','a','note','b',1),
+                  ('new-pending','t',3,'peer:x','a','note','b',NULL);
+         INSERT INTO fed_inbox (peer_id,generation,message_id,content_hash,local_message_id,accepted_at,expires_at)
+           VALUES ('p1',7,'m1','h','old-pending',1,2), ('p1',7,'m2','h','old-read',1,2),
+                  ('p1',7,'m3','h','new-pending',{now},{now});"
+    ))
+    .unwrap();
+    sweep(conn, now).unwrap();
+    let pending = |sql: &str| count(conn, sql);
+    assert_eq!(
+        pending("SELECT count(*) FROM messages WHERE id='old-pending'"),
+        0
+    );
+    assert_eq!(
+        pending("SELECT count(*) FROM messages WHERE id='old-read'"),
+        1
+    );
+    assert_eq!(
+        pending(
+            "SELECT count(*) FROM messages m WHERE delivered_at IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM fed_inbox i WHERE i.local_message_id=m.id)"
+        ),
+        0,
+        "no pending message is left without its provenance"
+    );
+}
