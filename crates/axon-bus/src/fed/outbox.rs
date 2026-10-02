@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use iroh::EndpointId;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 
@@ -24,8 +25,10 @@ const BATCH: i64 = 20;
 const PER_PEER: i64 = 4;
 const MAX_BACKOFF_MS: i64 = 10_000;
 
+/// Start the outbox. The handle's `shutdown` joins it, so a replacement service never runs
+/// beside the old outbox.
 pub fn install(handle: &Handle, db: &Path) {
-    tokio::spawn(run(handle.clone(), db.to_owned()));
+    handle.attach_outbox(tokio::spawn(run(handle.clone(), db.to_owned())));
 }
 
 struct Due {
@@ -75,15 +78,20 @@ fn tell_sender(conn: &Connection, sender: &str, text: &str) {
 
 /// End the rows that can no longer be sent: expired ones, and those whose peer was removed or
 /// paired again (a new generation is a new relationship). Expiry, audit, sender notice and
-/// cancellation commit together or not at all.
-fn housekeeping(conn: &mut Connection, now: i64) -> anyhow::Result<()> {
+/// cancellation commit together or not at all. A row of a peer in `sending` (node ids) is not
+/// expired: its answer may be on the way, and an acceptance must not lose to the clock.
+fn housekeeping(conn: &mut Connection, now: i64, sending: &[String]) -> anyhow::Result<()> {
     let conn = store::write_tx(conn)?;
     let mut stmt = conn.prepare(
         "SELECT o.message_id, o.from_agent, o.generation, p.node_id FROM fed_outbox o
-         JOIN peers p ON p.peer_id=o.peer_id WHERE o.state='queued' AND o.expires_at <= ?1",
+         JOIN peers p ON p.peer_id=o.peer_id WHERE o.state='queued' AND o.expires_at <= ?1
+           AND p.node_id NOT IN (SELECT value FROM json_each(?2))",
     )?;
+    let skip = serde_json::to_string(sending)?;
     let lapsed: Vec<(String, String, i64, String)> = stmt
-        .query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params![now, skip], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .collect::<Result<_, _>>()?;
     drop(stmt);
     for (message_id, sender, generation, node) in lapsed {
@@ -114,10 +122,11 @@ fn retry_wait_ms(attempts: i64) -> i64 {
     (1000i64 << attempts.clamp(0, 4)).min(MAX_BACKOFF_MS)
 }
 
-/// The rows ready to send, oldest first, at most `PER_PEER` per peer and none for the peers
-/// in `backed_off` (node ids), whose last send failed.
-fn due(conn: &mut Connection, now: i64, backed_off: &[String]) -> anyhow::Result<Vec<Due>> {
-    housekeeping(conn, now)?;
+/// The rows ready to send, at most `PER_PEER` per peer and none for the peers in `skipped`
+/// (node ids: failed last send, or a send still in flight). Each peer's oldest row comes before
+/// any peer's second, so a full batch spreads across peers instead of favouring the busiest.
+fn due(conn: &mut Connection, now: i64, skipped: &[String]) -> anyhow::Result<Vec<Due>> {
+    housekeeping(conn, now, skipped)?;
     let mut stmt = conn.prepare(
         "SELECT message_id, peer_id, share_id, from_agent, node_id, generation, envelope_json, attempts
          FROM (SELECT o.message_id, o.peer_id, o.share_id, o.from_agent, p.node_id, o.generation,
@@ -127,9 +136,9 @@ fn due(conn: &mut Connection, now: i64, backed_off: &[String]) -> anyhow::Result
                WHERE o.state='queued' AND p.state='active' AND p.remote_paused=0
                  AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?1)
                  AND p.node_id NOT IN (SELECT value FROM json_each(?4)))
-         WHERE n <= ?3 ORDER BY created_at, seq LIMIT ?2",
+         WHERE n <= ?3 ORDER BY n, created_at, seq LIMIT ?2",
     )?;
-    let skip = serde_json::to_string(backed_off)?;
+    let skip = serde_json::to_string(skipped)?;
     let rows = stmt.query_map(params![now, BATCH, PER_PEER, skip], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -352,8 +361,18 @@ fn settle(db: &Path, row: &Due, result: &Verdict) -> anyhow::Result<()> {
 
 /// Send one peer's rows in order. Stops at the first transport failure and returns when the
 /// peer may be tried again; the remaining rows stay queued.
-async fn send_to_peer(handle: Handle, db: PathBuf, rows: Vec<Due>) -> Option<Instant> {
+/// Database work is never abandoned mid-way; only the wait for the peer's answer ends when
+/// `stop` fires, so a joined task leaves no blocking job behind.
+async fn send_to_peer(
+    handle: Handle,
+    db: PathBuf,
+    rows: Vec<Due>,
+    mut stop: watch::Receiver<bool>,
+) -> Option<Instant> {
     for mut row in rows {
+        if *stop.borrow() {
+            return None;
+        }
         // Shared with nothing but a revocation: held from the re-check to the write, not
         // through the peer's answer, so a stalled peer never holds it.
         let transmitting = handle.transmit_gate().read_owned().await;
@@ -365,9 +384,10 @@ async fn send_to_peer(handle: Handle, db: PathBuf, rows: Vec<Due>) -> Option<Ins
         let Ok(Ok((true, row))) = cleared else {
             continue;
         };
-        let answer = handle
-            .request_then(&row.node, &row.frame, move || drop(transmitting))
-            .await;
+        let answer = tokio::select! {
+            answer = handle.request_then(&row.node, &row.frame, move || drop(transmitting)) => answer,
+            _ = stop.wait_for(|stopped| *stopped) => return None,
+        };
         let result = judge(&answer);
         let failed = answer.is_err();
         let wait = Duration::from_millis(retry_wait_ms(row.attempts) as u64);
@@ -386,6 +406,7 @@ async fn run(handle: Handle, db: PathBuf) {
     // One task per peer with rows in flight: peers never wait on each other's answers.
     let mut sending: JoinSet<(EndpointId, Option<Instant>)> = JoinSet::new();
     let mut busy: HashSet<EndpointId> = HashSet::new();
+    let (stop, stopped) = watch::channel(false);
     while !handle.stopped() {
         sleep(TICK).await;
         while let Some(finished) = sending.try_join_next() {
@@ -420,10 +441,12 @@ async fn run(handle: Handle, db: PathBuf) {
         for (node, rows) in by_peer {
             busy.insert(node);
             let (handle, db) = (handle.clone(), db.clone());
-            sending.spawn(async move { (node, send_to_peer(handle, db, rows).await) });
+            let stopped = stopped.clone();
+            sending.spawn(async move { (node, send_to_peer(handle, db, rows, stopped).await) });
         }
     }
-    sending.shutdown().await;
+    let _ = stop.send(true);
+    while sending.join_next().await.is_some() {}
 }
 
 #[cfg(test)]

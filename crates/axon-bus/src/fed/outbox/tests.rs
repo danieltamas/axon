@@ -163,3 +163,19 @@ fn a_rejection_by_the_peer_tells_the_sender() {
         .unwrap();
     assert!(told.contains("stale_revision"), "{told}");
 }
+
+#[test]
+fn a_row_of_a_peer_with_a_send_in_flight_is_not_expired_until_that_send_settles() {
+    let (fx, row) = queued();
+    fx.conn
+        .execute(
+            "UPDATE fed_outbox SET expires_at=1 WHERE message_id='m1'",
+            [],
+        )
+        .unwrap();
+    let mut conn = store::open(&db(&fx)).unwrap();
+    due(&mut conn, now_ms(), &[row.node.to_string()]).unwrap();
+    assert_eq!(state(&fx).0, "queued");
+    due(&mut conn, now_ms(), &[]).unwrap();
+    assert_eq!(state(&fx).0, "expired");
+}

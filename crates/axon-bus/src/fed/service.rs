@@ -209,6 +209,7 @@ pub struct Handle {
 struct Stop {
     router: Router,
     manager: Mutex<Option<JoinHandle<()>>>,
+    outbox: Mutex<Option<JoinHandle<()>>>,
     lock: Mutex<Option<ServiceLock>>,
 }
 
@@ -312,12 +313,23 @@ impl Handle {
         self.shared.add_addr(addr);
     }
 
+    /// Hand over the outbox task so `shutdown` can join it.
+    pub(super) fn attach_outbox(&self, task: JoinHandle<()>) {
+        *locked(&self.stop.outbox) = Some(task);
+    }
+
     pub async fn shutdown(&self) {
         let manager = locked(&self.stop.manager).take();
         if let Some(manager) = manager {
             // The manager aborts and joins its dialers before it returns, so none outlives the router.
             self.shared.stop_manager.notify_one();
             let _ = manager.await;
+        }
+        // The outbox sees `stopped()` within a tick, ends its sends and joins its database
+        // work; a replacement service starts only after that.
+        let outbox = locked(&self.stop.outbox).take();
+        if let Some(outbox) = outbox {
+            let _ = outbox.await;
         }
         let _ = self.stop.router.shutdown().await;
         locked(&self.stop.lock).take();
@@ -433,6 +445,7 @@ async fn try_start(
         stop: Arc::new(Stop {
             router,
             manager: Mutex::new(Some(manager)),
+            outbox: Mutex::new(None),
             lock: Mutex::new(Some(lock)),
         }),
         relay_setting: relay_setting.into(),

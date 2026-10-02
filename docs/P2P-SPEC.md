@@ -652,14 +652,17 @@ reports are in `docs/audits/`.
   - BUG-12: message retry delays are 1, 2, 4, 8 and then 10 seconds, without jitter. A transport error or timeout
     also excludes that peer from the remaining batch and subsequent batches until its in-memory backoff expires.
     Retryable protocol replies delay the individual row but do not activate this peer exclusion.
-  - BUG-13 (R2-4): batches contain at most twenty rows and four per peer, ordered by age. Each peer with due rows
-    is sent to by its own task: rows of one peer go out in order, a peer with a task still running is left out of
-    later batches, and peers never wait on each other's answers. The transmit gate is held shared only from a
-    row's clearance until its frame is written, not through the peer's answer, so a stalled peer holds neither
-    the gate nor the loop. A stalled peer delays only its own rows by up to the ten-second request timeout, then
-    is backed off. A healthy peer's row is therefore picked up on the next 500 ms tick and sent after its
-    clearance; this meets the five-second healthy-peer bound by design, except while a local revocation holds the
-    gate exclusively or database clearance is slow, neither of which has an enforced deadline.
+  - BUG-13 (R2-4): batches contain at most twenty rows and four per peer, taken round-robin: each peer's
+    oldest row comes before any peer's second, so up to twenty peers each get a row in every batch. Each peer
+    with due rows is sent to by its own task: rows of one peer go out in order, a peer with a task still running
+    is left out of later batches (and its rows are not expired meanwhile), and peers never wait on each other's
+    answers. The transmit gate is held shared only from a row's clearance until its frame is written, not
+    through the peer's answer, so a stalled peer holds neither the gate nor the loop. A stalled peer delays only
+    its own rows by up to the ten-second request timeout, then is backed off. A healthy peer's row is therefore
+    picked up on the next 500 ms tick and sent after its clearance; this meets the five-second healthy-peer
+    bound by design for up to twenty peers, except while a local revocation holds the gate exclusively or
+    database clearance is slow, neither of which has an enforced deadline. Service shutdown stops the outbox's
+    sends, joins its database work and returns only then, so a replacement service never runs beside it.
   - SEC-8: the pair code is the owner's attestation that the digits matched, not something the
     server can verify; the manual says so.
   - SEC-9: the `peer:` partition keeps case-insensitive `LIKE` in the FK-replacement triggers and
