@@ -170,17 +170,23 @@ pub async fn pair_request(
         .await
         .map_err(|_| anyhow!("connect timed out"))?
         .context("connect")?;
-    let reply = request(&conn, frame).await;
+    let reply = request(&conn, frame, || {}).await;
     conn.close(VarInt::from_u32(0), b"done");
     reply
 }
 
 /// One request and its single response on a fresh stream of `conn`.
-pub async fn request(conn: &Connection, frame: &Value) -> anyhow::Result<Value> {
+/// `written` runs once the request is written and finished, before the response is read.
+pub async fn request(
+    conn: &Connection,
+    frame: &Value,
+    written: impl FnOnce(),
+) -> anyhow::Result<Value> {
     let exchange = async {
         let (mut send, mut recv) = conn.open_bi().await.context("open a stream")?;
         write_frame(&mut send, frame).await?;
         send.finish().context("finish the request")?;
+        written();
         Ok(read_frame(&mut recv).await?)
     };
     timeout(REQUEST_TIMEOUT, exchange)
@@ -259,6 +265,7 @@ async fn ping(shared: &Arc<Shared>, node: EndpointId, conn: &Connection) -> anyh
     let reply = request(
         conn,
         &json!({"type": "ping", "v": 1, "generation": generation, "t": now_ms()}),
+        || {},
     )
     .await?;
     let rtt_ms = sent_at.elapsed().as_secs_f64() * 1000.0;

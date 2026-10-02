@@ -90,6 +90,10 @@ pub struct Shared {
     pair_handler: RwLock<Option<PairHandler>>,
     changed: watch::Sender<u64>,
     reload: Notify,
+    /// Held shared by the outbox from its authorization re-check until the frame is written,
+    /// and exclusively by a local commit that withdraws authority (pause, remove, unshare,
+    /// flags): once that commit returns, nothing authorised before it is still to be sent.
+    transmit_gate: Arc<tokio::sync::RwLock<()>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -261,7 +265,26 @@ impl Handle {
         let Some(conn) = conn else {
             bail!("peer is not connected");
         };
-        transport::request(&conn, frame).await
+        transport::request(&conn, frame, || {}).await
+    }
+
+    /// `request`, calling `written` once the frame is on the stream (before the answer).
+    pub async fn request_then(
+        &self,
+        node: &EndpointId,
+        frame: &Value,
+        written: impl FnOnce(),
+    ) -> anyhow::Result<Value> {
+        let conn = locked(&self.shared.connections).get(node).cloned();
+        let Some(conn) = conn else {
+            bail!("peer is not connected");
+        };
+        transport::request(&conn, frame, written).await
+    }
+
+    /// See `Shared::transmit_gate`.
+    pub fn transmit_gate(&self) -> Arc<tokio::sync::RwLock<()>> {
+        self.shared.transmit_gate.clone()
     }
 
     /// Register the handler of `axon/pair/1`; without one every pairing connection is closed.
@@ -383,6 +406,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         pair_handler: RwLock::default(),
         changed,
         reload: Notify::new(),
+        transmit_gate: Arc::default(),
     });
     let router = Router::builder(endpoint)
         .accept(PAIR_ALPN, PairProtocol::new(shared.clone()))

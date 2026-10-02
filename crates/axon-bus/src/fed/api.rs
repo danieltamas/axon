@@ -132,6 +132,24 @@ type Done = Result<StatusCode, Fail>;
 
 /// SQLite work blocks, so it runs off the async threads. Detail goes to stderr, never to the
 /// caller: an error here can carry paths.
+/// `blocking` for a commit that withdraws authority: it waits out frames the outbox already
+/// cleared and keeps it from clearing more until the commit is done (`Shared::transmit_gate`).
+async fn revoking<T: Send + 'static>(
+    api: &FedApi,
+    work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> Result<T, Fail> {
+    let gate = api
+        .federation
+        .handle()
+        .await
+        .map(|handle| handle.transmit_gate());
+    let _exclusive = match gate {
+        Some(gate) => Some(gate.write_owned().await),
+        None => None,
+    };
+    blocking(work).await
+}
+
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, Fail> {

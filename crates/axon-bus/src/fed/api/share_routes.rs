@@ -12,7 +12,7 @@ use rusqlite::Transaction;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use super::{blocking, Answer, Fail, FedApi};
+use super::{revoking, Answer, Fail, FedApi};
 use crate::fed::shares::{self, Share};
 use crate::store;
 
@@ -48,7 +48,7 @@ async fn mutate(
     work: impl FnOnce(&Transaction) -> Result<Share, shares::Fail> + Send + 'static,
 ) -> Answer {
     let db = api.db.clone();
-    let share = blocking(move || {
+    let share = revoking(api, move || {
         let mut conn = store::open(&db)?;
         let tx = store::write_tx(&mut conn)?;
         let changed = work(&tx);

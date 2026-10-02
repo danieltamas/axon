@@ -14,7 +14,7 @@ use iroh::EndpointId;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{blocking, Done, Fail, FedApi};
+use super::{blocking, revoking, Done, Fail, FedApi};
 use crate::fed::lifecycle::{self, Change, Peer};
 use crate::fed::pairing;
 use crate::fed::service::Handle;
@@ -52,7 +52,10 @@ async fn tell_then_reload(handle: Handle, peer: Peer, what: &'static str) {
 
 async fn pause(State(api): State<Arc<FedApi>>, Path(peer_id): Path<String>) -> Done {
     let db = api.db.clone();
-    let change = blocking(move || lifecycle::pause(&mut store::open(&db)?, &peer_id)).await?;
+    let change = revoking(&api, move || {
+        lifecycle::pause(&mut store::open(&db)?, &peer_id)
+    })
+    .await?;
     let peer = applied(change, Fail::PeerNotActive)?;
     if let Some(handle) = api.federation.handle().await {
         tokio::spawn(tell_then_reload(handle, peer, "paused"));
@@ -77,7 +80,10 @@ async fn resume(State(api): State<Arc<FedApi>>, Path(peer_id): Path<String>) -> 
 
 async fn remove(State(api): State<Arc<FedApi>>, Path(peer_id): Path<String>) -> Done {
     let db = api.db.clone();
-    let change = blocking(move || lifecycle::remove(&mut store::open(&db)?, &peer_id)).await?;
+    let change = revoking(&api, move || {
+        lifecycle::remove(&mut store::open(&db)?, &peer_id)
+    })
+    .await?;
     let peer = applied(change, Fail::WrongState)?;
     if let Some(handle) = api.federation.handle().await {
         tokio::spawn(tell_then_reload(handle, peer, "removed"));

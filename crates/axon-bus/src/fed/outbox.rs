@@ -348,6 +348,8 @@ async fn run(handle: Handle, db: PathBuf) {
             continue;
         };
         for mut row in ready {
+            // Shared with nothing but a revocation: held from the re-check to the write.
+            let transmitting = handle.transmit_gate().read_owned().await;
             let cleared = tokio::task::spawn_blocking({
                 let db = db.clone();
                 move || clear_to_send(&db, &mut row).map(|ok| (ok, row))
@@ -356,7 +358,9 @@ async fn run(handle: Handle, db: PathBuf) {
             let Ok(Ok((true, row))) = cleared else {
                 continue;
             };
-            let answer = handle.request(&row.node, &row.frame).await;
+            let answer = handle
+                .request_then(&row.node, &row.frame, move || drop(transmitting))
+                .await;
             let result = judge(&answer);
             let db = db.clone();
             let _ = tokio::task::spawn_blocking(move || settle(&db, &row, &result)).await;

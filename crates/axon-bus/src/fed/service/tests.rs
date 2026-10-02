@@ -112,6 +112,26 @@ async fn two_nodes_on_loopback_ping_and_report_health() {
 }
 
 #[tokio::test]
+async fn a_revocation_waits_for_the_write_of_a_frame_already_cleared() {
+    let (_a, ha, b, hb) = connected_pair().await;
+    let transmitting = ha.transmit_gate().read_owned().await;
+    let gate = ha.transmit_gate();
+    let revoked = tokio::spawn(async move { drop(gate.write_owned().await) });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!revoked.is_finished(), "revoked while a frame was cleared");
+    let frame = json!({"type": "ping", "v": 1, "generation": 1, "t": 0});
+    ha.request_then(&b.id(), &frame, move || drop(transmitting))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), revoked)
+        .await
+        .expect("the revocation proceeds once the frame is written")
+        .unwrap();
+    ha.shutdown().await;
+    hb.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_peer_that_paused_us_is_not_redialed_and_is_not_a_fault() {
     let (a, ha, b, hb) = connected_pair().await;
     a.conn()
@@ -194,6 +214,7 @@ async fn a_node_that_is_not_a_peer_is_closed_before_it_can_send() {
             transport::request(
                 &conn,
                 &json!({"type": "ping", "v": 1, "generation": 1, "t": 0}),
+                || {},
             )
             .await
         }
