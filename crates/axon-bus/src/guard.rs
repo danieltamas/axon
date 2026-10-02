@@ -14,8 +14,11 @@ use serde_json::json;
 
 use crate::{session, store};
 
-/// How soon a signed-out session loses its open stream.
+/// How often an open stream re-reads its session, and how long one read may take. A read
+/// that outlasts the deadline closes the stream, so revocation ends it within `RECHECK +
+/// RECHECK_DEADLINE` however busy the database is.
 const RECHECK: Duration = Duration::from_millis(500);
+const RECHECK_DEADLINE: Duration = Duration::from_millis(400);
 
 /// The session a request claims: the cookie's secret and the token that must go with it.
 #[derive(Clone)]
@@ -55,11 +58,26 @@ pub async fn signed_in(db: &Path, credentials: Option<Credentials>) -> bool {
     .is_ok_and(|checked| checked.unwrap_or(false))
 }
 
-/// Completes once the session is no longer signed in. `take_until` this on a stream.
+/// Completes once the session is no longer signed in, or a read of it timed out.
+/// `take_until` this on a stream. Reads only: the stream never refreshes `last_used_at`.
 pub async fn signed_out(db: PathBuf, credentials: Option<Credentials>) {
-    while signed_in(&db, credentials.clone()).await {
+    while still_signed_in(&db, credentials.clone()).await {
         tokio::time::sleep(RECHECK).await;
     }
+}
+
+async fn still_signed_in(db: &Path, credentials: Option<Credentials>) -> bool {
+    let Some(credentials) = credentials else {
+        return false;
+    };
+    let db = db.to_owned();
+    let read = tokio::task::spawn_blocking(move || {
+        session::live(&store::open(&db)?, &credentials.secret, &credentials.token)
+    });
+    matches!(
+        tokio::time::timeout(RECHECK_DEADLINE, read).await,
+        Ok(Ok(Ok(Some(_))))
+    )
 }
 
 /// Puts the owner session in front of every route of `routes` (the host binary's own API,
