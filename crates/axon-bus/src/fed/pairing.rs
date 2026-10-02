@@ -88,7 +88,8 @@ pub(super) fn insert_pending(
     generation: i64,
 ) -> anyhow::Result<usize> {
     // OR IGNORE: the live-node index refuses a second pairing of the same node, which is
-    // how two simultaneous retries of one join collapse into one row.
+    // how two simultaneous retries of one join collapse into one row. The live-label index
+    // refuses a label in use too; the caller finds out by not seeing its row.
     Ok(conn.execute(
         "INSERT OR IGNORE INTO peers (peer_id, node_id, label, generation, state, paired_at)
          VALUES (?1, ?2, ?3, ?4, 'pending_confirm', ?5)",

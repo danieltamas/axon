@@ -71,8 +71,16 @@ fn record_joined(
     let tx = store::write_tx(&mut conn)?;
     insert_pending(&tx, node, label, generation)?;
     let row = pending_by_node(&tx, node)?;
+    let label_taken = row.is_none()
+        && all_peers(&tx)?
+            .iter()
+            .any(|p| p.label == label && p.state != "removed");
     tx.commit()?;
-    row.ok_or(JoinError::Unavailable)
+    match row {
+        Some(row) => Ok(row),
+        None if label_taken => Err(JoinError::LabelTaken),
+        None => Err(JoinError::Unavailable),
+    }
 }
 
 /// Dial the inviter, prove the secret, and record the pending pairing. iroh authenticates
@@ -124,4 +132,25 @@ pub async fn join(
             .await??;
     handle.add_addr(invite.addr);
     Ok(peer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fed::testkit::{fixture, node};
+
+    #[test]
+    fn a_second_pairing_under_a_live_label_fails_as_label_taken() {
+        let fx = fixture();
+        let db = fx.dir.path().join("axon.db");
+        assert!(record_joined(&db, &node(5), "shared-label", 1).is_ok());
+        assert!(matches!(
+            record_joined(&db, &node(6), "shared-label", 1),
+            Err(JoinError::LabelTaken)
+        ));
+        assert!(
+            record_joined(&db, &node(5), "shared-label", 1).is_ok(),
+            "a retry of the same join still collapses into its row"
+        );
+    }
 }

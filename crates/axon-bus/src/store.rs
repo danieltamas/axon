@@ -177,8 +177,7 @@ BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
 
--- Federation (docs/P2P-SPEC.md §5). The owner-session tables of the same section live
--- with the dashboard login code.
+-- Federation (docs/P2P-SPEC.md §5); the owner-session tables of the section live in session.rs.
 CREATE TABLE IF NOT EXISTS peers (
   peer_id TEXT PRIMARY KEY,            -- random, local
   node_id TEXT NOT NULL, label TEXT NOT NULL,   -- node_id: remote iroh public key
@@ -189,6 +188,7 @@ CREATE TABLE IF NOT EXISTS peers (
   last_error TEXT, remote_paused INTEGER NOT NULL DEFAULT 0   -- 1 while the peer has us paused
 );
 CREATE UNIQUE INDEX IF NOT EXISTS peers_live_node ON peers(node_id) WHERE state <> 'removed';
+CREATE UNIQUE INDEX IF NOT EXISTS peers_live_label ON peers(label) WHERE state <> 'removed';
 -- Direct addresses last seen on an authenticated connection from the peer (never a claim the
 -- peer makes); fed to the endpoint on start. Removing the peer deletes the row.
 CREATE TABLE IF NOT EXISTS peer_addrs (peer_id TEXT PRIMARY KEY, addrs_json TEXT NOT NULL, seen_at INTEGER NOT NULL);
