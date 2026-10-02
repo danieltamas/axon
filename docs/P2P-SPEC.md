@@ -567,7 +567,9 @@ reports are in `docs/audits/`.
   serialized and staged under unique names.
 
 **Fix round 2 (2026-10-02).**
-- **Transmit boundary (RR-1).** The service owns one gate (`transmit_gate`, a read-write lock).
+- **Transmit boundary (RR-1, R2-1).** One gate (`transmit_gate`, a read-write lock) is owned by the
+  `Federation` slot, not by a service, so a restart of the service (a settings change) hands the
+  same gate to the new outbox and a revocation always orders against whichever outbox is running.
   The outbox holds it shared from its authorization re-check until the frame is written; a local
   pause, remove, unshare or flag change takes it exclusively around its commit. So in the owning
   process no frame is written after such a commit returns, and no SQLite write transaction is held
@@ -592,9 +594,15 @@ reports are in `docs/audits/`.
   `stale_generation`. A removal notice lost to an outage is still not repaired (see Shares above).
 - **One connection serves both ways (RR-1).** Whichever side dialed a connection, both ends answer
   the requests the other opens on it, and a connection a live peer opens to us becomes the path we
-  send over from its first request. A peer that restarts on a new port and reaches us is therefore
-  used at once, instead of our sends going to the dead connection until its idle timeout. A session
-  that ends closes only its own connection.
+  send over from its first request, unless that request carries `control: true`: the probe a peer
+  that paused us opens (R2-3) says so, and a marked connection never carries our sends. A peer that
+  restarts on a new port and reaches us is therefore used at once, instead of our sends going to
+  the dead connection until its idle timeout. A session that ends closes only its own connection.
+  Every connection being served is tracked (R2-2): when a peer stops being live, or a reload is
+  denied, all of them close and their handlers are cancelled, not only the one we dialed; and a
+  frame is admitted again after it is read, before it is dispatched, so a revocation applied while
+  a frame arrived refuses it. The check reads the service's view of the peers, which a local
+  revocation updates by reload, after the notice to the peer; the window is that reload.
 - **Reload (RR-5).** A failed read of the peers table and a failed reload worker both deny, close
   and retry at the next tick. **Retention (RR-7).** An old undelivered inbound message is deleted
   with its inbox record in the same transaction, never the record alone. **Dialers (RR-8).**
@@ -608,11 +616,16 @@ reports are in `docs/audits/`.
 - **Identity key (RR-14, SEC-12).** A key file readable by group or others is refused at start with
   the `chmod 600` fix; the mode is not repaired, because the key may already have been copied.
   A new key is created 0600 in a 0700 directory. Windows has no mode to read back, so there the
-  owner-only ACL is still set rather than checked. **Refs (REL-13).** `axon bus guide` states that
+  owner-only ACL is set at creation and never read back: a later loosening (an administrator, a
+  restore, a sync tool) is not detected, and the key is then readable by whoever that change
+  admitted. Only a local account can exploit it, and one that can read the key can also read the
+  database and the dashboard session. **Refs (REL-13).** `axon bus guide` states that
   a ref uses `/` only.
 - **Joiner label (SEC-6).** The inviter never stores the label the joiner chose; it names the
-  pending peer `axon-` plus the 16 hex digits of the joiner's fingerprint (unique per node) until
-  its owner renames it. The joiner still sends its label (it is validated, then ignored), and the
+  pending peer `axon-` plus the 16 hex digits of the joiner's fingerprint until its owner renames
+  it. If a live peer already carries that name (an owner may have renamed another peer so), the
+  first free `-2`, `-3`, ... suffix is used; the name is chosen inside the admission transaction,
+  and the invite is consumed only when the pending row was inserted (R2-5). The joiner still sends its label (it is validated, then ignored), and the
   inviter no longer answers `label_taken`. **Invite relay (SEC-7).** An invite whose `relay_url` is
   not `https://` is refused as `invalid_invite`; a private https host is not refused.
 - **Startup (RR-16).** The root `axon` records its port, binds, and only then does the slower
@@ -624,11 +637,16 @@ reports are in `docs/audits/`.
 - **Accepted, not fixed (P3).** Reasons are the residual risk, not a claim that it is absent.
   - BUG-11: thread names stay as sent on the wire; frozen tests assert it.
   - BUG-12: dial backoff already doubles from 1 s to 60 s with jitter. A message that fails to
-    send retries after 1 s doubling to a fixed 10 s, without jitter; many queued rows to one peer
-    retry together, which is harmless at the volumes this carries.
-  - BUG-13: the outbox sends sequentially. After a failed send to a peer it skips that peer's other
-    rows for the tick, so one unreachable peer costs at most one 10 s request timeout per tick; the
-    messages to other peers are delayed by that much, not blocked.
+    send retries after 1 s doubling to a fixed 10 s, without jitter, and its peer's other rows wait
+    for the same time; rows to one peer retry together, which is harmless at the volumes this
+    carries.
+  - BUG-13 (R2-4): the outbox still sends one row at a time. A batch holds at most 20 rows and at
+    most 4 per peer, so a deep backlog to one peer cannot fill it. A peer whose send failed is left
+    out of the batches for that row's retry wait (1 s doubling to 10 s). A peer that accepts
+    connections but never answers costs one 10 s request timeout per attempt, during which other
+    peers wait; the worst case is therefore that they are served about half the time (10 s stalled
+    per 10 s of back-off), delayed and never blocked. A peer that is not connected fails at once
+    and costs nothing.
   - SEC-8: the pair code is the owner's attestation that the digits matched, not something the
     server can verify; the manual says so.
   - SEC-9: the `peer:` partition keeps case-insensitive `LIKE` in the FK-replacement triggers and
@@ -644,8 +662,21 @@ reports are in `docs/audits/`.
   - SEC-11: an unknown invite id now takes no write lock. Anyone who has seen an invite can still
     hold the 8 pairing slots for 15 s each, which blocks pairing (not messaging) while they do,
     and each wrong secret costs one write until the fifth kills the invite.
-  - SEC-13(b): the pairing nonce is single-use and lives 60 s; it is visible in process arguments
-    to processes of the same user, who can already read the database.
+  - SEC-13(b): the login link, nonce included, is an argument of the program that opens the browser
+    while it runs. The process list shows arguments to every local user on macOS and Linux by
+    default, not only the owner, so a local user who reads it within the 60 s and before the browser
+    uses it signs in as the owner (the nonce is single-use, and the sign-in needs a loopback Host
+    and Origin, which a local user has). `axon --no-open` and `axon open --print` never start that
+    program; the link then appears only in the terminal.
   - REL-5: the Windows ACL path has no test; CI builds and tests on `windows-latest` but the ACL
-    assertion needs a Windows host to write and verify.
-  - TEST-n: acceptance tests are Codex's; the implementer does not add or edit them.
+    assertion needs a Windows host to write and verify. Until one exists, a broken ACL on Windows
+    is found only by a person.
+  - TEST-n: acceptance tests are Codex's and frozen; the implementer adds unit tests only. Of the
+    QA report's gaps, `tests/FED-FIXROUND-COVERAGE.md` records TEST-1 (root binary) and TEST-5
+    (message-table migration) as covered. Open, because the frozen suites do not assert them:
+    TEST-3 (`remote_text_byte_cap` asserts only 0 < frames < 12 and 16 KiB per call, so a cap
+    far below 16 KiB still passes), TEST-6 (confirm-window and invite-expiry brackets of 590/601 s
+    and +-5 s are loose), and TEST-8 (no kill-window or half-written-inbox case). TEST-2, TEST-4,
+    TEST-7 and TEST-9 are partly covered by the fix-round suites, with the per-kind and recipient
+    limits, the outbox expiry path and clock skew against queued delivery not asserted
+    individually. Each is a test to be written by Codex, not a defect in the code.
