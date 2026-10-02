@@ -227,9 +227,10 @@ fn check(tx: &Connection, limits: &Limits, node: &str, msg: &Msg) -> anyhow::Res
     }
     // 4. Time.
     let now = now_ms();
+    // The peer picks both stamps, so the difference may overflow: that is `bad_time`, not a panic.
+    let lifetime = msg.expires_at.checked_sub(msg.created_at);
     if msg.created_at > now + CLOCK_SKEW_MS
-        || msg.expires_at - msg.created_at > LIFETIME_MS
-        || msg.expires_at <= msg.created_at
+        || lifetime.is_none_or(|lifetime| lifetime > LIFETIME_MS || lifetime <= 0)
     {
         return reject("bad_time");
     }

@@ -309,3 +309,24 @@ fn a_remote_answer_never_satisfies_a_local_blocking_ask() {
     let result = crate::msg::await_answer(&fx.conn, "m-q1", "m-q1", wait, "none").unwrap();
     assert_eq!(result["body"], "from bob");
 }
+
+#[test]
+fn stamps_whose_difference_overflows_are_bad_time() {
+    let mut fx = ready();
+    rejects(
+        &mut fx,
+        |m| {
+            m["created_at"] = json!(i64::MIN);
+            m["expires_at"] = json!(i64::MAX);
+        },
+        "bad_time",
+    );
+    rejects(
+        &mut fx,
+        |m| {
+            m["created_at"] = json!(-1);
+            m["expires_at"] = json!(i64::MAX);
+        },
+        "bad_time",
+    );
+}
