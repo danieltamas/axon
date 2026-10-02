@@ -65,7 +65,7 @@ fn frame_handler(handle: Handle, db: PathBuf) -> FrameHandler {
 
 /// Apply a share frame; the share to re-send when a `share_update` moved its revision forward.
 fn apply_counting(db: &Path, node: &str, frame: Value) -> anyhow::Result<(Value, Option<String>)> {
-    let mut conn = store::open(db)?;
+    let mut conn = crate::fed::open_durable(db)?;
     let share_id = frame["share_id"].as_str().map(str::to_owned);
     let is_update = frame["type"] == "share_update";
     let revision = |conn: &rusqlite::Connection| -> Option<i64> {
@@ -112,8 +112,10 @@ pub async fn push(handle: Handle, db: PathBuf, share_id: String, update: bool) {
         let Ok(Ok(Some((node, frame)))) = aim else {
             return;
         };
-        if handle.request(&node, &frame).await.is_ok() {
-            return;
+        // An `unavailable` error means the peer could not look at the frame yet: ask again.
+        match handle.request(&node, &frame).await {
+            Ok(reply) if !(reply["type"] == "error" && reply["reason"] == "unavailable") => return,
+            _ => {}
         }
         sleep(PUSH_RETRY).await;
     }

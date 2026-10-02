@@ -110,7 +110,7 @@ fn handler(db: PathBuf, limits: Arc<Limits>) -> FrameHandler {
                 return json!({"type": "error", "reason": "bad_frame"});
             };
             let done = tokio::task::spawn_blocking(move || {
-                receive(&mut store::open(&db)?, &limits, &node, msg)
+                receive(&mut super::open_durable(&db)?, &limits, &node, msg)
             })
             .await;
             match done {

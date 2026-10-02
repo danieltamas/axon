@@ -43,6 +43,14 @@ fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     .optional()
 }
 
+/// A connection for a handler whose commit precedes a wire ack: the peer's acknowledgement is
+/// a promise, so the change must survive power loss (`synchronous=FULL`, unlike the hub's NORMAL).
+pub fn open_durable(db: &std::path::Path) -> anyhow::Result<rusqlite::Connection> {
+    let conn = crate::store::open(db)?;
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    Ok(conn)
+}
+
 /// Federation is on only when the owner switched it on; absent or unreadable means off.
 pub fn enabled(conn: &Connection) -> bool {
     matches!(setting(conn, SETTING_ENABLED), Ok(Some(v)) if v == "1" || v == "true")
@@ -159,5 +167,18 @@ mod tests {
         .unwrap();
         assert!(enable(dir.path(), &conn, true).is_err());
         assert!(!enabled(&conn));
+    }
+
+    #[test]
+    fn a_connection_that_precedes_an_ack_syncs_every_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("axon.db");
+        drop(crate::store::init(&db).unwrap());
+        let sync = |conn: &rusqlite::Connection| -> i64 {
+            conn.query_row("PRAGMA synchronous", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(sync(&crate::store::open(&db).unwrap()), 1, "NORMAL");
+        assert_eq!(sync(&open_durable(&db).unwrap()), 2, "FULL");
     }
 }

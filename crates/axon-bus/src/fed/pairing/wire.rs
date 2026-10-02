@@ -165,7 +165,12 @@ fn frame_handler(db: PathBuf, link: Link, apply: Apply) -> FrameHandler {
             }
             let reply = tokio::task::spawn_blocking(move || {
                 let what = frame.what.as_deref();
-                apply(&mut store::open(&db)?, &node, frame.generation, what)
+                apply(
+                    &mut crate::fed::open_durable(&db)?,
+                    &node,
+                    frame.generation,
+                    what,
+                )
             })
             .await;
             link.reload();

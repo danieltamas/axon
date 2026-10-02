@@ -136,7 +136,7 @@ pub fn pair_handler(db: PathBuf, link: Link) -> PairHandler {
             };
             let joiner = remote.id.to_string();
             let admitted = tokio::task::spawn_blocking(move || {
-                admit(&mut store::open(&db)?, &joiner, &request)
+                admit(&mut crate::fed::open_durable(&db)?, &joiner, &request)
             })
             .await;
             match admitted {
