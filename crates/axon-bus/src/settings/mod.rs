@@ -12,7 +12,7 @@ mod input;
 
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -29,6 +29,7 @@ use crate::{doctor, fed, install, session, store, transcript, uninstall, usage, 
 
 /// How long compaction waits for the write lock before it answers `busy`.
 const COMPACT_LOCK_WAIT: Duration = Duration::from_secs(1);
+const COMPACT_RETRY: Duration = Duration::from_millis(50);
 
 pub struct Settings {
     db: PathBuf,
@@ -227,14 +228,22 @@ async fn uninstall_hooks(
 async fn compact(State(settings): State<Arc<Settings>>) -> Answer {
     settings
         .after(|conn| {
-            conn.busy_timeout(COMPACT_LOCK_WAIT)?;
-            match conn.execute_batch("VACUUM") {
-                Err(rusqlite::Error::SqliteFailure(err, _))
-                    if err.code == ErrorCode::DatabaseBusy =>
-                {
-                    Err(Fail::Busy)
+            // The deadline is kept here rather than by SQLite's busy handler, whose sleeps
+            // overshoot on a loaded machine and stretch the promised one second.
+            conn.busy_timeout(Duration::ZERO)?;
+            let deadline = Instant::now() + COMPACT_LOCK_WAIT;
+            loop {
+                match conn.execute_batch("VACUUM") {
+                    Err(rusqlite::Error::SqliteFailure(err, _))
+                        if err.code == ErrorCode::DatabaseBusy =>
+                    {
+                        if Instant::now() + COMPACT_RETRY > deadline {
+                            return Err(Fail::Busy);
+                        }
+                        std::thread::sleep(COMPACT_RETRY);
+                    }
+                    done => return Ok(done?),
                 }
-                done => Ok(done?),
             }
         })
         .await

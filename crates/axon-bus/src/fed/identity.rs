@@ -133,11 +133,11 @@ fn restrict_to_owner(path: &Path) -> anyhow::Result<()> {
 /// Windows has no mode bits; drop inherited access and grant the current user only.
 #[cfg(windows)]
 fn restrict_to_owner(path: &Path) -> anyhow::Result<()> {
-    let user = std::env::var("USERNAME").context("USERNAME is not set")?;
+    // `*S-1-3-4` is OWNER RIGHTS: the file's owner, the account that created it, without
+    // depending on USERNAME, which a service or a scrubbed environment may not set.
     let status = std::process::Command::new("icacls")
         .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("{user}:(F)"))
+        .args(["/inheritance:r", "/grant:r", "*S-1-3-4:(F)"])
         .output()
         .context("run icacls")?
         .status;
