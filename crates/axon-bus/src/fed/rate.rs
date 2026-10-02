@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use super::identity;
 use super::receive::{take, Bucket};
 use super::service::FrameHandler;
 
@@ -18,7 +19,7 @@ const FRAME_BURST: f64 = 20.0;
 const REJECTIONS_PER_WINDOW: u32 = 10;
 const WINDOW: Duration = Duration::from_secs(60);
 
-/// Rate-limited and over-limit rejections since start, per peer node id.
+/// Rate-limited and over-audit-quota rejections since start, per peer fingerprint.
 static REFUSED: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(Mutex::default);
 type Windows = HashMap<(String, Option<String>), (Instant, u32)>;
 static AUDITED: LazyLock<Mutex<Windows>> = LazyLock::new(Mutex::default);
@@ -27,14 +28,14 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Count one refusal for the peer with this node id.
-pub fn count_refused(node: &str) {
-    *locked(&REFUSED).entry(node.to_owned()).or_default() += 1;
+/// Count one rejection of the peer with this fingerprint that was not written to the audit.
+pub fn count_refused(fingerprint: &str) {
+    *locked(&REFUSED).entry(fingerprint.to_owned()).or_default() += 1;
 }
 
-/// Refusals counted for the peer with this node id since the process started.
-pub fn refused(node: &str) -> u64 {
-    locked(&REFUSED).get(node).copied().unwrap_or(0)
+/// Rejections counted for the peer with this fingerprint since the process started.
+pub fn refused(fingerprint: &str) -> u64 {
+    locked(&REFUSED).get(fingerprint).copied().unwrap_or(0)
 }
 
 /// `handler` behind a per-peer rate, checked before the handler does anything: a peer over
@@ -43,7 +44,11 @@ pub fn limited(handler: FrameHandler) -> FrameHandler {
     let buckets: Arc<Mutex<HashMap<String, Bucket>>> = Arc::default();
     Arc::new(move |node: String, frame: Value| {
         if !take(&buckets, &node, FRAMES_PER_SECOND, FRAME_BURST) {
-            count_refused(&node);
+            count_refused(
+                &node
+                    .parse()
+                    .map_or(node.clone(), |id| identity::fingerprint(&id)),
+            );
             return Box::pin(async { json!({"type": "error", "reason": "rate_limited"}) });
         }
         handler(node, frame)

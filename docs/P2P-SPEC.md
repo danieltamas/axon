@@ -42,8 +42,8 @@ the owner's approval, and before the tests that depend on it.
 - `POST /api/session` with `{ "nonce": "…" }`. It needs a loopback Host and an Origin that
   matches the dashboard; no token and no cookie.
 - Responses:
-  - `204`, with `Set-Cookie: axon_session=<43-char base64url>; HttpOnly; SameSite=Strict;
-    Path=/; Max-Age=2592000`.
+  - `200 {"token":"<43-char base64url>"}`, with `Set-Cookie: axon_session=<43-char
+    base64url>; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (§12, C1).
   - `401 {"error":"sign_in"}` for a wrong, used or expired nonce. All three give the same
     body.
 - Sessions are stored as hashes with `created_at`, `last_used_at` and `expires_at` (30 days),
@@ -55,7 +55,7 @@ the owner's approval, and before the tests that depend on it.
 |---|---|
 | `GET /`, static UI assets, `manifest.webmanifest`, `sw.js`, `offline.html` | Public; they contain no data and no secret |
 | `POST /api/session` | Loopback Host and matching Origin only |
-| Every other `/api/*`, GET and SSE included | Cookie session. Without one: `401 {"error":"sign_in","hint":"run axon open"}` |
+| Every other `/api/*`, GET and SSE included | Cookie session and its token (`x-axon-session: <token>`; `?t=<token>` on `GET /api/stream`). Without both: `401 {"error":"sign_in","hint":"run axon open"}` |
 
 - Every non-GET also keeps the Host and Origin checks.
 - API responses carry `Cache-Control: no-store`.
@@ -458,8 +458,9 @@ acceptance tests or by what the sections left unsaid.
   an equal revision and different flags is applied; an older one is ignored. A `share_update`
   that advances our revision is answered with our own flags at the new revision. Without this,
   one side's change could be lost permanently.
-- All shares are resent on each peer (re)connect instead of tracking an acknowledged flag,
-  because the schema is frozen. Share frames are idempotent by revision.
+- Offered and active shares are resent on each peer (re)connect instead of tracking an
+  acknowledged flag, because the schema is frozen (removed ones are not; see the fix round).
+  Share frames are idempotent by revision.
 - A reply is tied to the peer id and to the share the question arrived under (read from the
   `accepted` audit row), not to the discovery cache. The cache is only eventually consistent,
   and an answer must not depend on it.
@@ -484,9 +485,10 @@ acceptance tests or by what the sections left unsaid.
   (`peer:<label>/<session>`) have no agents row (§5). Two triggers keep the check for every
   sender that is not `peer:`-prefixed. A database that still has the foreign key is rebuilt
   once, in a transaction, when it is opened. The receiver does not turn foreign keys off.
-- **Open.** Rejections beyond 10 per peer per minute are dropped, not counted. §8 says they are
-  "counted, not written"; no counter exists, so the numbers in `counters.rejected` undercount
-  during a flood.
+- Over-limit rejections are counted, not written (C3): a rejection past the rate limit, and
+  any inbound rejection past 10 per peer per minute (tracked in memory), adds to
+  `counters.rejected` through an in-memory counter and writes no audit row.
+  The counter restarts at zero with the process.
 
 **Lifecycle and health (§§9–10).**
 - Pause, resume and remove each run as one transaction. The notices and the service reload are
@@ -494,12 +496,18 @@ acceptance tests or by what the sections left unsaid.
   `notice paused` is sent first; sent first it would block the action on the peer's network.
 - `PUT /api/fed/peers/<id>/label` answers `400 {"error":"label_taken"}` when the label belongs
   to another non-removed peer.
-- **Open.** A `paused` or `removed` notice received from a paired peer is acknowledged
-  and changes nothing: no state, no queue, no share. Our side keeps sending until the link
-  fails or the owner acts, and the other side's receiver refuses what it will not take. A
-  `removed` notice for a pairing still in `pending_confirm` does remove it. A `resumed` notice
-  is not implemented (`unsupported_notice`). Whether a remote pause should stop our sending is
-  not specified.
+- Remote lifecycle is visible and enforced (C2). A received `removed` notice ends the pairing
+  as an owner removal would (shares end, queued messages are cancelled, pending inbound
+  messages are deleted) and records `removed_reason='remote_removed'`; `DELETE
+  /api/fed/peers/<id>` on such a peer is the owner's "forget": it answers 204 once and the peer
+  stops being listed (`removed_reason='remote_removed_forgotten'`). A `paused` notice sets
+  `peers.remote_paused`; our state is unchanged, sends are refused with `peer_paused`, queued
+  rows wait, and we stop dialing that peer (it refuses us on purpose, so the closed connection is
+  no fault: no `last_error`, state `offline`). A `resumed` notice, sent on resume with the same
+  retries as a removal notice, clears the flag. `/api/fed` peers carry `remote_paused` and
+  `removed_reason`. A `paused` or `resumed` notice lost to an outage is not resent: the other side
+  keeps showing the peer paused (and sending refused) until a `resumed` notice or a re-pairing
+  reaches it.
 - `next_retry_at` is set when a dial attempt starts, to the time the attempt gives up
   (now plus the connect timeout), and cleared on connect. §10 left it empty during an
   in-flight dial.
@@ -515,3 +523,46 @@ acceptance tests or by what the sections left unsaid.
   inherit the lock's file descriptor on macOS.
 - The Peers panel was exercised with a stub DOM, not a browser. The checklist in
   `docs/FED-MANUAL.md` covers it by hand.
+
+**Fix round (2026-10-02).** Contract changes and decisions made after review; the audit
+reports are in `docs/audits/`.
+- **C1, session token.** `POST /api/session` answers `200 {"token":"<43-char base64url>"}` and
+  sets the cookie. The token is bound to the session (stored as `token_hash` next to
+  `session_hash`; a database made before this gets the column by `ALTER`). The page keeps it in
+  `localStorage`, which is origin-scoped, because browsers send the cookie to every port of
+  127.0.0.1. Every `/api/*` request must carry `x-axon-session: <token>` that matches the
+  cookie's session, else `401 {"error":"sign_in"}`; the check also covers the host binary's own
+  routes. `GET /api/stream` takes `?t=<token>` (EventSource cannot set headers), read for that
+  path only and never logged. An open stream is re-checked every 500 ms and ends when its session
+  is revoked or expires.
+- **Message path.** The outbox re-checks, in one write transaction right before each transmit,
+  that federation is on, the peer is active in the row's generation, the share is active, the
+  sender is still a member and `outbound`/`remote_inbound` are on; otherwise the row is
+  cancelled with the reason, audited, and the sender gets a `sync` notice. A revision bumped
+  since queueing is re-stamped, not a reason to drop. A peer's terminal rejection also tells
+  the sender. Expiry, audit, notice and cancellation of a batch share one transaction. A
+  revocation committed before the re-check ends the row; one committed after it finds the
+  message already sent. A remote answer never satisfies a local blocking ask, which also
+  requires the answerer to be the addressee of the question.
+- **Durability.** Federation handlers whose commit precedes a wire ack (messages, shares,
+  pairing and notices, admission) open the database with `synchronous=FULL`; everything else keeps
+  NORMAL.
+- **Rates and limits.** Every frame kind is rate-limited per peer and per kind (10/s, burst 20)
+  before the handler touches the database; over it the peer gets `{"type":"error",
+  "reason":"rate_limited"}`, which senders retry. The per-recipient limit stays in the message
+  pipeline. Message stamps whose difference overflows are `bad_time`.
+- **Shares.** Inbound messages record the share they were accepted through (`fed_inbox.share_id`),
+  and unsharing deletes by it. Removed shares count toward a quota of 50 per peer
+  (`too_many_shares`), are not resent on reconnect, and a retention sweep (at start, then
+  hourly) keeps the newest 25 per peer. A removal frame lost to an outage is therefore not
+  repeated; the peer learns when its next message is refused `unknown_share`.
+- **Retention.** Outbox and inbox rows stay 90 days (the health counters read them, so that is
+  also how far they count), audit rows 365 days, expired invites 7 days; expired dashboard
+  sessions and the agent-session rows of trimmed shares go at each sweep.
+- **Service.** The owner follows `fed_enabled` and `fed_relay` changes made by another process
+  within 1 s. A failed read of the peers table closes every connection and admits nobody until
+  the next 5 s tick. Dial tasks end with the service, and share frame handlers hold it weakly.
+  A live label is unique (partial unique index); a join that loses the race fails `label_taken`.
+- **Settings errors** answer a fixed `unavailable` and log the cause; `config.toml` budget edits are
+  serialized and staged under unique names.
+

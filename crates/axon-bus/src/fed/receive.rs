@@ -164,7 +164,7 @@ fn receive(conn: &mut Connection, limits: &Limits, node: &str, msg: Msg) -> anyh
     };
     let reply = match verdict {
         Verdict::Reject("rate_limited") => {
-            rate::count_refused(node);
+            rate::count_refused(&fingerprint);
             ack("rejected", Some("rate_limited"))
         }
         Verdict::Reject(reason) => {

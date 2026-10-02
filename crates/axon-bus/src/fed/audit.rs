@@ -28,6 +28,10 @@ pub fn record(conn: &Connection, d: &Decision) -> anyhow::Result<()> {
         && d.direction == "in"
         && !rate::may_audit_rejection(conn.path(), d.peer_fingerprint)
     {
+        // Not written, but still counted, so `counters.rejected` stays true during a flood.
+        if let Some(fingerprint) = d.peer_fingerprint {
+            rate::count_refused(fingerprint);
+        }
         return Ok(());
     }
     conn.execute(

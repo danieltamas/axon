@@ -48,7 +48,7 @@ pub fn counters(conn: &Connection, peer: &PeerRow) -> rusqlite::Result<Value> {
                 "sent_accepted": r.get::<_, i64>(0)?,
                 "received": r.get::<_, i64>(1)?,
                 "expired": r.get::<_, i64>(2)?,
-                "rejected": r.get::<_, i64>(3)? + rate::refused(&peer.node_id) as i64,
+                "rejected": r.get::<_, i64>(3)? + fingerprint.as_deref().map_or(0, rate::refused) as i64,
                 "cancelled": r.get::<_, i64>(4)?,
             }))
         },
