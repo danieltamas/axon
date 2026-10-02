@@ -52,15 +52,14 @@ pub fn learn(
     Ok(changed > 0)
 }
 
-/// `learn` from the `lifecycle` object an acknowledgement carries, if it has one.
+/// `learn` from the `paused` and `seq` an acknowledgement carries, if it has them.
 pub fn learn_reply(
     conn: &Connection,
     node: &str,
     generation: i64,
     reply: &Value,
 ) -> rusqlite::Result<bool> {
-    let state = &reply["lifecycle"];
-    match (state["paused"].as_bool(), state["seq"].as_i64()) {
+    match (reply["paused"].as_bool(), reply["seq"].as_i64()) {
         (Some(paused), Some(seq)) => learn(conn, node, generation, paused, seq),
         _ => Ok(false),
     }
@@ -69,7 +68,9 @@ pub fn learn_reply(
 /// The acknowledgement of a lifecycle notice: accepted, with our own state for the sender to learn.
 pub fn acknowledge(conn: &Connection, node: &str) -> rusqlite::Result<Value> {
     Ok(match own_state(conn, node)? {
-        Some((_, state)) => json!({"type": "ack", "status": "accepted", "lifecycle": state}),
+        Some((_, state)) => {
+            json!({"type": "ack", "status": "accepted", "paused": state["paused"], "seq": state["seq"]})
+        }
         None => json!({"type": "error", "reason": "unknown_peer"}),
     })
 }

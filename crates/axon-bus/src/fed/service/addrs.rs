@@ -83,6 +83,11 @@ impl Shared {
             }
             seen.insert(*node, addrs.clone());
         }
+        // Where the peer just reached us from is where to find it next, also when it moved.
+        self.lookup.add_endpoint_info(EndpointAddr::from_parts(
+            *node,
+            addrs.iter().copied().map(TransportAddr::Ip),
+        ));
         let (db_path, node) = (self.db_path.clone(), node.to_string());
         tokio::task::spawn_blocking(move || {
             if let Err(err) = save(&db_path, &node, &addrs) {

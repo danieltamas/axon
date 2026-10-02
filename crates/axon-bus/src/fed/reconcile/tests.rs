@@ -38,7 +38,10 @@ fn the_acknowledgement_carries_our_state_for_the_sender_to_learn() {
     conn.execute("UPDATE peers SET state='paused', lifecycle_seq=4", [])
         .unwrap();
     let reply = acknowledge(&conn, "node").unwrap();
-    assert_eq!(reply["lifecycle"], json!({"paused": true, "seq": 4}));
+    assert_eq!(
+        (reply["paused"].clone(), reply["seq"].clone()),
+        (json!(true), json!(4))
+    );
     assert!(learn_reply(&conn, "node", 1, &reply).unwrap());
     assert!(
         remote_paused(&conn),

@@ -63,6 +63,9 @@ impl Dialers {
         }
         if let Some((_, task)) = self.running.remove(&node) {
             task.abort();
+            // The aborted task cannot close its connection. One left open, to a peer that
+            // may have restarted elsewhere, keeps iroh sending to the address it was using.
+            shared.drop_connection(&node);
         }
         let shared = shared.clone();
         let task = if probe_only {

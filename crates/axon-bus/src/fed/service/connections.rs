@@ -20,6 +20,14 @@ impl Shared {
         }
     }
 
+    /// The send path to `node` if it is still open.
+    pub(in crate::fed) fn live_connection(&self, node: &EndpointId) -> Option<Connection> {
+        locked(&self.connections)
+            .get(node)
+            .filter(|conn| conn.close_reason().is_none())
+            .cloned()
+    }
+
     /// An adopted connection ended: stop sending over it unless a newer one replaced it. The
     /// session's heartbeat puts its own connection back (`vouch_for`).
     pub(in crate::fed) fn forget_connection(&self, node: &EndpointId, conn: &Connection) {

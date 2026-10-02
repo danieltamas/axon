@@ -121,10 +121,15 @@ async fn serve(shared: Arc<Shared>, conn: Connection, inbound: bool) {
                 // Oversized, malformed or stalled: drop the whole connection.
                 _ => return conn.close(VarInt::from_u32(CLOSE_BAD_FRAME), b"bad frame"),
             };
-            // Revoked while the frame was arriving: nothing is dispatched.
+            // Revoked while the frame was arriving: nothing is dispatched. The database is the
+            // authority here, not the service's view, which a local revocation updates only
+            // when the service next reloads.
             let Some(access) = shared.access_of(&node).filter(Access::is_live) else {
                 return conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
             };
+            if !still_live_in_database(&shared, &node, access.generation).await {
+                return conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
+            }
             let marked = request
                 .as_object_mut()
                 .and_then(|frame| frame.remove("control"))
@@ -145,6 +150,25 @@ async fn serve(shared: Arc<Shared>, conn: Connection, inbound: bool) {
         shared.forget_connection(&node, &conn);
     }
     shared.untrack(&node, &conn);
+}
+
+/// Whether the peers table still holds `node` as a live pairing of `generation`. An
+/// unreadable database answers no.
+async fn still_live_in_database(shared: &Shared, node: &EndpointId, generation: i64) -> bool {
+    let (db, node) = (shared.db_path.clone(), node.to_string());
+    tokio::task::spawn_blocking(move || {
+        let read = || -> anyhow::Result<bool> {
+            Ok(store::open(&db)?.query_row(
+                "SELECT EXISTS(SELECT 1 FROM peers WHERE node_id=?1 AND generation=?2
+                               AND state IN ('active','pending_confirm'))",
+                rusqlite::params![node, generation],
+                |r| r.get(0),
+            )?)
+        };
+        read().unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Write the answer and hold the stream until the requester has read it.
@@ -288,16 +312,24 @@ pub async fn dial_loop(shared: Arc<Shared>, node: EndpointId) {
 /// Dial once and ping until the connection fails. `failures` resets after the first pong,
 /// so a peer that connects and then flaps does not climb to the cap.
 async fn session(shared: &Arc<Shared>, node: EndpointId, failures: &mut u32) -> anyhow::Result<()> {
-    let addr: EndpointAddr = shared.dial_address(node);
-    // While this attempt is in flight the next one is due when it gives up.
-    let gives_up = now_ms() + CONNECT_TIMEOUT.as_millis() as i64;
-    shared.update(&node, |h| h.next_retry_at = Some(gives_up));
-    let conn = timeout(CONNECT_TIMEOUT, shared.endpoint.connect(addr, FED_ALPN))
-        .await
-        .map_err(|_| anyhow!("connect timed out"))?
-        .context("connect")?;
-    shared.set_connection(node, conn.clone());
-    tokio::spawn(serve(shared.clone(), conn.clone(), false));
+    // A peer that reached us is reachable over that connection even when a fresh dial to its
+    // address would not be (the old path to a moved peer can swallow the dial's first packets).
+    let conn = match shared.live_connection(&node) {
+        Some(conn) => conn,
+        None => {
+            let addr: EndpointAddr = shared.dial_address(node);
+            // While this attempt is in flight the next one is due when it gives up.
+            let gives_up = now_ms() + CONNECT_TIMEOUT.as_millis() as i64;
+            shared.update(&node, |h| h.next_retry_at = Some(gives_up));
+            let conn = timeout(CONNECT_TIMEOUT, shared.endpoint.connect(addr, FED_ALPN))
+                .await
+                .map_err(|_| anyhow!("connect timed out"))?
+                .context("connect")?;
+            shared.set_connection(node, conn.clone());
+            tokio::spawn(serve(shared.clone(), conn.clone(), false));
+            conn
+        }
+    };
     shared.update(&node, |h| {
         h.connected = true;
         h.next_retry_at = None;

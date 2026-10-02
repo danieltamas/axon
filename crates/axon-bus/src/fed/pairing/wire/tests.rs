@@ -51,10 +51,7 @@ fn notice(what: &str, seq: i64) -> PairingFrame {
 fn pause_and_resume_notices_set_and_clear_the_flag_without_touching_our_state() {
     let mut fx = fixture();
     let reply = set_remote_paused(&mut fx.conn, &node(1), &notice("paused", 1)).unwrap();
-    assert_eq!(
-        reply["lifecycle"]["paused"], false,
-        "our own state comes back"
-    );
+    assert_eq!(reply["paused"], false, "our own state comes back");
     assert_eq!(peer_row(&fx.conn), ("active".into(), None, true));
     set_remote_paused(&mut fx.conn, &node(1), &notice("resumed", 2)).unwrap();
     assert_eq!(peer_row(&fx.conn), ("active".into(), None, false));
