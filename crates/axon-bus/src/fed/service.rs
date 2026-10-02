@@ -90,6 +90,7 @@ pub struct Shared {
     pair_handler: RwLock<Option<PairHandler>>,
     changed: watch::Sender<u64>,
     pub(super) reload: Notify,
+    pub(super) stop_manager: Notify,
     /// Held shared by the outbox from its authorization re-check until the frame is written,
     /// and exclusively by a local commit that withdraws authority (pause, remove, unshare,
     /// flags): once that commit returns, nothing authorised before it is still to be sent.
@@ -322,8 +323,8 @@ impl Handle {
     pub async fn shutdown(&self) {
         let manager = locked(&self.stop.manager).take();
         if let Some(manager) = manager {
-            manager.abort();
-            // Joined, so its dialers (aborted as it drops them) are gone before the router is.
+            // The manager aborts and joins its dialers before it returns, so none outlives the router.
+            self.shared.stop_manager.notify_one();
             let _ = manager.await;
         }
         let _ = self.stop.router.shutdown().await;
@@ -410,6 +411,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         pair_handler: RwLock::default(),
         changed,
         reload: Notify::new(),
+        stop_manager: Notify::new(),
         transmit_gate: Arc::default(),
     });
     let router = Router::builder(endpoint)

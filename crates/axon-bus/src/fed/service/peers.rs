@@ -171,6 +171,9 @@ pub(super) async fn manage(shared: Arc<Shared>) {
     let mut unread = false;
     loop {
         tokio::select! {
+            _ = shared.stop_manager.notified() => break,
+            // Reaps the dialers that were aborted, so a long run keeps no finished tasks.
+            Some(_) = dialers.tasks.join_next() => {}
             _ = shared.reload.notified() => unread = !sync_peers(&shared, &mut dialers).await,
             _ = push.tick() => {
                 // A failed read is retried on the next tick, not only on the next change.
@@ -181,4 +184,6 @@ pub(super) async fn manage(shared: Arc<Shared>) {
             }
         }
     }
+    dialers.tasks.abort_all();
+    while dialers.tasks.join_next().await.is_some() {}
 }
