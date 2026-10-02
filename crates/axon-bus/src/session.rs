@@ -3,6 +3,11 @@
 //! Nonces and sessions are stored only as SHA-256 hashes, so a copy of the database yields
 //! no way in. A hash is looked up by its primary key, so no comparison of a secret against
 //! another secret happens in the process and there is no timing to read.
+//!
+//! A cookie alone is not proof of the owner: browsers send it to every port of 127.0.0.1.
+//! Each session therefore also has a token, handed to the page once at login (kept in its
+//! origin-scoped `localStorage`) and sent on every request as `x-axon-session`, so a server
+//! on another port that receives the cookie still cannot use it.
 
 use anyhow::Context;
 use axum::http::{header, HeaderMap};
@@ -13,6 +18,7 @@ use sha2::{Digest, Sha256};
 use crate::store;
 
 pub const COOKIE: &str = "axon_session";
+pub const TOKEN_HEADER: &str = "x-axon-session";
 pub const SESSION_SECS: i64 = 30 * 24 * 3600;
 const NONCE_MS: i64 = 60_000;
 /// `last_used_at` moves at most this often, so a polling page does not write on every call.
@@ -65,9 +71,33 @@ pub fn issue_nonce(conn: &Connection) -> anyhow::Result<String> {
     Ok(nonce)
 }
 
-/// Trade a nonce for a session secret. A wrong, used or expired nonce is the same `None`;
-/// the `DELETE` is what makes a nonce single-use even under concurrent exchanges.
-pub fn exchange(conn: &Connection, nonce: &str) -> anyhow::Result<Option<String>> {
+/// A database that held sessions before they had tokens keeps them, unusable: with an empty
+/// token hash they match nothing, so their browsers sign in again.
+fn add_token_column_if_missing(conn: &Connection) -> rusqlite::Result<()> {
+    let has: bool = conn.query_row(
+        "SELECT count(*) > 0 FROM pragma_table_info('dashboard_sessions') WHERE name = 'token_hash'",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has {
+        conn.execute(
+            "ALTER TABLE dashboard_sessions ADD COLUMN token_hash TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// What a login hands the browser: the cookie's secret and the token for the header.
+pub struct Granted {
+    pub secret: String,
+    pub token: String,
+}
+
+/// Trade a nonce for a session. A wrong, used or expired nonce is the same `None`; the
+/// `DELETE` is what makes a nonce single-use even under concurrent exchanges.
+pub fn exchange(conn: &Connection, nonce: &str) -> anyhow::Result<Option<Granted>> {
+    add_token_column_if_missing(conn)?;
     let now = store::now_ms();
     let spent = conn.execute(
         "DELETE FROM login_nonces WHERE nonce_hash = ?1 AND expires_at > ?2",
@@ -76,27 +106,33 @@ pub fn exchange(conn: &Connection, nonce: &str) -> anyhow::Result<Option<String>
     if spent != 1 {
         return Ok(None);
     }
-    let secret = random_secret()?;
+    let granted = Granted {
+        secret: random_secret()?,
+        token: random_secret()?,
+    };
     conn.execute(
-        "INSERT INTO dashboard_sessions (session_hash, created_at, last_used_at, expires_at)
-         VALUES (?1, ?2, ?2, ?3)",
+        "INSERT INTO dashboard_sessions (session_hash, token_hash, created_at, last_used_at, expires_at)
+         VALUES (?1, ?2, ?3, ?3, ?4)",
         params![
-            sha256_hex(secret.as_bytes()),
+            sha256_hex(granted.secret.as_bytes()),
+            sha256_hex(granted.token.as_bytes()),
             now,
             now + SESSION_SECS * 1000
         ],
     )?;
-    Ok(Some(secret))
+    Ok(Some(granted))
 }
 
-/// Whether `secret` names a live session; refreshes `last_used_at` when it is stale.
-pub fn valid(conn: &Connection, secret: &str) -> anyhow::Result<bool> {
+/// Whether `secret` and `token` together name one live session; refreshes `last_used_at`
+/// when it is stale. The cookie without its token, or the other way round, is nobody.
+pub fn valid(conn: &Connection, secret: &str, token: &str) -> anyhow::Result<bool> {
     let now = store::now_ms();
     let hash = sha256_hex(secret.as_bytes());
     let last_used: Option<i64> = conn
         .query_row(
-            "SELECT last_used_at FROM dashboard_sessions WHERE session_hash = ?1 AND expires_at > ?2",
-            params![hash, now],
+            "SELECT last_used_at FROM dashboard_sessions
+             WHERE session_hash = ?1 AND token_hash = ?2 AND expires_at > ?3",
+            params![hash, sha256_hex(token.as_bytes()), now],
             |row| row.get(0),
         )
         .map(Some)
@@ -147,6 +183,20 @@ pub fn presented(headers: &HeaderMap) -> Option<&str> {
         .filter_map(|value| value.to_str().ok())
         .flat_map(|line| line.split(';'))
         .find_map(|pair| pair.trim().strip_prefix(prefix.as_str()))
+}
+
+/// The token a request presents: the header, or for the event stream (which cannot set
+/// headers) `?t=`. Only that one path reads the query, so a token never rides in other URLs.
+pub fn presented_token<'a>(headers: &'a HeaderMap, uri: &'a axum::http::Uri) -> Option<&'a str> {
+    if let Some(value) = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok()) {
+        return Some(value);
+    }
+    if uri.path() != "/api/stream" {
+        return None;
+    }
+    uri.query()?
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("t="))
 }
 
 /// Remember the port this server bound, for `open`.
@@ -250,12 +300,61 @@ mod tests {
     fn a_nonce_trades_once_for_a_session() {
         let (_dir, conn) = hub();
         let nonce = issue_nonce(&conn).unwrap();
-        let secret = exchange(&conn, &nonce).unwrap().expect("first exchange");
-        assert_eq!(secret.len(), 43);
-        assert!(valid(&conn, &secret).unwrap());
+        let granted = exchange(&conn, &nonce).unwrap().expect("first exchange");
+        assert_eq!(granted.secret.len(), 43);
+        assert_eq!(granted.token.len(), 43);
+        assert_ne!(granted.secret, granted.token);
+        assert!(valid(&conn, &granted.secret, &granted.token).unwrap());
         assert!(exchange(&conn, &nonce).unwrap().is_none(), "single use");
         assert!(exchange(&conn, "wrong").unwrap().is_none());
-        assert!(!valid(&conn, "wrong").unwrap());
+        assert!(!valid(&conn, "wrong", &granted.token).unwrap());
+    }
+
+    #[test]
+    fn the_cookie_without_its_token_is_nobody() {
+        let (_dir, conn) = hub();
+        let nonce = issue_nonce(&conn).unwrap();
+        let granted = exchange(&conn, &nonce).unwrap().unwrap();
+        assert!(!valid(&conn, &granted.secret, "").unwrap());
+        assert!(!valid(&conn, &granted.secret, &granted.secret).unwrap());
+        let other = exchange(&conn, &issue_nonce(&conn).unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(
+            !valid(&conn, &granted.secret, &other.token).unwrap(),
+            "token of another session"
+        );
+    }
+
+    #[test]
+    fn sessions_from_before_tokens_stay_signed_out() {
+        let (_dir, conn) = hub();
+        conn.execute_batch(
+            "DROP TABLE dashboard_sessions;
+             CREATE TABLE dashboard_sessions (session_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL,
+               last_used_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+             INSERT INTO dashboard_sessions VALUES ('old', 1, 1, 9999999999999);",
+        )
+        .unwrap();
+        let granted = exchange(&conn, &issue_nonce(&conn).unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(valid(&conn, &granted.secret, &granted.token).unwrap());
+        assert!(!valid(&conn, "old", "").unwrap());
+    }
+
+    #[test]
+    fn revoking_a_session_ends_its_token() {
+        let (_dir, conn) = hub();
+        let mine = exchange(&conn, &issue_nonce(&conn).unwrap())
+            .unwrap()
+            .unwrap();
+        let theirs = exchange(&conn, &issue_nonce(&conn).unwrap())
+            .unwrap()
+            .unwrap();
+        revoke_others(&conn, &mine.secret).unwrap();
+        assert!(valid(&conn, &mine.secret, &mine.token).unwrap());
+        assert!(!valid(&conn, &theirs.secret, &theirs.token).unwrap());
     }
 
     #[test]
@@ -266,10 +365,10 @@ mod tests {
             .unwrap();
         assert!(exchange(&conn, &nonce).unwrap().is_none());
         let nonce = issue_nonce(&conn).unwrap();
-        let secret = exchange(&conn, &nonce).unwrap().unwrap();
+        let granted = exchange(&conn, &nonce).unwrap().unwrap();
         conn.execute("UPDATE dashboard_sessions SET expires_at = 1", [])
             .unwrap();
-        assert!(!valid(&conn, &secret).unwrap());
+        assert!(!valid(&conn, &granted.secret, &granted.token).unwrap());
     }
 
     #[test]

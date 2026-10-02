@@ -15,6 +15,7 @@ mod doorbell;
 mod end;
 pub mod fed;
 mod gate;
+mod guard;
 mod guide;
 mod hermes_hooks;
 mod hook;

@@ -2,9 +2,10 @@
 //! database plus a message sender; killing it loses nothing.
 //!
 //! Security: the Host header must name this loopback server (DNS rebinding), every POST
-//! needs this exact Origin, every `/api/*` route needs the owner's cookie session
-//! (`session`, P2P-SPEC §1), and the CSP allows self only. The page itself is public and
-//! holds no secret, so another local account sees only the sign-in screen.
+//! needs this exact Origin, every `/api/*` route needs the owner's cookie session AND its
+//! token (`session`, P2P-SPEC §1 and §12 C1), and the CSP allows self only. The page itself
+//! is public and holds no secret. The cookie alone is not enough: browsers send it to every
+//! port of 127.0.0.1, but the token lives in this origin's `localStorage` only.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -15,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -25,6 +26,8 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::watch;
 
+pub use crate::guard::require_owner;
+use crate::guard::{self, Credentials};
 use crate::memory::Sampler;
 use crate::observed::Observer;
 use crate::settings::{self, Federation};
@@ -221,14 +224,15 @@ async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Res
     let is_api = path.starts_with("/api/");
     let needs_session = is_api && path != "/api/session";
     let signed_in = if allowed && needs_session {
-        has_session(&app.db, request.headers()).await
+        let credentials = Credentials::of(request.headers(), request.uri());
+        guard::signed_in(&app.db, credentials).await
     } else {
         true
     };
     let mut response = if !allowed {
         StatusCode::FORBIDDEN.into_response()
     } else if !signed_in {
-        sign_in_required()
+        guard::sign_in_required()
     } else {
         next.run(request).await
     };
@@ -252,41 +256,6 @@ async fn guard(State(app): State<Arc<App>>, request: Request, next: Next) -> Res
     response
 }
 
-fn sign_in_required() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({"error": "sign_in", "hint": "run axon open"})),
-    )
-        .into_response()
-}
-
-/// Whether the request carries a live owner session. A database error is "not signed in":
-/// the guard fails closed.
-async fn has_session(db: &Path, headers: &HeaderMap) -> bool {
-    let Some(secret) = session::presented(headers).map(str::to_owned) else {
-        return false;
-    };
-    let db = db.to_owned();
-    tokio::task::spawn_blocking(move || session::valid(&store::open(&db)?, &secret))
-        .await
-        .is_ok_and(|checked| checked.unwrap_or(false))
-}
-
-/// Puts the owner session in front of every route of `routes` (the host binary's own API,
-/// merged beside the dashboard's, which guards itself).
-pub fn require_owner(routes: Router, db: &Path) -> Router {
-    routes.layer(middleware::from_fn_with_state(
-        db.to_owned(),
-        |State(db): State<PathBuf>, request: Request, next: Next| async move {
-            if has_session(&db, request.headers()).await {
-                next.run(request).await
-            } else {
-                sign_in_required()
-            }
-        },
-    ))
-}
-
 async fn index() -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -300,17 +269,17 @@ struct Login {
     nonce: String,
 }
 
-/// Trade a login nonce for the owner's session cookie. Wrong, used and expired nonces all
-/// answer the same 401.
+/// Trade a login nonce for the owner's session: the cookie, and the token the page must send
+/// with every request. Wrong, used and expired nonces all answer the same 401.
 async fn create_session(State(app): State<Arc<App>>, Json(login): Json<Login>) -> Response {
     let db = app.db.clone();
     let traded =
         tokio::task::spawn_blocking(move || session::exchange(&store::open(&db)?, &login.nonce))
             .await;
     match traded {
-        Ok(Ok(Some(secret))) => (
-            StatusCode::NO_CONTENT,
-            [(header::SET_COOKIE, session::cookie_header(&secret))],
+        Ok(Ok(Some(granted))) => (
+            [(header::SET_COOKIE, session::cookie_header(&granted.secret))],
+            Json(json!({"token": granted.token})),
         )
             .into_response(),
         Ok(Ok(None)) => {
@@ -351,6 +320,8 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn stream(
     State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    uri: Uri,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let updates = futures_util::stream::unfold(
         (app.snapshots.clone(), true),
@@ -366,7 +337,10 @@ async fn stream(
         },
     );
     let federation = fed::api::events(app.db.clone(), app.federation.clone());
-    Sse::new(futures_util::stream::select(updates, federation)).keep_alive(KeepAlive::default())
+    let signed_out = guard::signed_out(app.db.clone(), Credentials::of(&headers, &uri));
+    let events = futures_util::stream::select(updates, federation);
+    Sse::new(futures_util::StreamExt::take_until(events, signed_out))
+        .keep_alive(KeepAlive::default())
 }
 
 /// A message from the human node, sent as `from_id` along the same edges as any agent.

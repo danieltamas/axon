@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS login_nonces (
 
 CREATE TABLE IF NOT EXISTS dashboard_sessions (
     session_hash TEXT PRIMARY KEY,
+    token_hash   TEXT NOT NULL,
     created_at   INTEGER NOT NULL,
     last_used_at INTEGER NOT NULL,
     expires_at   INTEGER NOT NULL
