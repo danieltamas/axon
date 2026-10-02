@@ -163,6 +163,14 @@ fn enqueue(
         Some((peer_id, _, generation)) => (peer_id, generation),
     };
     let tx = store::write_tx(conn)?;
+    let remote_paused: bool = tx.query_row(
+        "SELECT remote_paused FROM peers WHERE peer_id=?1",
+        [&peer_id],
+        |r| r.get(0),
+    )?;
+    if remote_paused {
+        return Ok(Err("peer_paused"));
+    }
     let share_id: Option<String> = match &pinned {
         Some(pin) => Some(pin.share_id.to_owned()),
         None => tx

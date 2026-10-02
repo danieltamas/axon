@@ -105,15 +105,25 @@ pub fn resume(conn: &mut Connection, peer_id: &str) -> anyhow::Result<Change> {
 /// told us about its sessions is forgotten. Delivered messages and the audit stay, keyed by
 /// the peer's immutable identity. Removal is local authority: the peer is not asked.
 pub fn remove(conn: &mut Connection, peer_id: &str) -> anyhow::Result<Change> {
+    remove_because(conn, peer_id, "removed")
+}
+
+/// `remove`, recording why: `removed` when the owner did it, `remote_removed` when the peer's
+/// notice did. The effects are the same, because a peer that ended the pairing is gone either way.
+pub fn remove_because(
+    conn: &mut Connection,
+    peer_id: &str,
+    reason: &str,
+) -> anyhow::Result<Change> {
     let tx = store::write_tx(conn)?;
     let change = match find(&tx, peer_id)? {
         None => Change::Unknown,
         Some((_, state)) if state == "removed" => Change::Unknown,
         Some((peer, _)) => {
             tx.execute(
-                "UPDATE peers SET state='removed', removed_at=?2, removed_reason='removed'
+                "UPDATE peers SET state='removed', removed_at=?2, removed_reason=?3
                  WHERE peer_id=?1",
-                params![peer_id, now_ms()],
+                params![peer_id, now_ms(), reason],
             )?;
             for share in shares::of_peer(&tx, peer_id)? {
                 shares::remove(&tx, &share.share_id)
@@ -133,7 +143,15 @@ pub fn remove(conn: &mut Connection, peer_id: &str) -> anyhow::Result<Change> {
                 "DELETE FROM fed_remote_sessions WHERE peer_id=?1",
                 [peer_id],
             )?;
-            audit_decision(&tx, &peer, "removed")?;
+            audit_decision(
+                &tx,
+                &peer,
+                if reason == "removed" {
+                    "removed"
+                } else {
+                    reason
+                },
+            )?;
             Change::Done(peer)
         }
     };

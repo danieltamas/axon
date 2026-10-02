@@ -14,6 +14,7 @@ mod lifecycle;
 mod lock;
 mod outbox;
 pub mod pairing;
+mod rate;
 mod receive;
 pub mod remote;
 pub mod service;

@@ -5,12 +5,8 @@
 use rusqlite::{params, Connection};
 use serde_json::json;
 
-use super::now_ms;
+use super::{now_ms, rate};
 use crate::store;
-
-/// Rejections written per peer per minute; past it they are not recorded, so a peer that
-/// floods us cannot also flood the audit.
-const REJECTIONS_PER_MINUTE: i64 = 10;
 
 pub struct Decision<'a> {
     pub peer_fingerprint: Option<&'a str>,
@@ -24,19 +20,11 @@ pub struct Decision<'a> {
 }
 
 /// Record `decision` in the caller's transaction. A rejection past the per-minute budget of
-/// its peer is dropped.
+/// its peer is dropped, so a peer that floods us cannot also flood the audit.
 pub fn record(conn: &Connection, d: &Decision) -> anyhow::Result<()> {
     let ts = now_ms();
-    if d.decision == "rejected" {
-        let recent: i64 = conn.query_row(
-            "SELECT count(*) FROM fed_audit WHERE decision='rejected' AND ts > ?2
-               AND peer_fingerprint IS ?1",
-            params![d.peer_fingerprint, ts - 60_000],
-            |r| r.get(0),
-        )?;
-        if recent >= REJECTIONS_PER_MINUTE {
-            return Ok(());
-        }
+    if d.decision == "rejected" && !rate::may_audit_rejection(conn.path(), d.peer_fingerprint) {
+        return Ok(());
     }
     conn.execute(
         "INSERT INTO fed_audit (ts,peer_fingerprint,generation,share_id,message_id,direction,decision,reason)

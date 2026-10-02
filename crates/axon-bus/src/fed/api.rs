@@ -320,6 +320,8 @@ fn peer_json(row: &PeerRow, own: Option<&EndpointId>, live: Option<Value>) -> Va
         peer["state"] = json!(row.state);
     }
     peer["label"] = json!(row.label);
+    peer["remote_paused"] = json!(row.remote_paused && row.state != "removed");
+    peer["removed_reason"] = json!(row.removed_reason);
     if peer["last_error"].is_null() {
         peer["last_error"] = json!(row.last_error);
     }

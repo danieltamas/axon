@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use super::audit::{self, Decision};
 use super::envelope::{self, CLOCK_SKEW_MS, KINDS, LIFETIME_MS};
 use super::service::{FrameHandler, Handle};
-use super::{identity, now_ms, random_id, shares};
+use super::{identity, now_ms, random_id, rate, shares};
 use crate::session::sha256_hex;
 use crate::store;
 
@@ -63,7 +63,7 @@ impl Msg {
 }
 
 /// A token bucket: `burst` at most, refilled at `per_second`.
-struct Bucket {
+pub(super) struct Bucket {
     tokens: f64,
     at: Instant,
 }
@@ -75,7 +75,12 @@ pub struct Limits {
     recipients: Mutex<HashMap<String, Bucket>>,
 }
 
-fn take(buckets: &Mutex<HashMap<String, Bucket>>, key: &str, per_second: f64, burst: f64) -> bool {
+pub(super) fn take(
+    buckets: &Mutex<HashMap<String, Bucket>>,
+    key: &str,
+    per_second: f64,
+    burst: f64,
+) -> bool {
     let mut buckets = buckets.lock().unwrap_or_else(|p| p.into_inner());
     let now = Instant::now();
     let bucket = buckets.entry(key.to_owned()).or_insert(Bucket {
@@ -158,6 +163,10 @@ fn receive(conn: &mut Connection, limits: &Limits, node: &str, msg: Msg) -> anyh
         reason,
     };
     let reply = match verdict {
+        Verdict::Reject("rate_limited") => {
+            rate::count_refused(node);
+            ack("rejected", Some("rate_limited"))
+        }
         Verdict::Reject(reason) => {
             audit::record(&tx, &decision("rejected", Some(reason)))?;
             ack("rejected", Some(reason))

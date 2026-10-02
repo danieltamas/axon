@@ -63,9 +63,14 @@ async fn pause(State(api): State<Arc<FedApi>>, Path(peer_id): Path<String>) -> D
 async fn resume(State(api): State<Arc<FedApi>>, Path(peer_id): Path<String>) -> Done {
     let db = api.db.clone();
     let change = blocking(move || lifecycle::resume(&mut store::open(&db)?, &peer_id)).await?;
-    applied(change, Fail::WrongState)?;
+    let peer = applied(change, Fail::WrongState)?;
     if let Some(handle) = api.federation.handle().await {
         handle.reload();
+        tokio::spawn(pairing::notify_resumed(
+            handle,
+            peer.node_id,
+            peer.generation,
+        ));
     }
     Ok(StatusCode::NO_CONTENT)
 }

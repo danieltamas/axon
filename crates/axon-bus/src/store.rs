@@ -181,13 +181,12 @@ BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
 -- with the dashboard login code.
 CREATE TABLE IF NOT EXISTS peers (
   peer_id TEXT PRIMARY KEY,            -- random, local
-  node_id TEXT NOT NULL,               -- remote iroh public key
-  label TEXT NOT NULL,
+  node_id TEXT NOT NULL, label TEXT NOT NULL,   -- node_id: remote iroh public key
   generation INTEGER NOT NULL,         -- new on every pairing of this node_id
   state TEXT NOT NULL CHECK (state IN ('pending_confirm','active','paused','removed')),
   local_confirmed_at INTEGER, remote_confirmed_at INTEGER,
   paired_at INTEGER NOT NULL, paused_at INTEGER, removed_at INTEGER, removed_reason TEXT,
-  last_error TEXT
+  last_error TEXT, remote_paused INTEGER NOT NULL DEFAULT 0   -- 1 while the peer has us paused
 );
 CREATE UNIQUE INDEX IF NOT EXISTS peers_live_node ON peers(node_id) WHERE state <> 'removed';
 -- Direct addresses last seen on an authenticated connection from the peer (never a claim the
@@ -293,6 +292,7 @@ fn add_missing_columns(conn: &Connection) -> rusqlite::Result<()> {
         ("usage", "received_at", "INTEGER"),
         ("messages", "sent_at", "INTEGER"),
         ("fed_inbox", "share_id", "TEXT"),
+        ("peers", "remote_paused", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",

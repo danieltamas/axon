@@ -15,7 +15,7 @@ use super::{identity, now_ms, random_id};
 use crate::store;
 
 pub use join::{join, JoinError};
-pub use wire::{install, notify_removed, send_confirmed};
+pub use wire::{install, notify_removed, notify_resumed, send_confirmed};
 
 /// A pairing not confirmed on both sides within this long is removed.
 pub const CONFIRM_WINDOW_MS: i64 = 600_000;
@@ -43,11 +43,14 @@ pub struct PeerRow {
     pub generation: i64,
     pub state: String,
     pub last_error: Option<String>,
+    pub removed_reason: Option<String>,
+    pub remote_paused: bool,
 }
 
 pub fn all_peers(conn: &Connection) -> rusqlite::Result<Vec<PeerRow>> {
     let mut stmt = conn.prepare(
-        "SELECT peer_id, node_id, label, generation, state, last_error FROM peers
+        "SELECT peer_id, node_id, label, generation, state, last_error, removed_reason, remote_paused
+         FROM peers
          ORDER BY paired_at, peer_id",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -58,6 +61,8 @@ pub fn all_peers(conn: &Connection) -> rusqlite::Result<Vec<PeerRow>> {
             generation: r.get(3)?,
             state: r.get(4)?,
             last_error: r.get(5)?,
+            removed_reason: r.get(6)?,
+            remote_paused: r.get(7)?,
         })
     })?;
     rows.collect()

@@ -347,7 +347,7 @@ impl Handle {
             .handlers
             .write()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(kind.to_owned(), handler);
+            .insert(kind.to_owned(), super::rate::limited(handler));
     }
 
     /// Send one request frame to a connected peer and wait for its one response.

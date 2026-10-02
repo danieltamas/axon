@@ -112,7 +112,7 @@ fn due(conn: &mut Connection, now: i64) -> anyhow::Result<Vec<Due>> {
         "SELECT o.message_id, o.peer_id, o.share_id, o.from_agent, p.node_id, o.generation,
                 o.envelope_json, o.attempts
          FROM fed_outbox o JOIN peers p ON p.peer_id=o.peer_id
-         WHERE o.state='queued' AND p.state='active'
+         WHERE o.state='queued' AND p.state='active' AND p.remote_paused=0
            AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?1)
          ORDER BY o.created_at, o.rowid LIMIT ?2",
     )?;
@@ -168,7 +168,8 @@ fn gate(conn: &Connection, row: &mut Due) -> anyhow::Result<Gate> {
     }
     let peer: Option<(String, i64)> = conn
         .query_row(
-            "SELECT state, generation FROM peers WHERE peer_id=?1",
+            "SELECT CASE WHEN remote_paused THEN 'paused' ELSE state END, generation
+             FROM peers WHERE peer_id=?1",
             [&row.peer_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -277,7 +278,9 @@ fn judge(answer: &anyhow::Result<Value>) -> Verdict {
         // A busy receiver says nothing about the message itself: try again later.
         (Some("ack"), Some("rejected")) if reason == "rate_limited" => Verdict::Retry,
         (Some("ack"), _) => Verdict::Rejected(reason),
-        (Some("error"), _) if reason == "unavailable" => Verdict::Retry,
+        (Some("error"), _) if matches!(reason.as_str(), "unavailable" | "rate_limited") => {
+            Verdict::Retry
+        }
         _ => Verdict::Rejected(reason),
     }
 }

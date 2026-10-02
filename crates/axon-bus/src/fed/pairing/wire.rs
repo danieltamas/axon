@@ -12,24 +12,35 @@ use tokio::time::sleep;
 
 use super::admit::pair_handler;
 use super::{expire_stale, CONFIRM_WINDOW_MS, NOTICE_TRIES, RETRY_EVERY, SWEEP_EVERY};
-use crate::fed::now_ms;
 use crate::fed::service::{FrameHandler, Handle, Link};
+use crate::fed::{lifecycle, now_ms};
 use crate::store;
 
 /// Tell the other side a pairing was removed, retrying while the connection comes up, then
 /// let the service drop the peer. The service is reloaded only afterwards: reloading closes
 /// the connection the notice needs.
 pub async fn notify_removed(handle: Handle, node_id: String, generation: i64) {
-    if let Ok(node) = node_id.parse::<EndpointId>() {
-        let frame = json!({"type": "notice", "v": 1, "generation": generation, "what": "removed"});
-        for _ in 0..NOTICE_TRIES {
-            if handle.stopped() || handle.request(&node, &frame).await.is_ok() {
-                break;
-            }
-            sleep(RETRY_EVERY).await;
-        }
-    }
+    notify(&handle, &node_id, generation, "removed").await;
     handle.reload();
+}
+
+/// Tell the other side the pairing is usable again, so it stops showing it paused. It
+/// retries like `notify_removed`: a peer that never hears this keeps refusing to send.
+pub async fn notify_resumed(handle: Handle, node_id: String, generation: i64) {
+    notify(&handle, &node_id, generation, "resumed").await;
+}
+
+async fn notify(handle: &Handle, node_id: &str, generation: i64, what: &str) {
+    let Ok(node) = node_id.parse::<EndpointId>() else {
+        return;
+    };
+    let frame = json!({"type": "notice", "v": 1, "generation": generation, "what": what});
+    for _ in 0..NOTICE_TRIES {
+        if handle.stopped() || handle.request(&node, &frame).await.is_ok() {
+            return;
+        }
+        sleep(RETRY_EVERY).await;
+    }
 }
 
 /// Send our `confirmed` frame until the other side acknowledges it. It ends when the peer is
@@ -116,37 +127,51 @@ fn remote_confirmed(conn: &mut Connection, node: &str, generation: i64) -> anyho
     Ok(reply)
 }
 
-/// The other side rejected or abandoned the pairing while it was pending. A peer we are
-/// already paired with only informs us: ending a pairing is each owner's own decision.
+/// The other side rejected or abandoned the pairing while it was pending, or removed it
+/// after it was live: either way it is over, and a live one ends exactly as if the owner had
+/// removed it, recording `remote_removed` so the UI can say who ended it.
 fn remote_removed(conn: &mut Connection, node: &str, generation: i64) -> anyhow::Result<Value> {
     let changed = conn.execute(
         "UPDATE peers SET state='removed', removed_at=?1, removed_reason='remote_rejected'
          WHERE node_id=?2 AND generation=?3 AND state='pending_confirm'",
         params![now_ms(), node, generation],
     )?;
-    Ok(if changed > 0 || is_paired(conn, node, generation)? {
-        json!({"type": "ack", "status": "accepted"})
-    } else {
-        error("not_pending")
-    })
+    if changed > 0 {
+        return Ok(json!({"type": "ack", "status": "accepted"}));
+    }
+    let live: Option<String> = conn
+        .query_row(
+            "SELECT peer_id FROM peers WHERE node_id=?1 AND generation=?2
+             AND state IN ('active','paused')",
+            params![node, generation],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(peer_id) = live else {
+        return Ok(error("not_pending"));
+    };
+    lifecycle::remove_because(conn, &peer_id, "remote_removed")?;
+    Ok(json!({"type": "ack", "status": "accepted"}))
 }
 
-/// The other side paused the pairing. Nothing changes here; the answer says it was heard.
-fn remote_paused(conn: &mut Connection, node: &str, generation: i64) -> anyhow::Result<Value> {
-    Ok(if is_paired(conn, node, generation)? {
+/// The other side paused (or resumed) the pairing: remember it, so sends are refused with
+/// `peer_paused` and the UI says who paused. Our own state does not change.
+fn set_remote_paused(
+    conn: &mut Connection,
+    node: &str,
+    generation: i64,
+    paused: bool,
+) -> anyhow::Result<Value> {
+    let changed = conn.execute(
+        "UPDATE peers SET remote_paused=?3 WHERE node_id=?1 AND generation=?2
+         AND state IN ('active','paused')",
+        params![node, generation, paused],
+    )?;
+    Ok(if changed > 0 {
         json!({"type": "ack", "status": "accepted"})
     } else {
         error("unknown_peer")
     })
-}
-
-fn is_paired(conn: &Connection, node: &str, generation: i64) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM peers WHERE node_id=?1 AND generation=?2
-                       AND state IN ('active','paused'))",
-        params![node, generation],
-        |r| r.get(0),
-    )
 }
 
 /// What a handler does to the database for one parsed frame: `(connection, sender's node id,
@@ -204,7 +229,8 @@ pub fn install(handle: &Handle, db: &Path) {
             link,
             |conn, node, generation, what| match what {
                 Some("removed") => remote_removed(conn, node, generation),
-                Some("paused") => remote_paused(conn, node, generation),
+                Some("paused") => set_remote_paused(conn, node, generation, true),
+                Some("resumed") => set_remote_paused(conn, node, generation, false),
                 _ => Ok(error("unsupported_notice")),
             },
         ),
@@ -251,3 +277,6 @@ fn unsent_confirmations(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let rows = stmt.query_map(params![now_ms(), CONFIRM_WINDOW_MS], |r| r.get(0))?;
     rows.collect()
 }
+
+#[cfg(test)]
+mod tests;

@@ -4,8 +4,8 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
-use super::identity;
 use super::pairing::PeerRow;
+use super::{identity, rate};
 
 /// `{count, bytes, oldest_at}` of the messages still queued for `peer_id`.
 pub fn queue(conn: &Connection, peer_id: &str) -> rusqlite::Result<Value> {
@@ -48,7 +48,7 @@ pub fn counters(conn: &Connection, peer: &PeerRow) -> rusqlite::Result<Value> {
                 "sent_accepted": r.get::<_, i64>(0)?,
                 "received": r.get::<_, i64>(1)?,
                 "expired": r.get::<_, i64>(2)?,
-                "rejected": r.get::<_, i64>(3)?,
+                "rejected": r.get::<_, i64>(3)? + rate::refused(&peer.node_id) as i64,
                 "cancelled": r.get::<_, i64>(4)?,
             }))
         },

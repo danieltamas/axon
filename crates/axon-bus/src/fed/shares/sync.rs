@@ -96,6 +96,11 @@ fn target(db: &Path, share_id: &str, update: bool) -> anyhow::Result<Option<(End
     }))
 }
 
+/// An error reason that says "ask again", not "no".
+fn transient(reason: &Value) -> bool {
+    matches!(reason.as_str(), Some("unavailable" | "rate_limited"))
+}
+
 /// Send `share_id`'s current state to its peer. `update` picks `share_update` over
 /// `share_accept` for an active share. Gives up after a few tries: the resend on the next
 /// connect covers a longer outage. An answer of any kind ends it; a refusal is final.
@@ -112,9 +117,9 @@ pub async fn push(handle: Handle, db: PathBuf, share_id: String, update: bool) {
         let Ok(Ok(Some((node, frame)))) = aim else {
             return;
         };
-        // An `unavailable` error means the peer could not look at the frame yet: ask again.
+        // A transient error means the peer could not look at the frame yet: ask again.
         match handle.request(&node, &frame).await {
-            Ok(reply) if !(reply["type"] == "error" && reply["reason"] == "unavailable") => return,
+            Ok(reply) if !(reply["type"] == "error" && transient(&reply["reason"])) => return,
             _ => {}
         }
         sleep(PUSH_RETRY).await;
