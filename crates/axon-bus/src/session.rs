@@ -123,30 +123,36 @@ pub fn exchange(conn: &Connection, nonce: &str) -> anyhow::Result<Option<Granted
     Ok(Some(granted))
 }
 
-/// Whether `secret` and `token` together name one live session; refreshes `last_used_at`
-/// when it is stale. The cookie without its token, or the other way round, is nobody.
+/// The `last_used_at` of the one live session `secret` and `token` together name. A pure
+/// read, so it cannot wait on a writer. The cookie without its token, or the reverse, is nobody.
+pub fn live(conn: &Connection, secret: &str, token: &str) -> anyhow::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT last_used_at FROM dashboard_sessions
+         WHERE session_hash = ?1 AND token_hash = ?2 AND expires_at > ?3",
+        params![
+            sha256_hex(secret.as_bytes()),
+            sha256_hex(token.as_bytes()),
+            store::now_ms()
+        ],
+        |row| row.get(0),
+    )
+    .map(Some)
+    .or_else(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(other.into()),
+    })
+}
+
+/// Whether the credentials name a live session; refreshes `last_used_at` when it is stale.
 pub fn valid(conn: &Connection, secret: &str, token: &str) -> anyhow::Result<bool> {
-    let now = store::now_ms();
-    let hash = sha256_hex(secret.as_bytes());
-    let last_used: Option<i64> = conn
-        .query_row(
-            "SELECT last_used_at FROM dashboard_sessions
-             WHERE session_hash = ?1 AND token_hash = ?2 AND expires_at > ?3",
-            params![hash, sha256_hex(token.as_bytes()), now],
-            |row| row.get(0),
-        )
-        .map(Some)
-        .or_else(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })?;
-    let Some(last_used) = last_used else {
+    let Some(last_used) = live(conn, secret, token)? else {
         return Ok(false);
     };
+    let now = store::now_ms();
     if now - last_used >= TOUCH_MS {
         conn.execute(
             "UPDATE dashboard_sessions SET last_used_at = ?2 WHERE session_hash = ?1",
-            params![hash, now],
+            params![sha256_hex(secret.as_bytes()), now],
         )?;
     }
     Ok(true)
@@ -207,6 +213,11 @@ pub fn record_port(conn: &Connection, port: u16) -> anyhow::Result<()> {
         params![PORT_KEY, port.to_string()],
     )?;
     Ok(())
+}
+
+/// `record_port` for a caller that has no connection yet (the root binary, before it binds).
+pub fn remember_port(db: &std::path::Path, port: u16) -> anyhow::Result<()> {
+    record_port(&store::open(db)?, port)
 }
 
 pub fn login_url(port: u16, nonce: &str) -> String {
@@ -294,6 +305,25 @@ mod tests {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
         assert_eq!(base64url(b"Ma"), "TWE");
         assert_eq!(base64url(&[0xfb, 0xff]), "-_8");
+    }
+
+    #[test]
+    fn live_reads_a_session_without_touching_it() {
+        let (_dir, conn) = hub();
+        let nonce = issue_nonce(&conn).unwrap();
+        let granted = exchange(&conn, &nonce).unwrap().unwrap();
+        conn.execute("UPDATE dashboard_sessions SET last_used_at = 1", [])
+            .unwrap();
+        assert_eq!(
+            live(&conn, &granted.secret, &granted.token).unwrap(),
+            Some(1)
+        );
+        assert_eq!(live(&conn, &granted.secret, "x").unwrap(), None);
+        assert!(valid(&conn, &granted.secret, &granted.token).unwrap());
+        assert_ne!(
+            live(&conn, &granted.secret, &granted.token).unwrap(),
+            Some(1)
+        );
     }
 
     #[test]

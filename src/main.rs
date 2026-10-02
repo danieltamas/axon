@@ -123,13 +123,14 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
     let db = db_path();
     axon_bus::init(&db)?;
+    // Everything slower than this runs after the port is open; `open --print` already resolves it.
+    axon_bus::session::remember_port(&db, cli.port)?;
+    let listener = server::bind(addr).await?;
     // Installing Axon is the whole setup: each harness is wired to this binary once.
     if !cli.no_hooks {
         axon_bus::ensure_hooks();
     }
     let (dashboard, federation) = axon_bus::serve::router(&db, cli.port, !cli.no_content)?;
-    // Bound only after the router recorded the port: whoever sees the port open can resolve its link.
-    let listener = server::bind(addr).await?;
     let link = axon_bus::session::login_link(&db, cli.port)?;
     println!("Dashboard: {link}");
     spawn_refresher(state.clone());
