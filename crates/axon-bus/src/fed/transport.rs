@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use iroh::endpoint::{AfterHandshakeOutcome, Connection, EndpointHooks, VarInt};
+use iroh::endpoint::{AfterHandshakeOutcome, Connection, EndpointHooks, SendStream, VarInt};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{EndpointAddr, EndpointId};
 use serde_json::{json, Value};
@@ -16,9 +16,9 @@ use tokio::time::{interval, sleep, timeout, MissedTickBehavior};
 
 use super::codec::{read_frame, write_frame};
 use super::health::Path;
-use super::reconcile;
 use super::service::{Access, Shared};
 use super::{now_ms, FED_ALPN, PAIR_ALPN};
+use super::{rate, reconcile};
 use crate::store;
 
 /// Close codes, so a peer's log says why it was dropped.
@@ -75,12 +75,17 @@ impl fmt::Debug for FedProtocol {
 impl ProtocolHandler for FedProtocol {
     async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
         let node = conn.remote_id();
-        while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+        while let Ok((send, mut recv)) = conn.accept_bi().await {
             // Re-checked per stream: a peer paused or removed since the handshake is cut off.
             let Some(access) = self.0.access_of(&node).filter(Access::is_live) else {
                 conn.close(VarInt::from_u32(CLOSE_NOT_A_PEER), b"not a peer");
                 break;
             };
+            if !rate::admit(&self.0.admission, &node.to_string()) {
+                let busy = json!({"type": "error", "reason": "rate_limited"});
+                tokio::spawn(respond(send, busy));
+                continue;
+            }
             self.0.note_paths(&node, &conn);
             let (shared, conn) = (self.0.clone(), conn.clone());
             tokio::spawn(async move {
@@ -90,14 +95,18 @@ impl ProtocolHandler for FedProtocol {
                     _ => return conn.close(VarInt::from_u32(CLOSE_BAD_FRAME), b"bad frame"),
                 };
                 let response = shared.dispatch(&node, &access, request).await;
-                if write_frame(&mut send, &response).await.is_ok() {
-                    let _ = send.finish();
-                    // Hold the connection until the requester has read the answer.
-                    let _ = timeout(REQUEST_TIMEOUT, send.stopped()).await;
-                }
+                respond(send, response).await;
             });
         }
         Ok(())
+    }
+}
+
+/// Write the answer and hold the stream until the requester has read it.
+async fn respond(mut send: SendStream, response: Value) {
+    if write_frame(&mut send, &response).await.is_ok() {
+        let _ = send.finish();
+        let _ = timeout(REQUEST_TIMEOUT, send.stopped()).await;
     }
 }
 

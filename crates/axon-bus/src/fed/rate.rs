@@ -15,6 +15,12 @@ use super::service::FrameHandler;
 /// Frames per second one peer may send of one kind, and the burst allowed.
 const FRAMES_PER_SECOND: f64 = 10.0;
 const FRAME_BURST: f64 = 20.0;
+/// Streams per second one peer may open at all, of any kind: the bound on what it can make
+/// the service persist or dispatch before a handler's own rate applies.
+const STREAMS_PER_SECOND: f64 = 50.0;
+const STREAM_BURST: f64 = 100.0;
+
+pub type Buckets = Arc<Mutex<HashMap<String, Bucket>>>;
 /// Rejections written to one database's audit per peer per window; the rest are only counted.
 const REJECTIONS_PER_WINDOW: u32 = 10;
 const WINDOW: Duration = Duration::from_secs(60);
@@ -38,17 +44,31 @@ pub fn refused(fingerprint: &str) -> u64 {
     locked(&REFUSED).get(fingerprint).copied().unwrap_or(0)
 }
 
+fn refuse(node: &str) {
+    count_refused(
+        &node
+            .parse()
+            .map_or(node.to_owned(), |id| identity::fingerprint(&id)),
+    );
+}
+
+/// Whether `node` may open one more stream now. Checked before anything is persisted or
+/// dispatched, so built-in and unknown frame types are covered too; a refusal is counted.
+pub fn admit(buckets: &Buckets, node: &str) -> bool {
+    let admitted = take(buckets, node, STREAMS_PER_SECOND, STREAM_BURST);
+    if !admitted {
+        refuse(node);
+    }
+    admitted
+}
+
 /// `handler` behind a per-peer rate, checked before the handler does anything: a peer over
 /// it gets `rate_limited` without a database write.
 pub fn limited(handler: FrameHandler) -> FrameHandler {
-    let buckets: Arc<Mutex<HashMap<String, Bucket>>> = Arc::default();
+    let buckets = Buckets::default();
     Arc::new(move |node: String, frame: Value| {
         if !take(&buckets, &node, FRAMES_PER_SECOND, FRAME_BURST) {
-            count_refused(
-                &node
-                    .parse()
-                    .map_or(node.clone(), |id| identity::fingerprint(&id)),
-            );
+            refuse(&node);
             return Box::pin(async { json!({"type": "error", "reason": "rate_limited"}) });
         }
         handler(node, frame)
@@ -105,5 +125,14 @@ mod tests {
             may_audit_rejection(Some("db-b"), Some("fp")),
             "per database"
         );
+    }
+
+    #[test]
+    fn a_peer_over_the_stream_rate_is_refused_whatever_it_sends_and_counted() {
+        let buckets = Buckets::default();
+        let admitted = (0..300).filter(|_| admit(&buckets, "stream-hog")).count();
+        assert!((100..300).contains(&admitted), "{admitted}");
+        assert!(admit(&buckets, "someone-else"));
+        assert!(refused("stream-hog") >= 200 - 5);
     }
 }

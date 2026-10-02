@@ -91,6 +91,7 @@ pub struct Shared {
     changed: watch::Sender<u64>,
     pub(super) reload: Notify,
     pub(super) stop_manager: Notify,
+    pub(super) admission: super::rate::Buckets,
     /// Held shared by the outbox from its authorization re-check until the frame is written,
     /// and exclusively by a local commit that withdraws authority (pause, remove, unshare,
     /// flags): once that commit returns, nothing authorised before it is still to be sent.
@@ -412,6 +413,7 @@ async fn try_start(data_dir: &Path, db_path: &Path) -> anyhow::Result<Option<Han
         changed,
         reload: Notify::new(),
         stop_manager: Notify::new(),
+        admission: Default::default(),
         transmit_gate: Arc::default(),
     });
     let router = Router::builder(endpoint)
