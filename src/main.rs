@@ -312,28 +312,24 @@ fn load_pricing() -> Pricing {
     Pricing::bundled()
 }
 
-fn home() -> std::path::PathBuf {
-    std::env::var_os("HOME").map(Into::into).unwrap_or_default()
-}
-
 fn config_dir() -> std::path::PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(Into::into)
-        .unwrap_or_else(|| home().join(".config"))
+        .unwrap_or_else(|| axon_core::home().join(".config"))
 }
 
 fn data_dir() -> std::path::PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .map(Into::into)
-        .unwrap_or_else(|| home().join(".local").join("share"))
+        .unwrap_or_else(|| axon_core::home().join(".local").join("share"))
 }
 
 fn claude_projects_dir() -> std::path::PathBuf {
-    home().join(".claude").join("projects")
+    axon_core::home().join(".claude").join("projects")
 }
 
 fn codex_sessions_dir() -> std::path::PathBuf {
-    home().join(".codex").join("sessions")
+    axon_core::home().join(".codex").join("sessions")
 }
 
 fn opencode_dir() -> std::path::PathBuf {

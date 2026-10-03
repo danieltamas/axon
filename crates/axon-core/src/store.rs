@@ -56,9 +56,7 @@ pub type Stamp = String;
 pub fn default_path() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
-        })
+        .unwrap_or_else(|| crate::home().join(".local/share"))
         .join("axon")
         .join("axon.db")
 }

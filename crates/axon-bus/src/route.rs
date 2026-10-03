@@ -215,9 +215,7 @@ fn routes_path() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-        })
+        .unwrap_or_else(|| axon_core::home().join(".config"))
         .join("axon/routes.toml")
 }
 
