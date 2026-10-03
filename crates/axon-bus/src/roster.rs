@@ -128,11 +128,24 @@ fn listed(agents: &Value) -> String {
         .join("; ")
 }
 
-/// The introduction `agent` gets: who it is on the bus, whom it can reach, and how.
+/// The introduction `agent` gets: who it is on the bus, whom it can reach, and how. `None`
+/// when it can reach no one yet.
 pub fn intro(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
     let Some(peers) = peers(conn, agent)? else {
         return Ok(None);
     };
+    let remote = crate::fed::discovery::remote_block(conn, agent)?;
+    let some = |key: &str| peers[key].as_array().is_some_and(|a| !a.is_empty());
+    let reachable = !peers["parent"].is_null()
+        || ["children", "linked", "link_proposals", "same_repo"]
+            .into_iter()
+            .any(some)
+        || remote.is_some();
+    // A lone session has no one to message, so the greeting would only cost it context. It
+    // stays unintroduced and is greeted on its first hook after someone appears.
+    if !reachable {
+        return Ok(None);
+    }
     let bus = crate::msg::bus_command();
     let mut text = format!(
         "You are connected to the axon bus as agent {agent}. Axon coordinates the coding \
@@ -189,7 +202,7 @@ pub fn intro(conn: &Connection, agent: &str) -> anyhow::Result<Option<String>> {
             ));
         }
     }
-    if let Some(remote) = crate::fed::discovery::remote_block(conn, agent)? {
+    if let Some(remote) = remote {
         text.push_str(&remote);
         text.push_str(&format!(
             "Write to one with: {bus} send --to <peer:...> --kind <sync|question|answer|ack> --body \"...\". \

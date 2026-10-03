@@ -135,6 +135,9 @@ pub enum Command {
         from: String,
         #[arg(long)]
         body: String,
+        /// Content by reference, e.g. a findings file `review/abc123.md`.
+        #[arg(long = "ref")]
+        refs: Vec<String>,
     },
     /// Propose a root-to-root link.
     Link {
@@ -144,7 +147,10 @@ pub enum Command {
         to: String,
     },
     /// The agent playbook: what Axon is and how to message, link, claim and stop.
-    Guide,
+    Guide {
+        /// A recipe instead of the playbook: `review` (ask another vendor's agent to review).
+        topic: Option<String>,
+    },
     /// Whom an agent can message now, and which sessions in its repo it could link with.
     Peers {
         #[arg(long)]

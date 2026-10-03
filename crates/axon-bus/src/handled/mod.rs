@@ -3,6 +3,7 @@
 //! over a share (P2P-SPEC §7b) and are filed beside local ones with `peer_id` set.
 
 pub mod api;
+pub mod cli;
 
 use std::path::Path;
 

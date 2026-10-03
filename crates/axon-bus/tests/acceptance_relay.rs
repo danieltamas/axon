@@ -456,14 +456,13 @@ fn grant_relay_injects_the_actor_and_opens_the_requested_thread() {
 fn two_sessions_link_accept_question_and_answer_through_hooks() {
     let bus = hub();
     git(&bus, &bus.root.join("work"), &["init"]);
-    for actor in ["S1", "S2"] {
-        let value = payload(&bus, "claude", "SessionStart", actor);
-        intro(&context(&bus, "claude", "SessionStart", &value), actor);
-    }
-    assert_eq!(
-        ids(&bus.json(&["peers", "--agent", "S1"]), "same_repo"),
-        ["S2"]
-    );
+    let first = payload(&bus, "claude", "SessionStart", "S1");
+    assert_allowed(&bus.hook("claude", "SessionStart", &first));
+    let second = payload(&bus, "claude", "SessionStart", "S2");
+    intro(&context(&bus, "claude", "SessionStart", &second), "S2");
+    intro(&delivered(&bus, "S1"), "S1");
+    let peers = bus.json(&["peers", "--agent", "S1"]);
+    assert_eq!(ids(&peers, "same_repo"), ["S2"]);
     ran(&bash(&bus, "S1", "axon bus link --to S2"));
     let notice = delivered(&bus, "S2");
     contains_all(&notice, &["S1", "accept --to S1"]);

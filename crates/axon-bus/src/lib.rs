@@ -71,40 +71,6 @@ fn hub(db: &std::path::Path) -> anyhow::Result<rusqlite::Connection> {
     store::open(db).context("no hub; run `axon-bus init`")
 }
 
-/// Run one ledger command in the caller's repository: exit 0 with its line, or 1 with the
-/// line that says who holds the key.
-fn ledger(
-    db: &std::path::Path,
-    run: impl FnOnce(
-        &rusqlite::Connection,
-        &str,
-        &str,
-        Option<String>,
-    ) -> anyhow::Result<handled::Outcome>,
-    key: &str,
-    note: Option<&str>,
-) -> anyhow::Result<ExitCode> {
-    let repo = handled::repo_of(&std::env::current_dir()?).map_err(Invalid)?;
-    let key = handled::key(key).map_err(Invalid)?;
-    let note = handled::note(note).map_err(Invalid)?;
-    let mut conn = hub(db)?;
-    handled::ensure(&conn)?;
-    let tx = store::write_tx(&mut conn)?;
-    handled::expire(&tx, store::now_ms())?;
-    let outcome = run(&tx, &repo, &key, note)?;
-    tx.commit()?;
-    Ok(match outcome {
-        handled::Outcome::Done(line) => {
-            println!("{line}");
-            ExitCode::SUCCESS
-        }
-        handled::Outcome::Refused(line) => {
-            println!("{line}");
-            ExitCode::FAILURE
-        }
-    })
-}
-
 /// Print a refused send and turn it into its exit code.
 fn refused(refused: msg::Refused) -> ExitCode {
     let (code, why) = msg::refused_error(refused);
@@ -132,6 +98,11 @@ pub fn init(db: &std::path::Path) -> anyhow::Result<()> {
 }
 
 pub use setup::ensure_hooks;
+
+/// The main repository holding `cwd`, worktrees resolving to it, as the dashboard keys it.
+pub fn repo_of(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    snapshot::repo_of(cwd)
+}
 
 /// Parse `args` (program name first) and run the command.
 pub fn cli_main<I, T>(args: I) -> ExitCode
@@ -299,13 +270,14 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             question,
             from,
             body,
+            refs,
         } => {
             let mut conn = hub(&db)?;
             if let Some(outcome) = fed::remote::reply(&mut conn, &question, &from, &body)? {
                 return Ok(remote_outcome(&outcome));
             }
             let tx = store::write_tx(&mut conn)?;
-            match msg::reply(&tx, &question, &from, &body)? {
+            match msg::reply(&tx, &question, &from, &body, &refs)? {
                 Ok((id, thread)) => {
                     tx.commit()?;
                     println!("{}", serde_json::json!({"id": id, "thread": thread}));
@@ -320,7 +292,9 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             msg::link_notice(&tx, &from, &to)?;
             tx.commit()?;
         }
-        Command::Guide => print!("{}", guide::text(&msg::bus_command())),
+        Command::Guide { topic } => {
+            print!("{}", guide::topic(topic.as_deref(), &msg::bus_command())?)
+        }
         Command::Peers { agent } => {
             let conn = hub(&db)?;
             let peers = roster::peers(&conn, &agent)?
@@ -376,7 +350,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             ttl,
         } => {
             let ttl = ttl.map_or(handled::DEFAULT_TTL_MS, |d| d.as_millis() as i64);
-            return ledger(
+            return handled::cli::run(
                 &db,
                 |tx, repo, key, note| handled::take(tx, repo, &agent, key, note, ttl),
                 &key,
@@ -384,7 +358,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             );
         }
         Command::Done { agent, key, note } => {
-            return ledger(
+            return handled::cli::run(
                 &db,
                 |tx, repo, key, note| handled::done(tx, repo, &agent, key, note),
                 &key,
@@ -392,7 +366,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             );
         }
         Command::Drop { agent, key } => {
-            return ledger(
+            return handled::cli::run(
                 &db,
                 |tx, repo, key, _| handled::drop_take(tx, repo, &agent, key),
                 &key,
@@ -404,7 +378,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             key: Some(key),
             ..
         } => {
-            return ledger(
+            return handled::cli::run(
                 &db,
                 |tx, repo, key, _| handled::check(tx, repo, agent.as_deref(), key),
                 &key,

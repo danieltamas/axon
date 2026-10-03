@@ -156,7 +156,7 @@ src/main.rs          clap dispatch only
 src/store.rs         schema, migrations, append-only events + hash chain, busy_timeout
 src/registry.rs      register / close / orphan sweep, status (active|idle|closed|orphaned), memory
 src/route.rs         message edges, links, grants; `route` (task → harness/model/effort)
-src/msg.rs           send / ask --wait / reply / inbox / doorbell files
+src/msg/             send / ask --wait / reply / inbox; stops.rs: stops and doorbell files
 src/claims.rs        path claims + overlap check (absorbs repo-sync's claim half)
 src/budget.rs        per-tree and per-agent ceilings, 80% warn, 100% stop
 src/usage/{claude,codex,opencode,hermes}.rs   incremental transcript tailers (byte offsets)
@@ -203,6 +203,23 @@ Nothing else without a written reason in the PR.
 ## 3. Message routing (deterministic)
 
 - Edges are parent ↔ child, plus root ↔ root over a `link`: proposed and accepted, or automatic within one repository (below). A send to anything else is rejected, and the error prints the route to take (`orch1 → orch2 → sub2`). The intermediate decides whether to forward. `grant --thread --ttl` opens a logged temporary direct edge; it only shortcuts an existing relay route, on a thread the granter has messaged, for at most 24 h (audit SEC-2).
+- **The introduction is only for a session with someone to reach (2026-10-03, decided).** A
+  session is greeted only when it has a parent, a live child, a link, a link proposal, a
+  same-repository session or a remote session. A lone session gets no greeting and stays
+  unintroduced. Its first hook after someone appears carries the greeting once. For Claude
+  that hook is SessionStart, SubagentStart, PostToolUse or UserPromptSubmit; for Codex,
+  PostToolUse or UserPromptSubmit; for Hermes, `pre_llm_call`; for OpenCode,
+  `tool.execute.after`. Hooks are unconditional (registration, delivery, stops, budgets,
+  dashboard); only the greeting text is gated.
+- **Cross-vendor review recipe (2026-10-03, decided).** `guide review` prints it. The
+  `guide [topic]` form exists because the playbook already fills one relayed reply (4000
+  characters); an unknown topic exits 2 naming the topics.
+  - The asker sends a `question` that carries a `--ref <path>@<sha>`.
+  - The reviewer answers with `reply <id> --body … --ref <findings-file>`. `reply` takes
+    `--ref` like `send`; the answer's `refs_json` starts with the question id, then the
+    files. `ask` finds the answer by that first element.
+  - The recipe needs a live session of the other harness: the bus delivers at the next hook
+    and does not start agents.
 - **Same-repository auto-link (2026-10-03, decided).** Two session roots are linked without a proposal when all of these hold: both were registered by a harness hook (harness `claude`, `codex`, `opencode` or `hermes`), both are `active` or `idle`, and both `cwd`s resolve with `repo_of` (a worktree resolves to its main repository) to the same repository on this machine. The link is computed at each check, never stored: it ends when either session closes or leaves the repository. A federation peer (`peer:` ids), the human node and any other harness never qualify, and subagents still reach another session through their roots. `route` counts these pairs as linked when it computes relay paths. The owner can switch it off: `GET /api/settings` reports `"bus": {"auto_link": true}` (default true), and `PUT /api/settings/bus {"auto_link": bool}` stores it (any other body: `400 {"error":"invalid","field":"auto_link"}`). Off, only proposed-and-accepted links join roots. Every other guard stays: the 400-character body cap, delivery as untrusted peer text, stop and budget denials. The SessionStart introduction lists these sessions under "Sessions in this repository (you can message them directly)" when auto-link is on, with one line on linking a session in another repository (`link --to`), and keeps the propose-a-link instruction when it is off.
 - A `stop` holds its addressee's whole subtree until the addressee's turn ends: stopping an orchestrator stops the workers it waits on (audit SEC-6, decided 2026-09-30).
 - Inside a governed session the gate checks each shell command that runs `axon-bus`: the acting agent (`--from`, `--agent`) must be the caller, and `budget set` and a capturing `serve` (any `serve` without `--no-content`) are the human's (audit SEC-1, decided 2026-09-30). Indirection through scripts or variables is not parsed; this stops forged calls, not a determined local attacker.
@@ -331,6 +348,7 @@ OpenRouter Fusion runs a panel of models and a judge that synthesises their answ
 - Different vendors on the panel and a judge from a different vendor than the author keep the writer≠judge rule structural.
 - Its cost is the subtree cost, so it counts against the budget like anything else.
 - `--fusion` is a cheap text-only variant. It calls OpenRouter Fusion directly (one HTTP call, no harness processes), for questions that need no repo access.
+- **Launch, observer and decision ledger: `docs/VIRTUAL-AGENT-SPEC.md`** (2026-10-03, Codex-reviewed). It ports `~/agent-os/council.sh` and supersedes it once shipped.
 
 ## 6. Budgets
 
