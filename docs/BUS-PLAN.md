@@ -202,7 +202,8 @@ Nothing else without a written reason in the PR.
 
 ## 3. Message routing (deterministic)
 
-- Edges are parent ↔ child, plus root ↔ root over a `link` that the other root must `accept`. A send to anything else is rejected, and the error prints the route to take (`orch1 → orch2 → sub2`). The intermediate decides whether to forward. `grant --thread --ttl` opens a logged temporary direct edge; it only shortcuts an existing relay route, on a thread the granter has messaged, for at most 24 h (audit SEC-2).
+- Edges are parent ↔ child, plus root ↔ root over a `link`: proposed and accepted, or automatic within one repository (below). A send to anything else is rejected, and the error prints the route to take (`orch1 → orch2 → sub2`). The intermediate decides whether to forward. `grant --thread --ttl` opens a logged temporary direct edge; it only shortcuts an existing relay route, on a thread the granter has messaged, for at most 24 h (audit SEC-2).
+- **Same-repository auto-link (2026-10-03, decided).** Two session roots are linked without a proposal when all of these hold: both were registered by a harness hook (harness `claude`, `codex`, `opencode` or `hermes`), both are `active` or `idle`, and both `cwd`s resolve with `repo_of` (a worktree resolves to its main repository) to the same repository on this machine. The link is computed at each check, never stored: it ends when either session closes or leaves the repository. A federation peer (`peer:` ids), the human node and any other harness never qualify, and subagents still reach another session through their roots. `route` counts these pairs as linked when it computes relay paths. The owner can switch it off: `GET /api/settings` reports `"bus": {"auto_link": true}` (default true), and `PUT /api/settings/bus {"auto_link": bool}` stores it (any other body: `400 {"error":"invalid","field":"auto_link"}`). Off, only proposed-and-accepted links join roots. Every other guard stays: the 400-character body cap, delivery as untrusted peer text, stop and budget denials. The SessionStart introduction lists these sessions under "Sessions in this repository (you can message them directly)" when auto-link is on, with one line on linking a session in another repository (`link --to`), and keeps the propose-a-link instruction when it is off.
 - A `stop` holds its addressee's whole subtree until the addressee's turn ends: stopping an orchestrator stops the workers it waits on (audit SEC-6, decided 2026-09-30).
 - Inside a governed session the gate checks each shell command that runs `axon-bus`: the acting agent (`--from`, `--agent`) must be the caller, and `budget set` and a capturing `serve` (any `serve` without `--no-content`) are the human's (audit SEC-1, decided 2026-09-30). Indirection through scripts or variables is not parsed; this stops forged calls, not a determined local attacker.
 - **Claude native sends are policed, not replaced.** A `PreToolUse` hook matching `SendMessage` reads `tool_input.to` and resolves the sender from `session_id` → registry (the payload carries no sender name). A non-edge send is denied with the route in `permissionDecisionReason`, which the model sees as the tool result (spike Q2). `PostToolUse` logs each allowed send.
@@ -215,6 +216,22 @@ Nothing else without a written reason in the PR.
   - OpenCode: `prompt_async {noReply:true}`.
   - Codex: `turn/steer` for app-server sessions.
   - Hermes: delivery at the next turn.
+
+## 3b. Handled ledger: work already taken or done (2026-10-03, decided)
+
+Claims cover files; the ledger covers work items that are not files (a lead contacted, an issue triaged, a URL crawled), so two agents never redo the same item politely.
+
+- **Scope.** One ledger per repository, as `repo_of` resolves the caller's `cwd` (worktrees share their main repository's ledger). A caller outside any repository gets `not in a repository`, exit 2.
+- **Key.** Chosen by the agents, for example `lead:acme`, `issue:142`, `url:https://example.com/a`. Trimmed; 1 to 200 characters; no control characters. Otherwise exit 2 with `invalid key`.
+- **Table** `handled (repo TEXT, key TEXT, state TEXT CHECK(state IN ('taken','done','free')), holder TEXT, agent_id TEXT, peer_id TEXT, note TEXT, at INTEGER, expires_at INTEGER, changed_at INTEGER, PRIMARY KEY(repo,key))`. A `free` row is the trace of a drop or an ended take, kept 7 days so the change can reach a peer; it reads as free. `holder` is what others read: the local agent id, or `peer:<peer label>/<label>` for a remote one. `note` is at most 400 characters.
+- **Commands** (as the calling agent; the gate's caller check applies):
+  - `axon bus take --key K [--note N] [--ttl D]`: take K, atomically. `D` is a duration (`30m`, `2h`), default 2h, at most 24h. Free, expired, or already yours (refreshes the take): prints `taken K`, exit 0. Held by another live taker: prints `taken by <holder> <age> ago: <note>`, exit 1. Done: prints `done by <holder> <age> ago: <note>`, exit 1.
+  - `axon bus done --key K [--note N]`: mark K done, taken first or not. Done already: prints the existing line, exit 1 (the first done stands). Held by another live taker: prints `taken by …`, exit 1. Otherwise prints `done K`, exit 0.
+  - `axon bus drop --key K`: give back your own take. Prints `dropped K`, exit 0; not yours or not taken: exit 1.
+  - `axon bus handled [--key K] [--prefix P]`: with `--key`, prints that entry's line and exits 0 when K is done or taken by someone else, 1 when it is free (or yours). Without, one JSON line per entry (`key, state, holder, note, at, expires_at`), newest first, at most 500.
+- **A take ends** when it expires, or when its local taker's status becomes `closed` or `orphaned`; the key is then free. A done entry is kept 90 days, then deleted. Each ledger command and the running server (every 10 s) apply this.
+- **Surfaces.** The SessionStart introduction says, for a root or subagent in a repository: `Before working an item others might also pick up (a lead, an issue, a URL), take it: {bus} take --key <kind:id>; mark it {bus} done --key <kind:id>.` The guide documents the four commands. The project view of the dashboard lists the ledger (`GET /api/handled?repo=<repo>` → `{entries:[…]}` as above, owner session required), newest first.
+- **Across machines** see P2P-SPEC §7b: entries travel over an active share both ways the share's flags allow, eventually consistent, with a deterministic winner on conflict.
 
 ## 4. Task routing: which harness, model and effort a new agent gets
 

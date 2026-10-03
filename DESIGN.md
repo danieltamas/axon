@@ -4,9 +4,11 @@
 
 > A single, self-contained **Rust binary** that turns the logs your AI coding-agents already write into a **live, harness-agnostic observability dashboard** in the browser — live activity, spend, speed, and *which agent/model did what*, with a three.js "brain" as the signature view and shareable cards. **100% local, zero infra, one binary.**
 
-> **Status (v0.3.0):** the ingest schemas (§6, Appendix A) still hold. The frontend sections
-> describe the original Vue/TresJS plan; the shipped dashboard is plain ES modules in
-> `crates/axon-bus/ui`, and the control plane is specified in [docs/BUS-PLAN.md](./docs/BUS-PLAN.md).
+> **Status (v0.4.4, 2026-10-03):** the ingest schemas (§6, Appendix A) still hold. The
+> frontend sections describe the original Vue/TresJS plan; the shipped dashboard is plain ES
+> modules in `crates/axon-bus/ui`. The system as built is in [ARCHITECTURE.md](./ARCHITECTURE.md),
+> dated changes in [LOG.md](./LOG.md), the control plane in [docs/BUS-PLAN.md](./docs/BUS-PLAN.md)
+> and machine-to-machine federation in [docs/P2P-SPEC.md](./docs/P2P-SPEC.md).
 
 > **This is a hand-off spec.** Copy it into the new `axon/` repo as `DESIGN.md` and execute. It assumes no prior context. **§6 + Appendix A are verified against real logs on the author's machine** — trust them over any prior recon.
 
@@ -64,6 +66,8 @@ Serious AI-coding now spans **multiple harnesses** (Claude Code, Codex, OpenCode
 ---
 
 ## 5. Architecture
+> Original ingest plan, still accurate for `axon-core`. The whole shipped system (control plane, hooks, federation, one dashboard) is in [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ```
  ~/.claude/projects/<sid>.jsonl ─┐  (+ <sid>/subagents/agent-*.jsonl + .meta.json)
  ~/.codex/sessions/**/*.jsonl    ┼─▶ ingest/parsers ─▶ normalize ─▶ Event ─┐
@@ -211,6 +215,8 @@ Rust: axum·tokio·rust-embed·notify·rusqlite(bundled)·serde·clap·webbrowse
 ---
 
 ## 12. Repo layout
+> Superseded: there is no `ui/` Vue app; the UI is `crates/axon-bus/ui` (plain ES modules, no build step). Current layout: [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ```
 axon/
 ├── Cargo.toml           # workspace root + the `axon` package
@@ -267,6 +273,8 @@ Cross-compile `aarch64/x86_64-apple-darwin`, `x86_64-unknown-linux-{gnu,musl}` (
 ---
 
 ## 17. The P2P / "anyone-can-host" global leaderboard — decision: **NO (v1), with a documented path**
+> Still NO for a global leaderboard. Separate from it, 0.4.0 shipped **private pairing between machines you or a teammate own** (iroh, pinned node ids, explicit per-repository shares; [docs/P2P-SPEC.md](./docs/P2P-SPEC.md)). It moves agent messages and the handled ledger, never public metrics, so the trust argument below is unaffected.
+
 - **Transport: feasible & genuinely torrent-like.** `rust-libp2p` GossipSub (fan-out) + Kademlia DHT (discovery) + signed append-only/CRDT records + baked-in bootstrap multiaddrs (= "anyone can host a seed node"). This is the easy 20%.
 - **Trust: the fatal 80%.** Every metric derives from logs the user fully controls and can edit. A signed P2P record proves *"this key claims X,"* never that X happened — **signing = origin, not truth.** "Anyone can join" ⇒ free identities ⇒ **Sybil-farmable.** Unsolvable without a **trusted attester** (the token issuer signing usage receipts), which **doesn't exist** today and a read-only local tool can't mint. ZK doesn't help (proves correct computation over an input, not that the input is real); PoW/stake taxes spam without making a forged number true. A global board also **breaks the "100% local" positioning**, needs accounts (a non-goal), and needs moderation.
 - **Ship instead:** local **share-cards + weekly recap** (the flex, zero trust) and a local **Hall of Fame** (compete vs yourself). *If* a social board is ever wanted, it's a **separate, opt-in, self-hostable instance you run** with server-side verification — **never** the local binary phoning home, **never** P2P (multiplies the trust problem with no arbiter), **never** marketed as cheat-resistant.

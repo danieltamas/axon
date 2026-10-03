@@ -90,7 +90,8 @@ the owner's approval, and before the tests that depend on it.
   "budgets":  { "eur_per_day": null, "eur_per_week": null, "eur_per_month": null },
   "hooks":    [{ "harness": "claude", "installed": true, "config_path": "…" }],
   "storage":  { "db_bytes": 0, "wal_bytes": 0, "sessions": 1 },
-  "federation": { "enabled": false, "relay": "default", "node_id": null, "fingerprint": null }
+  "federation": { "enabled": false, "relay": "default", "node_id": null, "fingerprint": null },
+  "bus":      { "auto_link": true }
 }
 ```
 - `forced_off` is true when the server was started with `--no-content`.
@@ -108,6 +109,7 @@ the owner's approval, and before the tests that depend on it.
 | `POST /api/settings/storage/compact` | none | `VACUUM`. `409 {"error":"busy"}` if the write lock cannot be taken within 1 s. |
 | `POST /api/settings/sessions/revoke_others` | none | Deletes every session except the current one. |
 | `PUT /api/settings/federation` | `{"enabled":bool}` or `{"relay":"default"\|"https://…"}` | See §3. |
+| `PUT /api/settings/bus` | `{"auto_link":bool}` | Stored in `settings` (`auto_link`). Same-repository sessions link without a proposal while true (BUS-PLAN §3). |
 
 ## 3. Identity and the service (U2, U3)
 
@@ -244,13 +246,18 @@ CREATE TABLE IF NOT EXISTS fed_audit (seq INTEGER PRIMARY KEY, ts INTEGER NOT NU
   picks; otherwise `400`.
 - The share is created as `offered_out`, and a `share_offer` frame carries
   `{share_id, label, revision, inbound, outbound, root_commit}`.
+- One project is one share: `409 already_shared` when the repo is already in a live share
+  with that peer, and `409 offered_to_you` when that peer has an `offered_in` share with the
+  same `root_commit` (accept it instead of offering back).
 
 **Receiving an offer.**
 - The other side records it as `offered_in`, with `local_repo = NULL`.
 - Settings suggests the local repo whose root commit equals `root_commit`; it is only a
-  suggestion.
+  suggestion. The peers list carries it as `suggested_repo` on an `offered_in` share (repos
+  with live agents, not already shared with that peer), and the accept form preselects it.
 - `POST /api/fed/shares/<share_id>/accept` with `{"local_repo","inbound","outbound"}`. The
-  share becomes `active` on both sides once the accept frame arrives.
+  share becomes `active` on both sides once the accept frame arrives. `409 already_shared`
+  when that repo is already in another live share with the same peer.
 
 **Changes.**
 - `PUT /api/fed/shares/<share_id>` with `{inbound, outbound}`.
@@ -279,12 +286,13 @@ pair of flags in its own direction.
   agent and one share, and never reused.
 - `label` is `<harness>-<4 chars of session>` (for example `claude-k3j9`); the owner cannot
   set it in v1.
-- `availability` is `active` or `idle`.
+- `availability` is `active` or `idle` on the wire. Locally a row can also be `away` (below).
 - Only registered (not observed-only), non-closed agents that are members of S are listed.
   Nothing else crosses: no model, mission, role, cwd, repo, branch, usage, budgets, claims,
   narrative or children.
-- Discovery is refreshed every 30 s and on `share_update`. Rows not seen for 60 s are
-  dropped from `fed_remote_sessions`.
+- Discovery is refreshed every 30 s and on `share_update`. A session the answer no longer
+  lists is dropped. A row not confirmed for 60 s (the peer is offline) turns `away` and stays
+  addressable for one message lifetime (24 h), so `send` queues for it; then it is dropped.
 
 **`axon bus peers`** adds, for an agent that belongs to an active share with
 `outbound = 1`:
@@ -308,6 +316,16 @@ Only the kinds `sync`, `question`, `answer` and `ack` may be sent remotely.
 
 **Reply.** `axon bus reply <local_message_id> --body "…"` to a remote question sends an
 `answer` with `reply_to` set to the remote's `message_id`. Only the addressee may reply.
+
+## 7b. The handled ledger over a share
+
+The local ledger (BUS-PLAN §3b) of a share's `local_repo` travels to the peer when the share is `active`, `outbound = 1` on the sending side and `remote_inbound = 1`; the receiver files the entries under its own `local_repo` for that share.
+
+- **Frame** `handled` `{share_id, entries:[{key, state, label, note, at, expires_at}]}`, at most 200 entries per frame, answered `{type:"handled_ack"}` or an `error`. `label` is the discovery label of the holder (`<harness>-<4 chars>`); no agent id, model, cwd or anything else crosses. `state` is `taken`, `done` or `free` (a drop, an expiry or a taker that closed).
+- **When.** On every local change to an entry of that repo (pushed at once when connected), and on connect and after `share_accept` as a full send of live entries (taken and unexpired, or done). A peer answering `unknown_frame` (an older version) is skipped until the next connect.
+- **Applying.** The receiver stores a remote entry with `peer_id` set and `holder = peer:<peer label>/<label>`, and never sends it back. Conflicts resolve the same way on both machines: `done` beats `taken`; between two `taken` (or two `done`) the earlier `at` wins, a tie goes to the lower node id; a `free` from the peer clears only an entry that peer holds. A local `take` refused this way is told on its next `take` or `handled`.
+- **Ending a share** (`share_remove`, unpair) deletes the entries that peer brought in for it.
+- Rate: counted with the peer's other frames (§8).
 
 ## 8. Wire protocol (U7)
 
@@ -411,6 +429,7 @@ refs (metadata only, nothing was fetched): <ref>, <ref>
     "last_error": null, "next_retry_at": null,
     "queue": { "count": 0, "bytes": 0, "oldest_at": null },
     "counters": { "sent_accepted": 0, "received": 0, "expired": 0, "rejected": 0, "cancelled": 0 },
+    "traffic":  { "bytes_sent": 0, "bytes_received": 0 },
     "shares": [{ "share_id": "…", "label": "…", "local_repo": "…", "state": "active",
                  "inbound": true, "outbound": true, "remote_inbound": true, "remote_outbound": true }]
   }]
