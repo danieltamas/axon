@@ -22,7 +22,14 @@ function remembered() {
   }
 }
 
-export function createUsage(container, { onUnavailable }) {
+// The vendor prefix repeats on every row; the full name stays in the tooltip.
+function modelCell(model) {
+  const cell = el("span", "f-model", model.replace(/^claude-/, ""));
+  cell.title = model;
+  return cell;
+}
+
+export function createUsage(container, { onUnavailable, projectOf }) {
   let range = remembered();
   let timer = 0;
   let showing = false;
@@ -171,7 +178,12 @@ export function createUsage(container, { onUnavailable }) {
         const row = el("li");
         const who = el("span", "f-who");
         who.append(glyph(HARNESS[r.harness] || r.harness), el("span", null, r.agent));
-        row.append(el("time", null, clock(r.ts)), who, el("span", "f-model", r.model), el("span", "f-num", tokens(r.tokens_out)), el("span", "f-num", r.pricing_kind === "unknown" ? "—" : displayMoney(r.cost_eur)));
+        // The repo opens its project when the dashboard knows it; otherwise it is plain text.
+        const key = r.repo && projectOf(r.repo);
+        const repo = el(key ? "a" : "span", r.repo ? "f-repo" : "f-repo none", r.repo || "no repo");
+        if (r.repo) repo.title = r.repo;
+        if (key) repo.href = `#/p/${encodeURIComponent(key)}`;
+        row.append(el("time", null, clock(r.ts)), who, el("code", "f-session", r.session || ""), repo, modelCell(r.model), el("span", "f-num", tokens(r.tokens_out)), el("span", "f-num", r.pricing_kind === "unknown" ? "—" : displayMoney(r.cost_eur)));
         return row;
       }),
     );

@@ -141,7 +141,7 @@ export function createBrain(canvas, tip) {
       canvas.setAttribute("aria-label", `${harnesses.length} harnesses and ${models.length} models; ${displayMoney(summary.cost_eur)} in all`);
       // Only turns newer than the last update pulse; the first load only sets the mark.
       const recent = summary.recent || [];
-      if (lastTs) recent.filter((r) => r.ts > lastTs).slice(0, 8).forEach((r, i) => setTimeout(() => send({ type: "turn", model: `m:${r.model}` }), i * 160));
+      if (lastTs) recent.filter((r) => r.ts > lastTs).slice(0, 8).forEach((r, i) => setTimeout(() => send({ type: "turn", model: `m:${r.model}`, caption: [r.repo, r.model.replace(/^claude-/, "")].filter(Boolean).join(" · ") }), i * 160));
       lastTs = Math.max(lastTs, ...recent.map((r) => r.ts));
     },
   };

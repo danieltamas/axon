@@ -41,8 +41,9 @@ pub struct HarnessStat {
     pub cost_eur: f64,
 }
 
-/// One row of the live feed — a real recent turn, trimmed to what the dashboard shows
-/// (no project/path, so nothing identifying leaks into the feed).
+/// One row of the live feed: a real recent turn, trimmed to what the dashboard shows. The
+/// dashboard is owner-gated, so it names the repository (never the path) and a short
+/// session tag; share cards are built from `Summary` totals and carry neither.
 #[derive(Debug, Clone, Serialize)]
 pub struct RecentEvent {
     pub ts: i64,
@@ -54,6 +55,10 @@ pub struct RecentEvent {
     pub cost_credits: Option<f64>,
     pub pricing_kind: String,
     pub duration_ms: Option<u64>,
+    /// The repository's name (worktrees fold into their main one); `None` outside any.
+    pub repo: Option<String>,
+    /// The first 4 characters of the session id, so one session's turns read as a group.
+    pub session: String,
 }
 
 /// The `n` most recent events (newest first) as feed rows. Cheap: collect + sort by ts.
@@ -75,8 +80,18 @@ pub fn recent_events<'a>(
             cost_credits: e.cost_credits,
             pricing_kind: e.pricing_kind.as_str().to_string(),
             duration_ms: e.duration_ms,
+            repo: repo_name(&e.project),
+            session: e.session_id.chars().take(4).collect(),
         })
         .collect()
+}
+
+fn repo_name(project: &str) -> Option<String> {
+    if project.is_empty() {
+        return None;
+    }
+    let repo = axon_bus::repo_of(std::path::Path::new(project))?;
+    Some(repo.file_name()?.to_string_lossy().into_owned())
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -10,7 +10,7 @@ import { createConnections } from "./connections.js";
 import { createContext } from "./context.js";
 import { agents, bytes, el, isProcess, money, setCurrency, setText, stats, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
-import { offerInstall, onServerLost, registerWorker } from "./pwa.js";
+import { announceApp, offerInstall, onServerLost, registerWorker } from "./pwa.js";
 import { createHandled } from "./handled.js";
 import { createEnder } from "./send.js";
 import { createSettings } from "./settings.js";
@@ -36,6 +36,11 @@ const context = createContext($("context"), {
 
 // Under the `axon-bus serve` alias there is no usage record; the view leaves the nav.
 const usage = createUsage($("usage"), {
+  // A feed row names its repository; the project route is keyed by the full path.
+  projectOf: (name) => {
+    const repo = (state.snapshot.repos || []).find((r) => r.repo && r.name === name);
+    return repo ? projectKey(repo) : null;
+  },
   onUnavailable: () => {
     document.querySelector('[data-view="usage"]').hidden = true;
     if (location.hash === "#/usage") location.hash = "#/";
@@ -239,3 +244,4 @@ exchangeLogin().then(() => {
 });
 registerWorker();
 offerInstall();
+announceApp();

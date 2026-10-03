@@ -8,6 +8,7 @@
 // live in unit space (a fraction of the canvas), so a resize rescales without a relayout,
 // and a new layout glides from the old one instead of snapping.
 
+import { createLabels } from "./brain-labels.js";
 import { approach, cross, easeIn, easeInOut, easeOut, frame, halo, hsl, color, norm, peakCost, seeded } from "./brain-math.js";
 
 const TAU = Math.PI * 2;
@@ -23,6 +24,7 @@ const REST_PITCH = 0.2;
 const BLOB = 20;
 export function createRenderer(canvas, emit) {
   const ctx = canvas.getContext("2d");
+  const labels = createLabels(ctx);
   let w = 0, h = 0, dpr = 1, base = 360;
   let theme = { dark: false, colors: {}, font: "monospace" };
   let nodes = [], edges = [], order = [], byId = new Map(), label = "";
@@ -30,8 +32,8 @@ export function createRenderer(canvas, emit) {
   let yaw = -0.6, yawTo = -0.6, pitch = REST_PITCH, pitchTo = REST_PITCH, spin = REST_SPIN;
   let drag = null, pointer = null, spawnDebt = 0;
   let hover = -1, running = false, visible = true, still = false, lastT = 0, clock = 0;
-  const particles = Array.from({ length: PARTICLES }, () => ({ edge: -1, next: -1, age: 0, dur: 1, pulse: false }));
-  const ripples = Array.from({ length: RIPPLES }, () => ({ node: -1, t: 1 }));
+  const particles = Array.from({ length: PARTICLES }, () => ({ edge: -1, next: -1, age: 0, dur: 1, pulse: false, caption: "" }));
+  const ripples = Array.from({ length: RIPPLES }, () => ({ node: -1, t: 1, caption: "" }));
   const stars = Array.from({ length: STARS }, (_, i) => {
     const y = 1 - (i / (STARS - 1)) * 2, ring = Math.sqrt(1 - y * y), th = i * 2.39996, r = OUTER * 1.9;
     return { p: [Math.cos(th) * ring * r, y * r, Math.sin(th) * ring * r], a: 0.15 + seeded(i) * 0.5, tw: seeded(i + 7) * TAU, x: 0, y: 0, s: 1, z: 0 };
@@ -145,7 +147,7 @@ export function createRenderer(canvas, emit) {
     return edges.length - 1;
   }
 
-  function launch(edge, next, pulse) {
+  function launch(edge, next, pulse, caption = "") {
     if (edge < 0) return;
     const free = particles.find((p) => p.edge < 0);
     if (!free) return;
@@ -153,12 +155,14 @@ export function createRenderer(canvas, emit) {
     free.next = next;
     free.age = 0;
     free.pulse = pulse;
+    free.caption = caption;
     free.dur = pulse ? 0.7 : 2.2 + Math.random() * 1.4;
   }
 
-  function ripple(node) {
+  // `caption` ("repo · model") is shown above the node while the ripple lasts.
+  function ripple(node, caption = "") {
     const free = ripples.find((r) => r.t >= 1);
-    if (free) Object.assign(free, { node, t: 0 });
+    if (free) Object.assign(free, { node, t: 0, caption });
   }
 
   // The point at t along an edge's gentle arc, into `out`.
@@ -259,7 +263,7 @@ export function createRenderer(canvas, emit) {
         const b = nodes[e.b];
         b.flash = Math.max(b.flash, p.pulse ? 1 : 0.35);
         e.fire = Math.max(e.fire, p.pulse ? 1 : 0.5);
-        if (p.pulse && p.next < 0) ripple(e.b);
+        if (p.pulse && p.next < 0) ripple(e.b, p.caption);
       }
       if (p.next >= 0) Object.assign(p, { edge: p.next, next: -1, age: 0 });
       else p.edge = -1;
@@ -344,19 +348,8 @@ export function createRenderer(canvas, emit) {
     }
     order.sort(byDepth);
     for (const n of order) drawNode(n, time);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    for (const weight of [600, 500]) {
-      ctx.font = `${weight} 11px ${theme.font}`;
-      for (const n of nodes) {
-        if ((weight === 500) !== (n.kind === "model")) continue;
-        if (n.kind === "model" && !n.labelled && n !== focus) continue;
-        ctx.globalAlpha = Math.max(0.2, n.lit) * n.depth * easeOut(n.grow);
-        ctx.fillStyle = n.text;
-        const text = n.kind === "core" ? label : n.kind === "model" ? n.name.replace(/^claude-/, "") : n.name;
-        ctx.fillText(text, n.x, n.y + n.r * n.s * 1.6 + 8);
-      }
-    }
+    labels.draw(nodes, { focus, label, font: theme.font });
+    labels.captions(ripples, nodes, theme.font);
     ctx.globalAlpha = 1;
     if (pointer && !drag) pick();
   }
@@ -447,8 +440,8 @@ export function createRenderer(canvas, emit) {
           nodes[0].act = Math.min(1, nodes[0].act + 0.3);
           const first = edges.findIndex((e) => e.b === hub.i && nodes[e.a].kind === "core");
           const second = edges.findIndex((e) => e.b === m.i);
-          if (still) ripple(m.i);
-          else launch(first >= 0 ? first : second, first >= 0 ? second : -1, true);
+          if (still) ripple(m.i, msg.caption || "");
+          else launch(first >= 0 ? first : second, first >= 0 ? second : -1, true, msg.caption || "");
           break;
         }
         case "pointer": {
