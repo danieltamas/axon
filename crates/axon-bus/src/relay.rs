@@ -15,8 +15,9 @@ use crate::gate::deny;
 use crate::install::bus_verb;
 
 /// Verbs the hook runs for the agent: messaging, links, and what the agent may read.
-const RELAYED: [&str; 10] = [
+const RELAYED: [&str; 14] = [
     "send", "reply", "grant", "link", "accept", "peers", "claim", "release", "claims", "budget",
+    "take", "done", "drop", "handled",
 ];
 /// Longest command output passed back; claims can list a whole checkout.
 const MAX_OUTPUT: usize = 4000;

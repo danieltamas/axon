@@ -60,6 +60,14 @@ pub fn usage_retention(body: &[u8]) -> Result<Option<i64>, Invalid> {
     }
 }
 
+/// `{"auto_link": bool}`: whether roots in one repository link without a proposal.
+pub fn auto_link(body: &[u8]) -> Result<bool, Invalid> {
+    object(body, &["auto_link"])
+        .ok()
+        .and_then(|map| map.get("auto_link").and_then(Value::as_bool))
+        .ok_or_else(|| invalid("auto_link"))
+}
+
 pub const BUDGET_FIELDS: [&str; 3] = ["eur_per_day", "eur_per_week", "eur_per_month"];
 
 /// The budgets a body names: a cap in EUR, or `None` to remove it. Unnamed ones stay.

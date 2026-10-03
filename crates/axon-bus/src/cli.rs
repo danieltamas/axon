@@ -186,6 +186,43 @@ pub enum Command {
     },
     /// List every claim as JSON lines.
     Claims,
+    /// Take a work item (a lead, an issue, a URL) in this repository's ledger, once.
+    Take {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        note: Option<String>,
+        /// How long the take lasts, such as `30m` or `2h` (default 2h, at most 24h).
+        #[arg(long, value_parser = parse_ttl)]
+        ttl: Option<std::time::Duration>,
+    },
+    /// Mark a work item done in this repository's ledger.
+    Done {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Give back a work item you took.
+    Drop {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        key: String,
+    },
+    /// Whether a work item is handled (exit 0) or free (exit 1); without --key, list the ledger.
+    Handled {
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        prefix: Option<String>,
+    },
     /// Check the audit log's hash chain.
     Audit {
         #[arg(long, required = true)]

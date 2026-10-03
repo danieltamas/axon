@@ -9,7 +9,9 @@ use serde_json::Value;
 /// Verbs whose acting agent is `--from`.
 pub(crate) const FROM_VERBS: [&str; 6] = ["send", "ask", "reply", "grant", "link", "accept"];
 /// Verbs whose acting agent is `--agent`.
-pub(crate) const AGENT_VERBS: [&str; 3] = ["claim", "release", "peers"];
+pub(crate) const AGENT_VERBS: [&str; 7] = [
+    "claim", "release", "peers", "take", "done", "drop", "handled",
+];
 
 /// The shell command of a tool call, in each harness's payload shape.
 pub(crate) fn command(payload: &Value) -> Option<&str> {

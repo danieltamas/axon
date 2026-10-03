@@ -50,6 +50,7 @@ pub fn routes(db: &FsPath, content: bool, federation: Federation) -> Router {
         .route("/api/settings/usage", put(put_usage))
         .route("/api/settings/budgets", put(put_budgets))
         .route("/api/settings/federation", put(put_federation))
+        .route("/api/settings/bus", put(put_bus))
         .route("/api/settings/hooks/:harness/install", post(install_hooks))
         .route(
             "/api/settings/hooks/:harness/uninstall",
@@ -171,6 +172,13 @@ async fn put_budgets(State(settings): State<Arc<Settings>>, body: Bytes) -> Answ
     let changes = input::budgets(&body)?;
     settings
         .after(move |_| budgets::write(&changes).map_err(refused))
+        .await
+}
+
+async fn put_bus(State(settings): State<Arc<Settings>>, body: Bytes) -> Answer {
+    let on = input::auto_link(&body)?;
+    settings
+        .after(move |conn| Ok(crate::route::set_auto_link(conn, on)?))
         .await
 }
 
@@ -296,6 +304,7 @@ fn view(conn: &Connection, db: &FsPath, content: bool) -> Result<Value, Fail> {
             "node_id": identity.as_ref().map(|(id, _)| id),
             "fingerprint": identity.as_ref().map(|(_, print)| print),
         },
+        "bus": {"auto_link": crate::route::auto_link_enabled(conn)?},
     }))
 }
 

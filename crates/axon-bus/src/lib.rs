@@ -17,6 +17,7 @@ pub mod fed;
 mod gate;
 mod guard;
 mod guide;
+mod handled;
 mod hermes_hooks;
 mod hook;
 mod install;
@@ -68,6 +69,40 @@ const REFUSED: u8 = 3;
 
 fn hub(db: &std::path::Path) -> anyhow::Result<rusqlite::Connection> {
     store::open(db).context("no hub; run `axon-bus init`")
+}
+
+/// Run one ledger command in the caller's repository: exit 0 with its line, or 1 with the
+/// line that says who holds the key.
+fn ledger(
+    db: &std::path::Path,
+    run: impl FnOnce(
+        &rusqlite::Connection,
+        &str,
+        &str,
+        Option<String>,
+    ) -> anyhow::Result<handled::Outcome>,
+    key: &str,
+    note: Option<&str>,
+) -> anyhow::Result<ExitCode> {
+    let repo = handled::repo_of(&std::env::current_dir()?).map_err(Invalid)?;
+    let key = handled::key(key).map_err(Invalid)?;
+    let note = handled::note(note).map_err(Invalid)?;
+    let mut conn = hub(db)?;
+    handled::ensure(&conn)?;
+    let tx = store::write_tx(&mut conn)?;
+    handled::expire(&tx, store::now_ms())?;
+    let outcome = run(&tx, &repo, &key, note)?;
+    tx.commit()?;
+    Ok(match outcome {
+        handled::Outcome::Done(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        handled::Outcome::Refused(line) => {
+            println!("{line}");
+            ExitCode::FAILURE
+        }
+    })
 }
 
 /// Print a refused send and turn it into its exit code.
@@ -333,6 +368,58 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
             let tx = store::write_tx(&mut conn)?;
             claims::release(&tx, &agent, &std::env::current_dir()?, &paths)?;
             tx.commit()?;
+        }
+        Command::Take {
+            agent,
+            key,
+            note,
+            ttl,
+        } => {
+            let ttl = ttl.map_or(handled::DEFAULT_TTL_MS, |d| d.as_millis() as i64);
+            return ledger(
+                &db,
+                |tx, repo, key, note| handled::take(tx, repo, &agent, key, note, ttl),
+                &key,
+                note.as_deref(),
+            );
+        }
+        Command::Done { agent, key, note } => {
+            return ledger(
+                &db,
+                |tx, repo, key, note| handled::done(tx, repo, &agent, key, note),
+                &key,
+                note.as_deref(),
+            );
+        }
+        Command::Drop { agent, key } => {
+            return ledger(
+                &db,
+                |tx, repo, key, _| handled::drop_take(tx, repo, &agent, key),
+                &key,
+                None,
+            );
+        }
+        Command::Handled {
+            agent,
+            key: Some(key),
+            ..
+        } => {
+            return ledger(
+                &db,
+                |tx, repo, key, _| handled::check(tx, repo, agent.as_deref(), key),
+                &key,
+                None,
+            );
+        }
+        Command::Handled {
+            key: None, prefix, ..
+        } => {
+            let conn = hub(&db)?;
+            handled::ensure(&conn)?;
+            let repo = handled::repo_of(&std::env::current_dir()?).map_err(Invalid)?;
+            for entry in handled::list(&conn, &repo, prefix.as_deref())? {
+                println!("{entry}");
+            }
         }
         Command::Claims => {
             let conn = hub(&db)?;

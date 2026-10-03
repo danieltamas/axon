@@ -1,12 +1,12 @@
-//! Message edges (BUS-PLAN §3): parent ↔ child, root ↔ root over an accepted `link`, and
-//! thread-scoped temporary `grant`s. A send is allowed only along an edge; otherwise the
+//! Message edges (BUS-PLAN §3): parent ↔ child, root ↔ root over an accepted `link` or by
+//! sharing a repository, and thread-scoped temporary `grant`s. A send is allowed only along an edge; otherwise the
 //! caller gets the relay route to take.
 //!
 //! Task routing (BUS-PLAN §4): `routes.toml` rules pick a lane, the remaining budget may
 //! step it down one lane, and an advisor's proposal is only logged beside it.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -14,6 +14,73 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::store::{append_event, now_ms};
+use crate::Harness;
+
+const AUTO_LINK_KEY: &str = "auto_link";
+
+/// Whether roots in one repository link without a proposal; on unless the owner turned it off.
+pub fn auto_link_enabled(conn: &Connection) -> rusqlite::Result<bool> {
+    Ok(crate::store::setting(conn, AUTO_LINK_KEY)?.as_deref() != Some("0"))
+}
+
+pub fn set_auto_link(conn: &Connection, on: bool) -> rusqlite::Result<()> {
+    crate::store::put_setting(conn, AUTO_LINK_KEY, (!on).then_some("0"))
+}
+
+/// The repository a root works in when it qualifies for auto-linking: hook-registered by a
+/// known harness, live, and in a repository. Peers, the human node and subagents never do.
+fn auto_link_repo(conn: &Connection, id: &str) -> rusqlite::Result<Option<PathBuf>> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT harness,cwd FROM agents
+             WHERE id=?1 AND parent_id IS NULL AND status IN ('active','idle')",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.and_then(|(harness, cwd)| {
+        let hooked = Harness::ALL.iter().any(|h| h.as_str() == harness);
+        hooked
+            .then(|| crate::snapshot::repo_of(Path::new(&cwd?)))
+            .flatten()
+    }))
+}
+
+/// Two roots working in the same repository, while auto-linking is on.
+fn auto_linked(conn: &Connection, a: &str, b: &str) -> rusqlite::Result<bool> {
+    if a == b || !auto_link_enabled(conn)? {
+        return Ok(false);
+    }
+    let Some(repo) = auto_link_repo(conn, a)? else {
+        return Ok(false);
+    };
+    Ok(auto_link_repo(conn, b)?.is_some_and(|other| other == repo))
+}
+
+/// Every pair of auto-linked roots, for relay routes.
+fn auto_link_pairs(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    if !auto_link_enabled(conn)? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT id FROM agents WHERE parent_id IS NULL AND status IN ('active','idle')")?;
+    let ids: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut by_repo: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    for id in ids {
+        if let Some(repo) = auto_link_repo(conn, &id)? {
+            by_repo.entry(repo).or_default().push(id);
+        }
+    }
+    let mut pairs = Vec::new();
+    for roots in by_repo.values() {
+        for (at, a) in roots.iter().enumerate() {
+            pairs.extend(roots[at + 1..].iter().map(|b| (a.clone(), b.clone())));
+        }
+    }
+    Ok(pairs)
+}
 
 fn parent_of(conn: &Connection, id: &str) -> anyhow::Result<Option<Option<String>>> {
     Ok(conn
@@ -122,6 +189,9 @@ pub fn allowed(
     if has_edge(conn, from, to, "link")? && has_edge(conn, to, from, "link")? {
         return Ok(true);
     }
+    if auto_linked(conn, from, to)? {
+        return Ok(true);
+    }
     let Some(thread) = thread else {
         return Ok(false);
     };
@@ -154,6 +224,9 @@ pub fn route(conn: &Connection, from: &str, to: &str) -> anyhow::Result<Option<V
     )?;
     for pair in links.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))? {
         let (a, b) = pair?;
+        connect(a, b);
+    }
+    for (a, b) in auto_link_pairs(conn)? {
         connect(a, b);
     }
     let mut previous: HashMap<&str, &str> = HashMap::new();

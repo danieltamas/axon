@@ -239,6 +239,18 @@ pub fn now_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+/// The handled ledger (BUS-PLAN §3b); `handled::ensure` runs it again for older hubs.
+pub const HANDLED_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS handled (
+  repo TEXT NOT NULL, key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('taken','done','free')),
+  holder TEXT NOT NULL, agent_id TEXT, peer_id TEXT, note TEXT,
+  at INTEGER NOT NULL, expires_at INTEGER, changed_at INTEGER NOT NULL,
+  PRIMARY KEY (repo, key)
+);
+CREATE INDEX IF NOT EXISTS handled_changed ON handled(repo, changed_at);
+";
+
 /// Create or migrate the shared database. Axon's own schema goes first, so a pre-bus
 /// `events` usage table is moved aside before the audit log claims the name.
 pub fn init(path: &Path) -> anyhow::Result<Connection> {
@@ -247,6 +259,7 @@ pub fn init(path: &Path) -> anyhow::Result<Connection> {
     let conn = open(path)?;
     migrate::drop_stale_login_tables(&conn)?;
     conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(HANDLED_SCHEMA)?;
     migrate::add_missing_columns(&conn)?;
     migrate::drop_sender_foreign_key(&conn)?;
     migrate::allow_task_narrative(&conn)?;

@@ -109,6 +109,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federat
         .with_state(app.clone())
         .merge(settings::routes(db, content, federation.clone()))
         .merge(fed::api::routes(db, federation.clone()))
+        .merge(crate::handled::api::routes(db))
         .layer(middleware::from_fn_with_state(app, guard));
     Ok((router, federation))
 }
@@ -135,7 +136,8 @@ fn write_ready(path: &Path, url: &str) -> anyhow::Result<()> {
 }
 
 /// One thread watches `PRAGMA data_version` and publishes a new snapshot when another
-/// connection changed the database. It also renews the capture lease and runs retention.
+/// connection changed the database. It also renews the capture lease and runs retention,
+/// the handled ledger's included.
 fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<Arc<String>>> {
     let mut conn = store::open(&db)?;
     let mut cache = HashMap::new();
@@ -154,7 +156,11 @@ fn watch_database(db: PathBuf, content: bool) -> anyhow::Result<watch::Receiver<
         loop {
             if renewed_at.is_none_or(|at| at.elapsed() >= RENEW_EVERY) {
                 let upkeep = transcript::apply_capture(&conn, content)
-                    .and_then(|()| transcript::expire_if_due(&conn));
+                    .and_then(|()| transcript::expire_if_due(&conn))
+                    .and_then(|()| {
+                        crate::handled::ensure(&conn)?;
+                        crate::handled::expire(&conn, store::now_ms())
+                    });
                 if let Err(err) = upkeep {
                     eprintln!("axon-bus: capture lease or retention failed: {err}");
                 }

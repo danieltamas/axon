@@ -159,6 +159,7 @@ pub fn remove_because(
                 "DELETE FROM fed_remote_sessions WHERE peer_id=?1",
                 [peer_id],
             )?;
+            tx.execute("DELETE FROM handled WHERE peer_id=?1", [peer_id])?;
             audit_decision(
                 &tx,
                 &peer,

@@ -7,6 +7,7 @@ pub mod codec;
 pub mod delivery;
 pub mod discovery;
 mod envelope;
+mod handled_sync;
 mod health;
 pub mod identity;
 mod invite;
@@ -107,6 +108,7 @@ pub fn install(handle: &service::Handle, db: &Path) {
     pairing::install(handle, db);
     shares::install(handle, db);
     discovery::install(handle, db);
+    handled_sync::install(handle, db);
     receive::install(handle, db);
     outbox::install(handle, db);
     retention::install(handle, db);

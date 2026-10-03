@@ -8,8 +8,10 @@ mod sync;
 #[cfg(test)]
 mod tests;
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
@@ -108,6 +110,62 @@ pub fn resolve_repo(path: &str) -> Option<String> {
         .and_then(|repo| repo.to_str().map(str::to_owned))
 }
 
+/// `root_commit`, remembered per repo: a first commit does not change, and the peers list
+/// asks on every refresh.
+fn cached_root_commit(repo: &str) -> Option<String> {
+    static ROOTS: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    let roots = ROOTS.get_or_init(Default::default);
+    if let Some(root) = roots.lock().ok()?.get(repo) {
+        return root.clone();
+    }
+    let root = root_commit(repo);
+    roots.lock().ok()?.insert(repo.to_owned(), root.clone());
+    root
+}
+
+/// For a share offered to us: the folder here that holds the same project (the same first
+/// commit, among the repos with live agents) and is not shared with that peer yet.
+pub fn suggested_repo(conn: &Connection, share: &Share) -> rusqlite::Result<Option<String>> {
+    let Some(root) = share
+        .root_commit
+        .as_deref()
+        .filter(|_| share.state == "offered_in")
+    else {
+        return Ok(None);
+    };
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT cwd FROM agents WHERE status IN ('active','idle') AND cwd IS NOT NULL",
+    )?;
+    let cwds: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut seen = HashSet::new();
+    for repo in cwds.iter().filter_map(|cwd| resolve_repo(cwd)) {
+        if seen.insert(repo.clone())
+            && cached_root_commit(&repo).as_deref() == Some(root)
+            && !shared_with(conn, &share.peer_id, &repo, &share.share_id)?
+        {
+            return Ok(Some(repo));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether `repo` is already in a live share with `peer_id`, other than `except`.
+fn shared_with(
+    conn: &Connection,
+    peer_id: &str,
+    repo: &str,
+    except: &str,
+) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT count(*) > 0 FROM peer_shares
+         WHERE peer_id=?1 AND local_repo=?2 AND state<>'removed' AND share_id<>?3",
+        params![peer_id, repo, except],
+        |r| r.get(0),
+    )
+}
+
 /// The first commit of `repo`: only a hint for the other owner to find the same project.
 fn root_commit(repo: &str) -> Option<String> {
     let out = Command::new("git")
@@ -153,6 +211,8 @@ pub enum Fail {
     Invalid(&'static str),
     /// This peer already has a live share for this repo.
     AlreadyShared,
+    /// The peer already offered this project (the same first commit): accept that instead.
+    OfferedToYou,
     TooMany,
 }
 
@@ -198,11 +258,21 @@ pub fn offer(
     if held >= MAX_PER_PEER {
         return Err(Fail::TooMany);
     }
+    let root = cached_root_commit(&repo);
+    let offered_to_us: bool = tx.query_row(
+        "SELECT count(*) > 0 FROM peer_shares
+         WHERE peer_id=?1 AND state='offered_in' AND root_commit IS NOT NULL AND root_commit=?2",
+        params![peer_id, root],
+        |r| r.get(0),
+    )?;
+    if offered_to_us {
+        return Err(Fail::OfferedToYou);
+    }
     let share_id = random_id().map_err(|_| Fail::WrongState)?;
     tx.execute(
         "INSERT INTO peer_shares (share_id,peer_id,label,local_repo,inbound,outbound,revision,state,root_commit)
          VALUES (?1,?2,?3,?4,?5,?6,1,'offered_out',?7)",
-        params![share_id, peer_id, label, repo, inbound, outbound, root_commit(&repo)],
+        params![share_id, peer_id, label, repo, inbound, outbound, root],
     )?;
     get(tx, &share_id)?.ok_or(Fail::UnknownShare)
 }
@@ -220,6 +290,9 @@ pub fn accept(
         return Err(Fail::WrongState);
     }
     let repo = resolve_repo(local_repo).ok_or(Fail::Invalid("local_repo"))?;
+    if shared_with(tx, &share.peer_id, &repo, share_id)? {
+        return Err(Fail::AlreadyShared);
+    }
     tx.execute(
         "UPDATE peer_shares SET local_repo=?2, inbound=?3, outbound=?4, state='active',
          revision=revision+1 WHERE share_id=?1",
@@ -268,6 +341,11 @@ fn close(tx: &Connection, share: &Share, revision: i64) -> rusqlite::Result<()> 
         params![id, revision],
     )?;
     tx.execute("DELETE FROM fed_remote_sessions WHERE share_id=?1", [id])?;
+    tx.execute(
+        "DELETE FROM handled WHERE peer_id=?1
+           AND repo=(SELECT local_repo FROM peer_shares WHERE share_id=?2)",
+        params![share.peer_id, id],
+    )?;
     tx.execute(
         "UPDATE fed_outbox SET state='cancelled', last_error='unshared'
          WHERE share_id=?1 AND state='queued'",
