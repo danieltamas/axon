@@ -34,6 +34,7 @@ function repoPicker(label) {
   const root = el("div", "picker");
   root.append(byPick.root, byPath.root);
   const listeners = [];
+  let listed = null;
   select.addEventListener("change", () => {
     byPath.root.hidden = select.value !== OTHER;
     for (const listen of listeners) listen(select.selectedOptions[0].dataset.name || "");
@@ -55,6 +56,10 @@ function repoPicker(label) {
     onName: (listen) => listeners.push(listen),
     async load() {
       const repos = await localRepos();
+      // Rebuilding the options closes the dropdown if it is open: only when the list changed.
+      const key = JSON.stringify(repos);
+      if (key === listed) return;
+      listed = key;
       const chosen = select.value;
       select.replaceChildren(new Option(repos.length ? "Choose a project" : "No running projects found", ""));
       for (const repo of repos) {

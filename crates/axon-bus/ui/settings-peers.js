@@ -252,7 +252,9 @@ export function peersPanel() {
     if ([...list.children].some((node, at) => node !== ordered[at]) || list.children.length !== ordered.length) list.replaceChildren(...ordered);
     // With peers, the cards come first and connecting another machine moves below them.
     root.dataset.peers = String(peers.length > 0);
-    out.replaceChildren(identity, ...(peers.length ? [list] : [empty]));
+    // Re-inserting nodes that are already in place closes an open dropdown and drops focus.
+    const shown = [identity, peers.length ? list : empty];
+    if ([...out.children].some((node, at) => node !== shown[at]) || out.children.length !== shown.length) out.replaceChildren(...shown);
   }
 
   let key = "";

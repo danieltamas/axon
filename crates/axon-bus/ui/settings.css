@@ -1,7 +1,7 @@
 /* ---- settings: ruled bands, the label on the left and its controls on the right ---- */
 .layout[data-level="settings"] { grid-template-columns: minmax(0, 1fr); }
 .layout[data-level="settings"] > :not(.settings), .layout:not([data-level="settings"]) .settings { display: none; }
-.settings { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--gutter) 96px; container-type: inline-size; scroll-padding-top: 72px; }
+.settings { position: relative; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--gutter) 96px; container-type: inline-size; scroll-padding-top: 72px; }
 .settings [hidden] { display: none !important; }
 
 .set-head { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 32px; max-width: 64rem; padding: 24px 0 12px; background: var(--ground); }
@@ -44,7 +44,7 @@
 .choice-set legend { padding: 0; margin-bottom: 8px; }
 
 /* switch */
-.sw-hit { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; cursor: pointer; }
+.sw-hit { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; cursor: pointer; }
 .sw-hit input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .sw-text { display: flex; flex-direction: column; gap: 2px; }
 .sw-track { position: relative; width: 38px; height: 22px; margin-top: -1px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); transition: background-color 0.2s, border-color 0.2s; }
@@ -97,7 +97,13 @@
 /* federation: connecting a machine, then one card per peer */
 #set-federation .set-body { max-width: 46rem; }
 .fld-hint:empty { display: none; }
-.settings select.sel { width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--raise); font: 13px var(--mono); color: var(--ink-strong); }
+.settings select.sel {
+  width: 100%; max-width: 26rem; min-height: 36px; padding: 6px 36px 6px 10px; border: 1px solid var(--line-strong); border-radius: 6px;
+  appearance: none; text-overflow: ellipsis; font: 13px var(--mono); color: var(--ink-strong);
+  /* The chevron: two half-squares in the theme's muted ink, inset like the field's text. */
+  background: linear-gradient(45deg, transparent 50%, var(--muted) 50%) calc(100% - 19px) 50% / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%) calc(100% - 14px) 50% / 5px 5px no-repeat, var(--raise);
+}
 .settings select.sel:focus { outline: none; border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-wash); }
 .settings input.txt[readonly] { background: var(--surface); text-overflow: ellipsis; }
 .connect, .peers { display: flex; flex-direction: column; gap: 14px; padding-top: 20px; border-top: 1px solid var(--line); }
