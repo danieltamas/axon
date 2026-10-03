@@ -54,16 +54,28 @@ fn harness(bus: &Bus, name: &str, cwd: &Path, argv: &[String]) -> Running {
         fs::write(&exe, fixture).unwrap();
         fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let mut command = Command::new(exe);
-    bus.isolate(&mut command);
-    let child = command
-        .current_dir(cwd)
-        .args(argv)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    // Linux refuses to exec a file some process still holds open for writing, and a child
+    // another test thread forks keeps the just-written fixture open until its own exec:
+    // ETXTBSY ("Text file busy") clears within milliseconds, so it is retried.
+    let mut attempts = 0;
+    let child = loop {
+        let mut command = Command::new(&exe);
+        bus.isolate(&mut command);
+        let spawned = command
+            .current_dir(cwd)
+            .args(argv)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        match spawned {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => break other.unwrap(),
+        }
+    };
     Running(child)
 }
 
