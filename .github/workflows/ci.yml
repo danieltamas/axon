@@ -35,9 +35,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      # Profiles live in .config/nextest.toml; `ci` retries a test once before failing it.
       - if: runner.os != 'Windows'
-        run: cargo test --workspace --all-targets --no-fail-fast
+        run: cargo nextest run --workspace --all-targets --profile ci
       # Process launches are slow on Windows runners; one test at a time keeps each
       # acceptance test's launches inside its own time budget.
       - if: runner.os == 'Windows'
-        run: cargo test --workspace --all-targets --no-fail-fast -- --test-threads=1
+        run: cargo nextest run --workspace --all-targets --profile ci --test-threads 1
+
+  # A green `chore: release X.Y.Z` commit on main tags itself vX.Y.Z, which starts release.yml.
+  # Tags pushed with GITHUB_TOKEN start no workflow, so this needs RELEASE_TOKEN: a
+  # fine-grained token with Contents read/write on this repository only.
+  tag:
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      startsWith(github.event.head_commit.message, 'chore: release ')
+    needs: [check, msrv, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+          HAS_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          [ "$HAS_TOKEN" = true ] || { echo "::error::RELEASE_TOKEN is not set; tag this commit by hand"; exit 1; }
+          version=$(printf '%s' "$MESSAGE" | head -n1 | sed -n 's/^chore: release \([0-9][0-9.]*[0-9]\)$/\1/p')
+          [ -n "$version" ] || { echo "::error::subject is not 'chore: release X.Y.Z'"; exit 1; }
+          declared=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          [ "$version" = "$declared" ] || { echo "::error::commit says $version, Cargo.toml says $declared"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "v$version already exists"; exit 0
+          fi
+          git tag "v$version" "$GITHUB_SHA"
+          git push origin "v$version"

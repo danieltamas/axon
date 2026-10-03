@@ -53,6 +53,8 @@ impl Server {
         command
             .args(&args)
             .env("AXON_TEST_NOW_OFFSET_MS", offset_ms.to_string())
+            // A missing file adds zero; tests can advance this server without restarting it.
+            .env("AXON_TEST_NOW_OFFSET_FILE", bus.root.join("now-offset-ms"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

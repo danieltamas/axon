@@ -3,7 +3,7 @@ use super::fed::*;
 use super::invite::{decode, encode};
 use super::{now_ms, parse_json, Bus, Server};
 use serde_json::json;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn instance(seconds: u64) -> (Bus, Server) {
     let bus = Bus::with_limit(Duration::from_secs(seconds));
@@ -145,21 +145,15 @@ pub fn label_uniqueness() {
     );
 }
 pub fn invite_expiry() {
-    // No mutable clock seam is specified. Restarting a :0 endpoint loses the old
-    // invitation's direct address, so test issuer expiry with the real 10-minute clock.
-    let (a, sa) = instance(630);
-    let (b, sb) = instance(630);
+    let (a, sa) = instance(45);
+    let (b, sb) = instance(45);
+    let offset_file = a.root.join("now-offset-ms");
     let invitation = api(&a, &sa, "POST", "/api/fed/invites", json!({}));
     let expires = invitation["expires_at"].as_i64().unwrap();
     let mut tampered = decode(invitation["invite"].as_str().unwrap());
     tampered["secret"] = json!("A".repeat(43));
-    let wait = Instant::now();
-    while now_ms() < expires - 5_000 {
-        a.remaining();
-        b.remaining();
-        assert!(wait.elapsed() < Duration::from_secs(610));
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    // Keep the issuer's advertised :0 address and the joiner's clock unchanged.
+    std::fs::write(&offset_file, (expires - 5_000 - now_ms()).to_string()).unwrap();
     let wrong = request(
         &b,
         &sb,
@@ -174,10 +168,7 @@ pub fn invite_expiry() {
         1,
         "not expired before the cut"
     );
-    while now_ms() <= expires {
-        a.remaining();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    std::fs::write(&offset_file, (expires + 1 - now_ms()).to_string()).unwrap();
     let late = request(
         &b,
         &sb,

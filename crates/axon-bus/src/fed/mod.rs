@@ -94,11 +94,17 @@ pub fn live_peer_count(conn: &Connection) -> rusqlite::Result<i64> {
 }
 
 /// The clock federation uses, in ms since the epoch. Debug builds honour
-/// `AXON_TEST_NOW_OFFSET_MS` so tests can move time without waiting.
+/// `AXON_TEST_NOW_OFFSET_MS`, and `AXON_TEST_NOW_OFFSET_FILE` re-read on every call, so tests
+/// move time, even in a running process, without waiting.
 pub fn now_ms() -> i64 {
+    let offset = |text: String| text.trim().parse::<i64>().ok();
     crate::store::now_ms()
         + seam("AXON_TEST_NOW_OFFSET_MS")
-            .and_then(|v| v.parse().ok())
+            .and_then(offset)
+            .unwrap_or(0)
+        + seam("AXON_TEST_NOW_OFFSET_FILE")
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(offset)
             .unwrap_or(0)
 }
 

@@ -12,6 +12,8 @@
 > repository (BUS-PLAN §3c part A). This supersedes §10.1's rule that the feed shows no
 > project; share cards still redact it (§16). Agents are greeted only when they can reach someone,
 > and `axon bus guide review` gives the cross-vendor review recipe (BUS-PLAN §3).
+> Tests run under cargo-nextest (`.config/nextest.toml`); a green `chore: release X.Y.Z`
+> commit on main tags itself, which starts the release.
 
 > **This is a hand-off spec.** Copy it into the new `axon/` repo as `DESIGN.md` and execute. It assumes no prior context. **§6 + Appendix A are verified against real logs on the author's machine** — trust them over any prior recon.
 

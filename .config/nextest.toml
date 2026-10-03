@@ -1,0 +1,26 @@
+# Every test runs in its own process, all test binaries at once: the suite takes as long as
+# its slowest test instead of the sum of all of them.
+
+[profile.default]
+# A test still running after a minute is reported; after 5 minutes it is killed, so a hang fails
+# the run instead of stalling it.
+slow-timeout = { period = "60s", terminate-after = 5 }
+fail-fast = false
+
+[profile.ci]
+# Shared runners are noisy. A test that passes on its retry is still listed as FLAKY in the
+# summary, so the retry never hides it.
+# Windows runners are several times slower, so a test is killed only after 10 minutes.
+retries = 1
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+# Tests that measure latency (a server listening within its budget) get the whole machine,
+# so a busy parallel run cannot fail them.
+[[profile.default.overrides]]
+filter = 'binary(acceptance_root_fixround2)'
+threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+filter = 'binary(acceptance_root_fixround2)'
+threads-required = "num-test-threads"

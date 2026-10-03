@@ -20,14 +20,17 @@ the dashboard is plain ES modules in `crates/axon-bus/ui`, embedded in the binar
 
 ```bash
 cargo build                                  # debug build
-cargo test                                   # run the M1 fixture gates + unit tests
+cargo nextest run                            # every test, in parallel (cargo install cargo-nextest)
+cargo nextest run -E 'binary(acceptance_fed_wire)'   # only the tests your change touches
 cargo run -- --scan-only                     # scan your local Claude logs -> JSON
 
 # Before opening a PR, these must be clean:
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+`cargo test` works too, but runs the test binaries one after another. CI runs the full suite
+with nextest on all five platforms, so locally you only need the tests near your change.
 
 ## How to add a harness parser
 

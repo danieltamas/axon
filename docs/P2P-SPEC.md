@@ -24,6 +24,7 @@ the owner's approval, and before the tests that depend on it.
   | `AXON_FED_RELAY=disabled` | No relay, no discovery service |
   | `AXON_FED_BIND=127.0.0.1:0` | Bind the endpoint on loopback only |
   | `AXON_TEST_NOW_OFFSET_MS=<i64>` | Shifts the clock federation uses |
+  | `AXON_TEST_NOW_OFFSET_FILE=<path>` | Adds the integer ms in that file to the same clock, re-read on every reading, so a test moves a running process's time without restarting it. A missing or unreadable file adds 0 |
 
   Tests run two real `axon` processes, each with its own `XDG_DATA_HOME` and port, and talk
   to them over HTTP. No test reaches the internet.
