@@ -233,6 +233,88 @@ Claims cover files; the ledger covers work items that are not files (a lead cont
 - **Surfaces.** The SessionStart introduction says, for a root or subagent in a repository: `Before working an item others might also pick up (a lead, an issue, a URL), take it: {bus} take --key <kind:id>; mark it {bus} done --key <kind:id>.` The guide documents the four commands. The project view of the dashboard lists the ledger (`GET /api/handled?repo=<repo>` → `{entries:[…]}` as above, owner session required), newest first.
 - **Across machines** see P2P-SPEC §7b: entries travel over an active share both ways the share's flags allow, eventually consistent, with a deterministic winner on conflict.
 
+## 3c. Tasks and their true cost (2026-10-03, decided)
+
+Axon prices every turn. The operator wants the cost of a *task*: one piece of work, with all its turns, subagents, other harnesses and waiting. This section defines what a task is, how its cost rolls up, and where it shows. Part A, the project on turns, ships first and does not depend on the rest.
+
+### A. Every turn names its project
+
+- **Feed.** `RecentEvent` (src/summary.rs) gains `repo`, the repository name: the basename of `repo_of(project)`, so worktrees fold into their main repository; `null` outside any repository. It also gains `session`, the first 4 characters of the session id. The dashboard is owner-gated, so the old rule of keeping project names out of the feed (written for share cards) applies only to share cards now, which still leave both fields out.
+- **Latest turns** shows `time · agent · session · repo · model · tokens · cost`. The repo cell links to `#/p/<repo>`, and turns of one session read as one group.
+- **Brain.** A pulse labels itself `repo · model` for 1.2 s where it lands; under reduced motion the label shows without moving. Node labels avoid collisions: when two overlap, the label of the smaller node (by cost) is hidden, and the core total never sits on a hub. No project nodes are added, because the ring layout cannot take a third layer.
+- **Acceptance.**
+  - `/api/summary` `recent[*]` carries `repo` and `session`.
+  - A turn in a worktree reports its main repository's name, and a turn outside any repository reports `null`.
+  - A share card carries neither field.
+  - At 1280×800 with the real fixture set, no two visible brain labels overlap. This is checked by bounding boxes in a browser probe.
+
+### B. What a task is
+
+A task is one of the following, tried in this order. Each turn belongs to exactly one task.
+
+1. **Declared.** A handled-ledger key (§3b). `take --key K` opens task K for the taker, and `done --key K` or the take's end closes it. While it is open, the taker's turns belong to K. When an agent holds several open takes, a turn goes to the most recently taken one.
+2. **Delegated.** A turn by an agent with no open take, working for one that has an open take, belongs to that task. That covers:
+   - a subagent of the taker, at any depth;
+   - a session that received a `handoff`, or a `question` in a thread the taker opened, until it sends its `answer` or `ack` in that thread.
+3. **Request (the fallback).** One prompt from the operator in a root session opens a request, and the session's next prompt closes it. Every turn of the session and its subagents in between belongs to the request.
+   - **Prompt boundaries come from the transcripts:** a Claude `type: "user"` entry whose content is not a tool result, and a Codex `user_message`. OpenCode and Hermes are verified on real logs before they count; until then their sessions form one request per session.
+   - A request's name is the first 80 characters of its prompt, after secret redaction, and only when content capture is on. Otherwise it is `request at HH:MM`.
+
+Branches are deliberately not a task boundary: commit and merge history is not read today, and a branch spans sessions in ways the bus cannot see. That can be revisited once git history is ingested.
+
+**Store.** `tasks (id, repo, kind CHECK(kind IN ('declared','request')), key, name, root_agent, opened_at, closed_at)` and `task_turns (event_id PRIMARY KEY, task_id)`. Turns are assigned at ingest, so a turn's task never changes after assignment. A request id is `blake3(session_id, prompt_ts)`, so re-ingesting gives the same id.
+
+### C. The cost of a task
+
+```
+C_task = Σ turns [ T_in·P_in + T_cache_read·P_cache_read
+                 + T_cache_write_5m·P_cw5m + T_cache_write_1h·P_cw1h + T_out·P_out ]   measured
+       + Σ paid tool calls · P_tool                                                    measured or priced
+       + compute_seconds · R_compute                                                   estimate, opt-in
+```
+
+- **Model calls** use the existing per-turn price. Cache writes are their own terms because they cost 1.25× to 2× the input price. Turns on a subscription plan carry `credits` and the plan share instead of a price, and the two are never added into one euro figure.
+- **Tools.** Server-side paid tools are counted from each turn's usage record (`server_tool_use.web_search_requests`, `web_fetch_requests`; verify against fixtures first) and priced from `pricing.toml` `[tools]`. MCP tool calls are counted by name; a tool is priced only when `pricing.toml` `[tools]` names it, and is otherwise listed as unpriced.
+- **Compute.** Local-model turns (Ollama) cost `duration_ms · R_compute`, where `R_compute` is set in Settings and off by default. It is always labelled as an estimate.
+- **Not counted:**
+  - retrieval, which for coding agents falls under tools above;
+  - storage, which costs fractions of a cent locally;
+  - observability, since Axon itself costs nothing.
+
+  The UI says so instead of showing zeros.
+- **Alongside the money, never added to it:**
+  - `retries`, the cost of turns that errored or were superseded, as part of the total;
+  - `human_wait_ms`, the gap between a turn ending and the operator's next prompt, summed over the task;
+  - `elapsed_ms`, from open to close.
+- **Labels.** Every total says which parts are measured and which are estimated (`measured €4.10 + estimated €0.10`).
+
+### D. Where it shows
+
+- **API.** `GET /api/tasks?repo=&range=` returns
+  `{tasks:[{id, kind, key, name, opened_at, closed_at, cost:{measured, estimated, credits, tools_unpriced}, turns, agents, harnesses, retries_cost, human_wait_ms, elapsed_ms}]}`,
+  newest first, at most 200 entries. The owner session is required.
+- **Project view.** The "Handled work" panel becomes "Tasks": declared tasks, then requests, each row showing its name, state, cost, agents and elapsed time, and expanding into its turns.
+- **Usage view.** Most expensive tasks for the selected range, next to Models and Agents. Latest turns can fold into one row per task.
+- **CLI.** `axon bus tasks [--repo] [--json]` prints the same list.
+
+### E. Done when, and how it is checked
+
+- **Complete:** each turn in the fixture set belongs to exactly one task, and the sum of task costs equals the sum of turn costs to the cent for every range.
+- **Measured by:**
+  - `cargo test --workspace`;
+  - `GET /api/tasks` against a fixture hub, compared with `/api/summary` totals;
+  - the brain label check from A.
+- **Acceptance**, to be written by Codex from this section before implementation:
+  - **Ownership:** a turn under an open take goes to that key's task. A subagent's turn goes to its taker's task. A handoff recipient's turns go to the task until its answer. With no take, turns go to the request opened by the latest prompt.
+  - **Determinism:** two open takes send a turn to the latest one. Re-ingesting the same logs yields the same task ids and the same assignment.
+  - **Cost:** cache writes are priced on their own terms. Credits are never added into euros. An unpriced MCP tool is listed under `tools_unpriced`, and compute is zero until a rate is set.
+  - **Redaction:** with content capture off, a request's name is `request at HH:MM`. With it on, a secret in the prompt is redacted in the name.
+- **Quality:**
+  - The work lives inside existing files: ingest assigns tasks in `axon-core` (normalize), the store in `store.rs`, the API beside `handled/api.rs`, and the UI by extending `handled.js` rather than adding a parallel panel.
+  - snake_case columns, English only, files of at most 500 lines.
+  - Assigning tasks adds at most 5% to a full rescan, measured as the median of 5 runs of `axon --scan-only` on the same logs before and after the change.
+  - Prompt text crosses no trust boundary. It never leaves the machine, and federation carries ledger keys, never request names.
+
 ## 4. Task routing: which harness, model and effort a new agent gets
 
 `agent-bus route "<task>" [--role R] [--budget B]` answers `{harness, model, effort, reason}`. `spawn --auto` uses the answer.
