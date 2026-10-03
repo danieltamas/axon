@@ -34,7 +34,9 @@ the owner's approval, and before the tests that depend on it.
 - A nonce is 32 random bytes in base64url. A table holds its hash, `sha256` (see §5), with
   a lifetime of 60 s, and each nonce is single-use.
 - `axon` writes a nonce on start, prints `Dashboard: http://127.0.0.1:<port>/#login=<nonce>`
-  and opens the browser (unless `--no-open`).
+  and opens the browser, unless `--no-open` is given or the installed app takes over. It
+  takes over when it reported itself (`POST /api/app`, sent on load in standalone display
+  mode) within 30 days and an owner session is still live. Otherwise the browser opens.
 - `axon open` does the same for a server that is already running. With `--print` it only
   prints, never opens.
 

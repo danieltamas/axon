@@ -101,6 +101,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federat
     let router = assets::routes(Router::new().route("/", get(index)));
     let router = router
         .route("/api/session", post(create_session))
+        .route("/api/app", post(app_seen))
         .route("/api/snapshot", get(snapshot_json))
         .route("/api/health", get(health))
         .route("/api/stream", get(stream))
@@ -296,6 +297,16 @@ async fn create_session(State(app): State<Arc<App>>, Json(login): Json<Login>) -
     }
 }
 
+/// The installed app announces itself, so the next `axon` start leaves the browser closed.
+async fn app_seen(State(app): State<Arc<App>>) -> Response {
+    let db = app.db.clone();
+    match tokio::task::spawn_blocking(move || session::record_app_seen(&store::open(&db)?)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(err)) => failure(StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")),
+        Err(err) => failure(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
 async fn snapshot_json(State(app): State<Arc<App>>) -> Response {
     let (db, content) = (app.db.clone(), app.content);
     let built = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
@@ -374,7 +385,7 @@ async fn send(State(app): State<Arc<App>>, Json(request): Json<Outgoing>) -> Res
             let mut conn = store::open(&db)?;
             let tx = store::write_tx(&mut conn)?;
             let sent = match &request.reply_to {
-                Some(question) => msg::reply(&tx, question, &request.from_id, &request.body)?,
+                Some(question) => msg::reply(&tx, question, &request.from_id, &request.body, &[])?,
                 None => msg::send(
                     &tx,
                     &msg::Outgoing {

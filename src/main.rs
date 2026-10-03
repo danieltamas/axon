@@ -135,7 +135,11 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
     println!("Dashboard: {link}");
     spawn_refresher(state.clone());
     if !cli.no_open {
-        open_in_browser(&link);
+        if axon_bus::session::app_takes_over(&db) {
+            println!("  the installed Axon app reconnects on its own");
+        } else {
+            open_in_browser(&link);
+        }
     }
     println!("  live (file-watch) — press Ctrl-C to stop\n");
     federation.restart().await;

@@ -1,9 +1,15 @@
 // Axon as an installed app: the service worker that keeps the offline page, the banner
 // that offers installation, and the hand-off to the offline page when the server stops.
 import { el } from "./dom.js";
+import { authFetch } from "./signin.js";
 
 const DISMISSED = "axon-install-dismissed";
 const installed = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+
+// Tells the server the installed app is in use, so starting `axon` stops opening a browser tab.
+export function announceApp() {
+  if (installed()) authFetch("/api/app", { method: "POST" }).catch(() => {});
+}
 
 export function registerWorker() {
   // Workers need a secure context; 127.0.0.1 is one, a LAN address is not.

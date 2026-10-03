@@ -26,6 +26,9 @@ const TOUCH_MS: i64 = 60_000;
 /// The port a running server bound, so `open` can name it.
 const PORT_KEY: &str = "dashboard_port";
 const DEFAULT_PORT: u16 = 7777;
+const APP_SEEN_KEY: &str = "app_seen_at";
+/// An installed app unseen this long is treated as removed, so `axon` opens the browser again.
+const APP_FORGET_MS: i64 = 30 * 24 * 3_600_000;
 
 /// The digest of `input` as 64 lowercase hex characters.
 pub(crate) fn sha256_hex(input: &[u8]) -> String {
@@ -174,6 +177,34 @@ pub fn live_count(conn: &Connection) -> rusqlite::Result<i64> {
         [store::now_ms()],
         |r| r.get(0),
     )
+}
+
+/// The installed app (standalone display mode) reported itself running.
+pub fn record_app_seen(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![APP_SEEN_KEY, store::now_ms().to_string()],
+    )?;
+    Ok(())
+}
+
+/// True when starting `axon` should leave the browser closed: the installed app ran
+/// recently and a session it can use is still live. Any doubt opens the browser.
+pub fn app_takes_over(db: &std::path::Path) -> bool {
+    let Ok(conn) = store::open(db) else {
+        return false;
+    };
+    let seen = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [APP_SEEN_KEY],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|text| text.parse::<i64>().ok());
+    let recent = seen.is_some_and(|at| store::now_ms() - at < APP_FORGET_MS);
+    recent && live_count(&conn).is_ok_and(|n| n > 0)
 }
 
 pub fn cookie_header(secret: &str) -> String {
