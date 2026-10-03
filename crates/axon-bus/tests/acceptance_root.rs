@@ -37,7 +37,9 @@ fn root_dashboard_stays_alive_and_serves_health_and_summary() {
         cookie: String::new(),
         token: String::new(),
     };
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // The budget declared above: a freshly linked binary is checked by macOS on its first
+    // launch, which alone can take seconds under a full suite.
+    let deadline = Instant::now() + bus.remaining();
     loop {
         if server.process.0.try_wait().unwrap().is_some() {
             let output = server.process.finish(Duration::from_secs(1));

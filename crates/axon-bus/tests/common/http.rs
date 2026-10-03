@@ -57,7 +57,9 @@ impl Server {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         let mut process = Running(command.spawn().unwrap());
-        let deadline = Instant::now() + bus.remaining().min(Duration::from_millis(1500));
+        // The test's own budget: a freshly linked binary is checked by macOS on its first
+        // launch, which alone can take seconds under a full suite.
+        let deadline = Instant::now() + bus.remaining();
         let info = loop {
             if let Ok(bytes) = fs::read(&ready) {
                 if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
