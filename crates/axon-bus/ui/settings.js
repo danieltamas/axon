@@ -5,10 +5,8 @@
 import { el } from "./dom.js";
 import { federationSection } from "./settings-fed.js";
 import { reason, request } from "./settings-kit.js";
-import { budgetsSection, captureSection, usageSection } from "./settings-sections.js";
+import { agentsSection, budgetsSection, captureSection, usageSection } from "./settings-sections.js";
 import { hooksSection, sessionsSection, storageSection } from "./settings-system.js";
-
-const PEERS_POLL_MS = 5000;
 
 export function createSettings(container) {
   const title = el("h1", null, "Settings");
@@ -22,19 +20,14 @@ export function createSettings(container) {
   container.append(head, notice, stack);
 
   let sections = [];
-  let federation = null;
-  let timer = 0;
-  let showing = false;
 
   function apply(settings) {
     for (const section of sections) section.sync(settings);
-    if (federation) federation.refreshPeers();
   }
 
   function build() {
     const api = { apply };
-    federation = federationSection(api);
-    sections = [captureSection(api), usageSection(api), budgetsSection(api), hooksSection(api), storageSection(api), sessionsSection(api), federation];
+    sections = [captureSection(api), usageSection(api), budgetsSection(api), hooksSection(api), storageSection(api), sessionsSection(api), agentsSection(api), federationSection(api)];
     stack.replaceChildren(...sections.map((section) => section.root));
     index.replaceChildren(
       ...sections.map((section) => {
@@ -77,22 +70,5 @@ export function createSettings(container) {
     apply(res.data);
   }
 
-  return {
-    // A federation body pushed on the event stream.
-    fed(body) {
-      if (federation) federation.pushPeers(body);
-    },
-    show() {
-      showing = true;
-      load();
-      clearInterval(timer);
-      timer = setInterval(() => {
-        if (showing && federation) federation.refreshPeers();
-      }, PEERS_POLL_MS);
-    },
-    hide() {
-      showing = false;
-      clearInterval(timer);
-    },
-  };
+  return { show: load };
 }

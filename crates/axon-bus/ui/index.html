@@ -13,6 +13,7 @@
 <meta name="theme-color" content="#0a110e" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/settings.css">
+<link rel="stylesheet" href="/connections.css">
 <link rel="stylesheet" href="/pwa.css">
 <script type="module" src="/app.js"></script>
 </head>
@@ -25,6 +26,7 @@
   <nav class="views" aria-label="Views">
     <a href="#/" data-view="projects">Projects</a>
     <a href="#/usage" data-view="usage">Usage</a>
+    <a href="#/connections" data-view="connections">Connections <span class="nav-count" id="conn-count" hidden></span></a>
     <a href="#/settings" data-view="settings">Settings</a>
   </nav>
   <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
@@ -43,11 +45,13 @@
   <section class="overview" id="overview" aria-label="Projects"></section>
   <section class="board" id="board" aria-label="Project topology">
     <header class="project-head" id="project-head"></header>
+    <section class="handled" id="handled" aria-label="Handled work"></section>
     <svg class="arcs" id="arcs" aria-hidden="true"></svg>
     <div class="tree" id="tree"></div>
   </section>
   <aside class="context" id="context" aria-label="Activity"></aside>
   <section class="usage" id="usage" aria-label="Usage"></section>
+  <section class="connections" id="connections" aria-label="Connections"></section>
   <section class="settings" id="settings" aria-label="Settings"></section>
 </main>
 </body>

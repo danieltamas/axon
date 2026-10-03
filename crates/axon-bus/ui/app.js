@@ -6,10 +6,12 @@
 import { activityChart, sumHours } from "./activity.js";
 import { createArcs } from "./arcs.js";
 import { createBoard } from "./board.js";
+import { createConnections } from "./connections.js";
 import { createContext } from "./context.js";
 import { agents, bytes, el, isProcess, money, setCurrency, setText, stats, tokens } from "./dom.js";
 import { createOverview, projectKey, summarize } from "./overview.js";
 import { offerInstall, onServerLost, registerWorker } from "./pwa.js";
+import { createHandled } from "./handled.js";
 import { createEnder } from "./send.js";
 import { createSettings } from "./settings.js";
 import { authFetch, exchangeLogin, hasSession, showSignIn, streamUrl } from "./signin.js";
@@ -24,6 +26,7 @@ const overview = createOverview($("overview"), (key) => {
   location.hash = `#/p/${encodeURIComponent(key)}`;
 });
 const board = createBoard($("tree"), $("board"), (id) => focus({ selected: state.selected === id ? null : id }));
+const handled = createHandled($("handled"));
 const arcs = createArcs({ board, boardEl: $("board"), overlay: $("arcs") });
 const context = createContext($("context"), {
   onThread: (thread) => focus({ thread }),
@@ -40,6 +43,14 @@ const usage = createUsage($("usage"), {
 });
 
 const settings = createSettings($("settings"));
+// The nav carries how many machines are connected, so a live link is visible from any view.
+const connections = createConnections($("connections"), {
+  onCount: (n) => {
+    const badge = $("conn-count");
+    badge.hidden = !n;
+    setText(badge, String(n));
+  },
+});
 
 function focus({ selected = null, thread = null }) {
   state.selected = selected;
@@ -55,8 +66,9 @@ function setView(view) {
 }
 for (const tab of document.querySelectorAll("[data-tab]")) tab.addEventListener("click", () => setView(tab.dataset.tab));
 
-// The hash is the level: `#/` is every project, `#/p/<repo>` one project and `#/usage`
-// the spend record, `#/settings` the settings, so the back button walks out of a project.
+// The hash is the level: `#/` is every project, `#/p/<repo>` one project, and `#/usage`,
+// `#/connections` and `#/settings` the other views, so the back button walks out of a project.
+const VIEWS = ["usage", "connections", "settings"];
 function route() {
   const match = location.hash.match(/^#\/p\/(.+)$/);
   const project = match ? decodeURIComponent(match[1]) : null;
@@ -65,18 +77,17 @@ function route() {
     state.selected = null;
     state.thread = null;
   }
-  const onUsage = location.hash === "#/usage";
-  const onSettings = location.hash === "#/settings";
-  layout.dataset.level = onUsage ? "usage" : onSettings ? "settings" : project ? "project" : "overview";
+  const view = VIEWS.find((name) => location.hash === `#/${name}`);
+  layout.dataset.level = view || (project ? "project" : "overview");
   for (const link of document.querySelectorAll("[data-view]")) {
-    const here = link.dataset.view === (onUsage ? "usage" : onSettings ? "settings" : "projects");
-    if (here) link.setAttribute("aria-current", "page");
+    if (link.dataset.view === (view || "projects")) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  if (onUsage) usage.show();
+  if (view === "usage") usage.show();
   else usage.hide();
-  if (onSettings) settings.show();
-  else settings.hide();
+  if (view === "connections") connections.show();
+  else connections.hide();
+  if (view === "settings") settings.show();
   document.body.dataset.level = layout.dataset.level;
   setView("agents");
   render();
@@ -153,7 +164,8 @@ function renderProjectHead(repo, s) {
 function render() {
   const repo = state.project ? currentRepo() : null;
   renderCrumbs(repo);
-  if (layout.dataset.level === "usage" || layout.dataset.level === "settings") return;
+  handled.show(layout.dataset.level === "project" && repo ? repo.repo || null : null);
+  if (VIEWS.includes(layout.dataset.level)) return;
   if (!state.project) {
     overview.render(state.snapshot, Date.now());
     return;
@@ -183,7 +195,7 @@ function connect() {
     if (setCurrency(state.snapshot.currency)) usage.redraw();
     requestAnimationFrame(render);
   });
-  source.addEventListener("fed", (event) => settings.fed(JSON.parse(event.data)));
+  source.addEventListener("fed", (event) => connections.fed(JSON.parse(event.data)));
   source.addEventListener("error", async () => {
     link.dataset.state = "down";
     setText(link, "Reconnecting");

@@ -1,8 +1,9 @@
 // Settings that live in the hub's settings table and the config file: what is captured,
-// how long usage is kept, and the spend caps. Each section is `{ root, sync(settings) }`.
+// how long usage is kept, the spend caps, and how sessions link. Each section is
+// `{ root, sync(settings) }`.
 
 import { el } from "./dom.js";
-import { band, field, numberInput, request, settingsForm, switchRow } from "./settings-kit.js";
+import { band, field, numberInput, reason, request, settingsForm, switchRow } from "./settings-kit.js";
 
 export function captureSection({ apply }) {
   const { root, body } = band("capture", "Capture", "What Axon keeps of what agents say and do, and for how long.");
@@ -127,6 +128,30 @@ export function budgetsSection({ apply }) {
     sync({ budgets }) {
       if (form.isEditing()) return;
       for (const cap of caps) cap.input.value = budgets[cap.name] === null || budgets[cap.name] === undefined ? "" : budgets[cap.name];
+    },
+  };
+}
+
+export function agentsSection({ apply }) {
+  const { root, body } = band("agents", "Agents", "How the sessions on this machine reach each other.");
+  const toggle = switchRow({
+    label: "Link sessions in the same repository",
+    hint: "Sessions working in one repository, worktrees included, can message each other without asking. Off, one proposes a link and the other accepts.",
+    async: true,
+    onToggle: async (on) => {
+      toggle.lock(true);
+      toggle.say("");
+      const res = await request("PUT", "/api/settings/bus", { auto_link: on });
+      toggle.lock(false);
+      if (res.ok) apply(res.data);
+      else toggle.say(reason(res));
+    },
+  });
+  body.append(toggle.root);
+  return {
+    root,
+    sync({ bus }) {
+      toggle.set(Boolean(bus && bus.auto_link));
     },
   };
 }

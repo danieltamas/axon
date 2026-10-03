@@ -44,7 +44,7 @@ function repoPicker(label) {
     // One field to the form: an error lands on whichever input is showing.
     field: {
       name: "local_repo",
-      codes: ["already_shared", "peer_not_active", "too_many_shares"],
+      codes: ["already_shared", "offered_to_you", "peer_not_active", "too_many_shares"],
       input: { focus: () => active().input.focus() },
       clear() {
         byPick.clear();
@@ -54,7 +54,9 @@ function repoPicker(label) {
     },
     value: () => (select.value === OTHER ? path.value.trim() : select.value),
     onName: (listen) => listeners.push(listen),
-    async load() {
+    // `preferred`: the folder to pick when nothing is chosen yet, such as the one holding
+    // the same project as an offer.
+    async load(preferred) {
       const repos = await localRepos();
       // Rebuilding the options closes the dropdown if it is open: only when the list changed.
       const key = JSON.stringify(repos);
@@ -68,7 +70,9 @@ function repoPicker(label) {
         select.append(option);
       }
       select.append(new Option("Another folder", OTHER));
-      if ([...select.options].some((option) => option.value === chosen)) select.value = chosen;
+      const listed = (value) => value && [...select.options].some((option) => option.value === value);
+      if (listed(chosen)) select.value = chosen;
+      else if (listed(preferred)) select.value = preferred;
       else if (!repos.length) select.value = OTHER;
       byPath.root.hidden = select.value !== OTHER;
     },
@@ -163,7 +167,7 @@ function acceptForm({ share, refresh }) {
     load() {
       if (loaded) return;
       loaded = true;
-      picker.load();
+      picker.load(share().suggested_repo);
     },
   };
 }

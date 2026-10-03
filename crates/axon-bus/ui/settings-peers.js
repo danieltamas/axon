@@ -214,7 +214,8 @@ function peerCard(refresh) {
   };
 }
 
-export function peersPanel() {
+// `onFed` hears every body this panel renders, so the link map beside it draws the same data.
+export function peersPanel({ onFed = () => {} } = {}) {
   const root = el("div", "peers");
   const connect = connectPanel({ refresh: () => refresh() });
   connect.root.hidden = true;
@@ -222,11 +223,6 @@ export function peersPanel() {
   root.append(connect.root, el("h3", null, "Peers"), out);
   out.setAttribute("aria-live", "polite");
   out.append(el("p", "set-note", "Loading peers"));
-  const identity = el("dl", "readout");
-  const identityItem = el("div");
-  const identityValue = el("dd");
-  identityItem.append(el("dt", null, "This node"), identityValue);
-  identity.append(identityItem);
   const list = el("ul", "peer-list");
   const empty = el("p", "set-note", "No peers paired yet. Invite a machine above, or join with a link you were sent.");
   const cards = new Map();
@@ -235,7 +231,6 @@ export function peersPanel() {
     connect.root.hidden = !fed.enabled;
     if (!fed.enabled) return out.replaceChildren(el("p", "set-note", "Federation is off, so no peers are connected."));
     connect.sync(fed);
-    identityValue.textContent = fed.fingerprint || fed.node_id || "No identity yet";
     const peers = fed.peers.filter((peer) => peer.state !== "removed" || peer.removed_reason === "remote_removed");
     const live = new Set(peers.map((peer) => peer.peer_id));
     for (const [id, card] of cards)
@@ -246,6 +241,7 @@ export function peersPanel() {
     const ordered = peers.map((peer) => {
       if (!cards.has(peer.peer_id)) cards.set(peer.peer_id, peerCard(refresh));
       const card = cards.get(peer.peer_id);
+      card.root.id = `peer-${peer.peer_id}`;
       card.update(peer);
       return card.root;
     });
@@ -253,7 +249,7 @@ export function peersPanel() {
     // With peers, the cards come first and connecting another machine moves below them.
     root.dataset.peers = String(peers.length > 0);
     // Re-inserting nodes that are already in place closes an open dropdown and drops focus.
-    const shown = [identity, peers.length ? list : empty];
+    const shown = [peers.length ? list : empty];
     if ([...out.children].some((node, at) => node !== shown[at]) || out.children.length !== shown.length) out.replaceChildren(...shown);
   }
 
@@ -267,7 +263,9 @@ export function peersPanel() {
       key = "";
       return out.replaceChildren(el("p", "set-note bad", `Could not load peers. ${reason(res)}`));
     }
-    if (Array.isArray(res.data.peers)) show(res.data);
+    if (!Array.isArray(res.data.peers)) return;
+    show(res.data);
+    onFed(res.data);
   }
 
   async function refresh(force = false) {

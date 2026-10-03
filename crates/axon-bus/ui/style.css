@@ -158,6 +158,20 @@ a.crumb:hover { color: var(--ink-strong); }
 .need b { min-width: 0; padding: 0; background: none; }
 @container (max-width: 700px) { .project-head { grid-template-columns: minmax(0, 1fr); } }
 
+/* ---- handled ledger: what is taken or done, so nobody starts it again ---- */
+.handled { max-width: 1180px; padding: 18px 0 4px; }
+.hd-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.hd-head h2 { font-size: 13px; font-weight: 600; color: var(--ink-strong); }
+.hd-count { font-size: 12px; color: var(--faint); }
+.hd-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.hd-row { display: grid; grid-template-columns: 52px minmax(0, max-content) minmax(0, 1fr); align-items: baseline; gap: 4px 12px; padding: 4px 0; font-size: 13px; }
+.hd-state { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--warn); }
+.hd-row[data-state="done"] .hd-state { color: var(--signal); }
+.hd-key { font: 12px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36ch; }
+.hd-who { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-note { grid-column: 2 / -1; color: var(--ink); overflow-wrap: anywhere; }
+.hd-more { font: 12px var(--mono); color: var(--faint); padding-top: 4px; }
+
 /* ---- topology: one session per row, its subagents hanging under it as a tree ---- */
 .tree { --sub-y: 16px; }
 .lane { max-width: 1180px; margin-top: 28px; }

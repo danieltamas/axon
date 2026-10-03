@@ -1,5 +1,5 @@
 // How a peer's live health and traffic read as short lines. Pure functions over one entry of
-// GET /api/fed, shared by the peer card.
+// GET /api/fed, shared by the peer card and the link map.
 
 import { since } from "./dom.js";
 
@@ -13,7 +13,7 @@ export const STATE = {
   incompatible: "Incompatible",
 };
 
-const size = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
+export const size = (n) => (n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1 << 20)).toFixed(1)} MiB`);
 
 // "3s", "4m": how long, for a glance rather than an audit.
 export const span = (ms) => (ms < 45000 ? `${Math.max(1, Math.round(ms / 1000))}s` : since(Date.now() - ms).replace(" ago", ""));
@@ -30,11 +30,11 @@ export function healthFacts(peer) {
 }
 
 export function trafficFacts(peer) {
-  const { queue, counters } = peer;
+  const { queue, counters, traffic = {} } = peer;
   const facts = [];
   if (queue && queue.count) facts.push(`${queue.count} queued, ${size(queue.bytes)}${queue.oldest_at ? `, oldest ${since(queue.oldest_at)}` : ""}`);
   if (counters) {
-    facts.push(`sent ${counters.sent_accepted}`, `received ${counters.received}`);
+    facts.push(`sent ${counters.sent_accepted} (${size(traffic.bytes_sent || 0)})`, `received ${counters.received} (${size(traffic.bytes_received || 0)})`);
     for (const name of ["expired", "rejected", "cancelled"]) if (counters[name]) facts.push(`${name} ${counters[name]}`);
   }
   return facts.join(" · ");

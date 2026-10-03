@@ -1,8 +1,7 @@
-// Federation: the on/off switch, the relay, and the Peers panel (settings-peers.js), where a
-// machine is invited, joined, confirmed, shared with, paused and disconnected. Live health
-// arrives as `event: fed` on /api/stream and is polled as a fallback.
+// Federation: the on/off switch and the relay. Pairing, peers and shared projects live in
+// the Connections view (connections.js).
 
-import { peersPanel } from "./settings-peers.js";
+import { el } from "./dom.js";
 import { band, field, reason, request, settingsForm, switchRow, textInput } from "./settings-kit.js";
 
 export function federationSection({ apply }) {
@@ -36,12 +35,13 @@ export function federationSection({ apply }) {
     },
     applied: apply,
   });
-  const peers = peersPanel();
-  body.append(toggle.root, form.root, peers.root);
+  const where = el("p", "set-note");
+  const go = el("a", null, "Connections");
+  go.href = "#/connections";
+  where.append("Pair machines, share projects and watch each link in ", go, ".");
+  body.append(toggle.root, form.root, where);
   return {
     root,
-    refreshPeers: peers.refresh,
-    pushPeers: peers.push,
     sync({ federation }) {
       toggle.set(federation.enabled);
       if (form.isEditing()) return;

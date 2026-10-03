@@ -17,6 +17,7 @@ const REASONS = {
   not_pending: "This pairing is no longer waiting for confirmation.",
   peer_not_active: "That peer is not connected yet.",
   already_shared: "That project is already shared with this peer.",
+  offered_to_you: "They already shared this project with you. Accept their share instead.",
   too_many_shares: "This peer already has as many shares as it can hold.",
   wrong_state: "That change no longer applies. The page now shows what is current.",
   unknown_peer: "That peer no longer exists.",
