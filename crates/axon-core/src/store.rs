@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cost_eur        REAL NOT NULL,
     cost_credits    REAL,
     pricing_kind    TEXT NOT NULL DEFAULT 'unknown',
-    unpriced        INTEGER NOT NULL
+    unpriced        INTEGER NOT NULL,
+    agent_id        TEXT,
+    tools_unpriced  TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_agent ON usage_events(agent);
@@ -166,8 +168,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, ts, harness, project, agent, is_subagent, model, session_id, \
              tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h, duration_ms, \
-             loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced \
-             FROM usage_events ORDER BY id",
+             loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced, \
+             agent_id, tools_unpriced FROM usage_events ORDER BY id",
         )?;
         let rows = stmt.query_map([], row_to_event)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -179,8 +181,9 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
     conn.execute(
         "INSERT INTO usage_events (id, ts, harness, project, agent, is_subagent, model, session_id, \
             tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h, duration_ms, \
-            loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22) \
+            loc_added, loc_removed, loc_failed, skills, cost_eur, cost_credits, pricing_kind, unpriced, \
+            agent_id, tools_unpriced) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24) \
          ON CONFLICT(id) DO UPDATE SET \
             ts=excluded.ts, harness=excluded.harness, project=excluded.project, \
             agent=excluded.agent, is_subagent=excluded.is_subagent, model=excluded.model, \
@@ -191,7 +194,8 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
             loc_removed=excluded.loc_removed, loc_failed=excluded.loc_failed, \
             skills=excluded.skills, cost_eur=excluded.cost_eur, \
             cost_credits=excluded.cost_credits, pricing_kind=excluded.pricing_kind, \
-            unpriced=excluded.unpriced",
+            unpriced=excluded.unpriced, agent_id=excluded.agent_id, \
+            tools_unpriced=excluded.tools_unpriced",
         params![
             e.id,
             e.ts,
@@ -215,6 +219,8 @@ fn upsert_with(conn: &Connection, e: &Event) -> anyhow::Result<()> {
             e.cost_credits,
             e.pricing_kind.as_str(),
             e.unpriced as i64,
+            e.agent_id,
+            serde_json::to_string(&e.tools_unpriced)?,
         ],
     )?;
     Ok(())
@@ -247,6 +253,8 @@ fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
         cost_credits: r.get(19)?,
         pricing_kind: PricingKind::from_tag(&pricing_kind).unwrap_or(PricingKind::Unknown),
         unpriced: r.get::<_, i64>(21)? != 0,
+        agent_id: r.get(22)?,
+        tools_unpriced: serde_json::from_str(&r.get::<_, String>(23)?).unwrap_or_default(),
     })
 }
 
@@ -271,6 +279,12 @@ fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
         conn.execute(
             "ALTER TABLE usage_events ADD COLUMN pricing_kind TEXT NOT NULL DEFAULT 'unknown'",
             [],
+        )?;
+    }
+    if !has_column(conn, "usage_events", "agent_id")? {
+        conn.execute_batch(
+            "ALTER TABLE usage_events ADD COLUMN agent_id TEXT;
+             ALTER TABLE usage_events ADD COLUMN tools_unpriced TEXT NOT NULL DEFAULT '[]';",
         )?;
     }
     conn.execute(

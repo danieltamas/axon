@@ -229,6 +229,17 @@ pub enum Command {
         #[arg(long)]
         prefix: Option<String>,
     },
+    /// The tasks work went to, newest first: ledger takes and operator requests, with cost.
+    Tasks {
+        /// Only work done inside the current repository.
+        #[arg(long)]
+        repo: bool,
+        /// today, 7d, 30d or all.
+        #[arg(long, default_value = "all")]
+        range: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Check the audit log's hash chain.
     Audit {
         #[arg(long, required = true)]

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use super::{loc, RawTurn};
+use super::{iso_ms, loc, Prompt, RawTurn};
 use crate::model::Harness;
 
 /// `agent-<id>.meta.json`: the join key + roster name for a sub-agent file.
@@ -50,6 +50,54 @@ pub fn parse_main_jsonl(content: &str) -> Vec<RawTurn> {
 /// (falling back to the line's `attributionAgent`, then `"unknown-sub"`).
 pub fn parse_subagent_jsonl(content: &str, meta: &SubagentMeta) -> Vec<RawTurn> {
     collapse(content, true, Some(meta))
+}
+
+/// The operator's prompts in a main-thread `<session>.jsonl`: `user` lines whose content is
+/// text, not tool results, and not the client's own notes (`isMeta`, compaction summaries,
+/// local command output).
+pub fn parse_prompts(content: &str) -> Vec<Prompt> {
+    content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .filter(|v| v.get("type").and_then(Value::as_str) == Some("user"))
+        .filter(|v| {
+            ["isMeta", "isCompactSummary", "isSidechain"]
+                .iter()
+                .all(|flag| v.get(flag).and_then(Value::as_bool) != Some(true))
+        })
+        .filter_map(|v| {
+            let text = prompt_text(v.get("message")?.get("content")?)?;
+            if text.starts_with("<local-command-") {
+                return None;
+            }
+            Some(Prompt {
+                session_id: v.get("sessionId")?.as_str()?.to_string(),
+                ts: iso_ms(v.get("timestamp")?.as_str()?)?,
+                text,
+            })
+        })
+        .collect()
+}
+
+/// A user message's text, or None when it carries a tool result.
+fn prompt_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => {
+            if blocks
+                .iter()
+                .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+            {
+                return None;
+            }
+            let texts: Vec<&str> = blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .collect();
+            Some(texts.join("\n"))
+        }
+        _ => None,
+    }
 }
 
 /// Core: split JSONL into assistant turns keyed by `message.id`, union their content,
@@ -146,6 +194,13 @@ fn build_turn(
     let (tokens_in, tokens_out, cache_read, cache_write_5m, cache_write_1h) = usage_buckets(&usage);
 
     let loc = loc::extract(&content, failed_ids);
+    let mcp_tools = content
+        .iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter_map(|b| b.get("name").and_then(Value::as_str))
+        .filter(|name| name.starts_with("mcp__"))
+        .map(str::to_string)
+        .collect();
 
     let str_field = |key: &str| first.get(key).and_then(Value::as_str).map(str::to_string);
     let agent_id = str_field("agentId");
@@ -195,6 +250,7 @@ fn build_turn(
         skills: loc.skills,
         chatgpt_plan_type: None,
         reported_cost_usd: None,
+        mcp_tools,
     })
 }
 

@@ -15,7 +15,7 @@ use crate::model::Harness;
 
 /// Bumped whenever a parser changes what it reads from a source, so a scan reads every
 /// source again instead of keeping turns an older parser produced.
-pub const PARSER_VERSION: u32 = 1;
+pub const PARSER_VERSION: u32 = 2;
 
 /// One assistant turn after collapse-by-`message.id`, before normalization.
 /// Timestamps are still ISO-8601 strings and the model id is still raw.
@@ -45,6 +45,25 @@ pub struct RawTurn {
     /// Cost in USD already computed by the source harness (OpenCode), if any. When present,
     /// `normalize` uses it (× fx) instead of computing from `pricing.toml`.
     pub reported_cost_usd: Option<f64>,
+    /// Every MCP tool call in the turn (`mcp__*`), once per call, priced by `[tools]`.
+    pub mcp_tools: Vec<String>,
+}
+
+/// An operator prompt: what opens a request (BUS-PLAN §3c B). Tool results and sub-agent
+/// briefs are not prompts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prompt {
+    pub session_id: String,
+    /// Epoch milliseconds.
+    pub ts: i64,
+    pub text: String,
+}
+
+/// An ISO-8601 timestamp as epoch milliseconds.
+fn iso_ms(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|t| t.timestamp_millis())
 }
 
 /// One log a scan reads: a transcript file, or a harness's own database. A scan can
@@ -68,9 +87,20 @@ impl Source {
     /// Every turn in this source, or None when it could not be read (so a scan does not
     /// record it as read and tries again next time).
     pub fn parse(&self) -> Option<Vec<RawTurn>> {
+        self.read().map(|(turns, _)| turns)
+    }
+
+    /// Every turn and every operator prompt in this source, or None when it could not be read.
+    pub fn read(&self) -> Option<(Vec<RawTurn>, Vec<Prompt>)> {
         let content = || std::fs::read_to_string(&self.path).ok();
-        match self.kind {
-            SourceKind::ClaudeMain => Some(claude::parse_main_jsonl(&content()?)),
+        let turns = match self.kind {
+            SourceKind::ClaudeMain => {
+                let content = content()?;
+                return Some((
+                    claude::parse_main_jsonl(&content),
+                    claude::parse_prompts(&content),
+                ));
+            }
             SourceKind::ClaudeSubagent => {
                 // The meta file is optional; a subagent without one is still counted.
                 let meta = std::fs::read_to_string(self.path.with_extension("meta.json"))
@@ -85,11 +115,16 @@ impl Source {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("codex");
-                Some(codex::parse_session(&content()?, stem))
+                let content = content()?;
+                return Some((
+                    codex::parse_session(&content, stem),
+                    codex::parse_prompts(&content, stem),
+                ));
             }
             SourceKind::OpenCode => opencode::parse_db(&self.path),
             SourceKind::Ccflare => ccflare::parse_db(&self.path),
-        }
+        };
+        turns.map(|turns| (turns, Vec::new()))
     }
 }
 

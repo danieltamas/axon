@@ -102,6 +102,12 @@ export function displayMoney(value) {
   return `${symbol}${value < 100 ? value.toFixed(2) : Math.round(value).toLocaleString("en-US")}`;
 }
 
+// Euros, with plan credits beside them and never added in.
+export function taskCost(task) {
+  const credits = task.cost.credits > 0 ? ` + ${task.cost.credits.toFixed(1)} credits` : "";
+  return `${displayMoney(task.cost.measured)}${credits}`;
+}
+
 export function money(usd) {
   return displayMoney(usd === null || usd === undefined ? usd : usd * currency.per_usd);
 }
@@ -113,6 +119,15 @@ export function ago(ms, now = Date.now()) {
   if (s < 45) return "now";
   if (s < 3600) return `${Math.round(s / 60)}m`;
   if (s < 86400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
+// "40s", "12m", "3h 5m", "2d": a length of time, such as how long a task ran.
+export function duration(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
   return `${Math.round(s / 86400)}d`;
 }
 

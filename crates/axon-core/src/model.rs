@@ -112,6 +112,10 @@ pub struct Event {
     pub pricing_kind: PricingKind,
     /// Model id missing from the pricing map → cost is a floor, surface loudly.
     pub unpriced: bool,
+    /// The transcript's sub-agent id (Claude `agentId`), which names its bus agent.
+    pub agent_id: Option<String>,
+    /// MCP tools this turn called that `[tools]` in `pricing.toml` does not price.
+    pub tools_unpriced: Vec<String>,
 }
 
 /// Map a raw model id to its canonical form (DESIGN.md Appendix B).

@@ -88,7 +88,7 @@ async fn api_summary(
     }
     // Re-aggregate over the selected window; carry the range-independent panels (rtk, budget,
     // today/week/month spend) from the all-time summary.
-    let since = since_ms(range);
+    let since = axon_core::range_start_ms(range);
     let mut s = build_summary(events.iter().filter(|e| e.ts >= since));
     s.rtk = all.rtk.clone();
     s.today_cost_eur = all.today_cost_eur;
@@ -99,23 +99,6 @@ async fn api_summary(
     s.budget_month_eur = all.budget_month_eur;
     s.recent = recent_events(events.iter().filter(|e| e.ts >= since), FEED_LEN);
     Json(s)
-}
-
-/// Epoch-ms lower bound for a range key: `today` (local midnight), `7d`/`30d` (rolling), else 0.
-fn since_ms(range: &str) -> i64 {
-    use chrono::{Duration, Local};
-    let now = Local::now();
-    match range {
-        "today" => now
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .and_then(|d| d.and_local_timezone(Local).single())
-            .map(|d| d.timestamp_millis())
-            .unwrap_or(0),
-        "7d" => (now - Duration::days(7)).timestamp_millis(),
-        "30d" => (now - Duration::days(30)).timestamp_millis(),
-        _ => 0,
-    }
 }
 
 /// Reject non-loopback `Host` and cross-origin `Origin`/`Referer` (DESIGN.md §16).

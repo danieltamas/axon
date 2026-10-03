@@ -111,6 +111,7 @@ fn build(db: &Path, port: u16, content: bool) -> anyhow::Result<(Router, Federat
         .merge(settings::routes(db, content, federation.clone()))
         .merge(fed::api::routes(db, federation.clone()))
         .merge(crate::handled::api::routes(db))
+        .merge(crate::tasks::api::routes(db))
         .layer(middleware::from_fn_with_state(app, guard));
     Ok((router, federation))
 }

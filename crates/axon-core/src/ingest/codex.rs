@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::RawTurn;
+use super::{iso_ms, Prompt, RawTurn};
 use crate::model::Harness;
 
 #[derive(Default, Clone, Copy)]
@@ -30,6 +30,44 @@ struct TurnAcc {
     chatgpt_plan_type: Option<String>,
     first_ts: String,
     last_ts: String,
+}
+
+/// The operator's prompts in a Codex session: its `event_msg` `user_message` lines, keyed
+/// like [`parse_session`] keys its turns.
+pub fn parse_prompts(content: &str, fallback_session: &str) -> Vec<Prompt> {
+    let mut session_id = fallback_session.to_string();
+    let mut prompts = Vec::new();
+    for v in content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+    {
+        let payload = v.get("payload").unwrap_or(&Value::Null);
+        match v.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                    session_id = id.to_string();
+                }
+            }
+            Some("event_msg")
+                if payload.get("type").and_then(Value::as_str) == Some("user_message") =>
+            {
+                let ts = v.get("timestamp").and_then(Value::as_str).and_then(iso_ms);
+                if let Some(ts) = ts {
+                    prompts.push(Prompt {
+                        session_id: session_id.clone(),
+                        ts,
+                        text: payload
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    prompts
 }
 
 /// Parse one Codex session `.jsonl`. `fallback_session` is used if `session_meta.id` is absent
@@ -221,6 +259,7 @@ fn emit(
         skills: Vec::new(),
         chatgpt_plan_type: t.chatgpt_plan_type.clone(),
         reported_cost_usd: None,
+        mcp_tools: Vec::new(),
     })
 }
 

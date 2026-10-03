@@ -196,6 +196,7 @@ pub fn turn_from_row(r: &CcflareRow) -> Option<RawTurn> {
         skills: Vec::new(),
         chatgpt_plan_type: None,
         reported_cost_usd,
+        mcp_tools: Vec::new(),
     })
 }
 

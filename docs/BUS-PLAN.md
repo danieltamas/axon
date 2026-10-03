@@ -281,6 +281,8 @@ Branches are deliberately not a task boundary: commit and merge history is not r
 
 **Store.** `tasks (id, repo, kind CHECK(kind IN ('declared','request')), key, name, root_agent, opened_at, closed_at)` and `task_turns (event_id PRIMARY KEY, task_id)`. Turns are assigned at ingest, so a turn's task never changes after assignment. A request id is `blake3(session_id, prompt_ts)`, so re-ingesting gives the same id.
 
+**As built (0.4.6).** `tasks (id, kind, key, name, session_id, agent_id, opened_at, closed_at)` and `task_turns (event_id, task_id, agent_id)`, in `crates/axon-bus/src/tasks/`. The scan in `src/main.rs` stores prompts as requests before marking their sources read, then assigns every unassigned turn (`INSERT OR IGNORE`). Declared tasks are rebuilt from the audit log's `take`/`done`/`drop` events on every scan: a take closes at its key's next ledger event, or when the ledger shows it expired or freed. A session with no prompt before a turn (OpenCode, Hermes) gets one request per session. Repository is a filter over the turns' projects, not a task column.
+
 ### C. The cost of a task
 
 ```

@@ -76,6 +76,9 @@ pub fn to_event(turn: &RawTurn, pricing: &Pricing) -> anyhow::Result<Event> {
         }
     };
 
+    // Priced tool calls are part of the turn's cost, so every total built from turns has them.
+    let (tool_cost, tools_unpriced) = pricing.tool_cost(&turn.mcp_tools);
+
     Ok(Event {
         id: event_id(turn),
         ts: first_ms,
@@ -95,10 +98,12 @@ pub fn to_event(turn: &RawTurn, pricing: &Pricing) -> anyhow::Result<Event> {
         loc_removed: turn.loc_removed,
         loc_failed: turn.loc_failed,
         skills: turn.skills.clone(),
-        cost_eur,
+        cost_eur: cost_eur + tool_cost,
         cost_credits,
         pricing_kind,
         unpriced,
+        agent_id: turn.agent_id.clone(),
+        tools_unpriced,
     })
 }
 

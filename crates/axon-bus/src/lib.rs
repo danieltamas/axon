@@ -38,6 +38,7 @@ mod setup;
 mod snapshot;
 mod store;
 mod tail;
+pub mod tasks;
 mod transcript;
 mod uninstall;
 mod usage;
@@ -395,6 +396,7 @@ fn run(command: Command, db: PathBuf) -> anyhow::Result<ExitCode> {
                 println!("{entry}");
             }
         }
+        Command::Tasks { repo, range, json } => tasks::cli::run(&db, &range, repo, json)?,
         Command::Claims => {
             let conn = hub(&db)?;
             for claim in claims::list(&conn)? {

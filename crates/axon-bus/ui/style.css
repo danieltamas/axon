@@ -171,6 +171,8 @@ a.crumb:hover { color: var(--ink-strong); }
 .hd-who { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-note { grid-column: 2 / -1; color: var(--ink); overflow-wrap: anywhere; }
 .hd-more { font: 12px var(--mono); color: var(--faint); padding-top: 4px; }
+.hd-tasks { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.hd-tasks:empty { display: none; }
 
 /* ---- topology: one session per row, its subagents hanging under it as a tree ---- */
 .tree { --sub-y: 16px; }

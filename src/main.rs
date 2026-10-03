@@ -25,8 +25,10 @@ use axon::store::Store;
 use axon::summary::{build_summary, windowed_cost, Summary};
 
 mod cli_summary;
+mod paths;
 mod stamp;
 use cli_summary::print_cli_summary;
+use paths::*;
 use stamp::stamp;
 
 /// Axon — see DESIGN.md for the full build spec.
@@ -100,25 +102,6 @@ fn run_scan_only() -> anyhow::Result<()> {
     let (summary, _) = scan()?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
-}
-
-fn open_in_browser(link: &str) {
-    // A minimal Linux session (no desktop env, no xdg-settings) has xdg-open but the
-    // webbrowser crate never reaches it, so it is asked first.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    if std::process::Command::new("xdg-open")
-        .arg(link)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-    {
-        return;
-    }
-    if let Err(e) = webbrowser::open(link) {
-        eprintln!("axon: couldn't open a browser ({e}); open the link yourself");
-    }
 }
 
 /// Bare `axon`: serve the live dashboard at once and open the browser; the first scan
@@ -243,6 +226,7 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     let known = store.source_stamps(&fingerprint)?;
 
     let mut events = Vec::new();
+    let mut prompts = Vec::new();
     let mut stamps = Vec::new();
     let mut skipped = 0usize;
     for source in &sources {
@@ -253,9 +237,10 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
             continue;
         }
         // An unreadable source keeps its old stamp, so the next scan tries it again.
-        let Some(turns) = source.parse() else {
+        let Some((turns, read_prompts)) = source.read() else {
             continue;
         };
+        prompts.extend(read_prompts);
         for t in turns {
             match normalize::to_event(&t, &pricing) {
                 Ok(e) => events.push(e),
@@ -270,7 +255,11 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     if skipped > 0 {
         eprintln!("axon: skipped {skipped} turn(s) with unparseable timestamps");
     }
+    // Requests are stored before their sources are marked read, so a failure never loses a prompt.
+    axon_bus::tasks::record_prompts(&db, &prompts)?;
     store.record_scan(&events, &stamps)?;
+    // Every stored turn joins a task once, from the prompts and the bus's ledger and threads.
+    axon_bus::tasks::assign(&db)?;
 
     let all = store.all_events()?;
     let mut summary = build_summary(&all);
@@ -313,10 +302,6 @@ fn day_start_ms(date: chrono::NaiveDate) -> i64 {
 }
 
 /// Load `~/.config/axon/pricing.toml` if present, else the bundled defaults.
-fn pricing_path() -> std::path::PathBuf {
-    config_dir().join("axon").join("pricing.toml")
-}
-
 fn load_pricing() -> Pricing {
     let path = pricing_path();
     if path.exists() {
@@ -329,73 +314,6 @@ fn load_pricing() -> Pricing {
         }
     }
     Pricing::bundled()
-}
-
-fn config_dir() -> std::path::PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(Into::into)
-        .unwrap_or_else(|| axon_core::home().join(".config"))
-}
-
-fn data_dir() -> std::path::PathBuf {
-    std::env::var_os("XDG_DATA_HOME")
-        .map(Into::into)
-        .unwrap_or_else(|| axon_core::home().join(".local").join("share"))
-}
-
-fn claude_projects_dir() -> std::path::PathBuf {
-    axon_core::home().join(".claude").join("projects")
-}
-
-fn codex_sessions_dir() -> std::path::PathBuf {
-    axon_core::home().join(".codex").join("sessions")
-}
-
-fn opencode_dir() -> std::path::PathBuf {
-    data_dir().join("opencode")
-}
-
-fn opencode_db_path() -> std::path::PathBuf {
-    opencode_dir().join("opencode.db")
-}
-
-/// Candidate ccflare-family proxy DBs, in priority order: explicit env overrides first, then
-/// the better-ccflare and ccflare defaults. Each existing one is scanned; missing ones are
-/// skipped. Duplicates (same canonical path) are de-duped so a request is never counted twice.
-fn ccflare_db_paths() -> Vec<std::path::PathBuf> {
-    let mut raw: Vec<std::path::PathBuf> = Vec::new();
-    for var in ["BETTER_CCFLARE_DB_PATH", "CCFLARE_DB_PATH"] {
-        if let Some(p) = std::env::var_os(var) {
-            raw.push(p.into());
-        }
-    }
-    raw.push(
-        config_dir()
-            .join("better-ccflare")
-            .join("better-ccflare.db"),
-    );
-    raw.push(config_dir().join("ccflare").join("ccflare.db"));
-    raw.push(data_dir().join("ccflare").join("ccflare.db"));
-
-    let mut seen = std::collections::HashSet::new();
-    raw.into_iter()
-        .filter(|p| {
-            let key = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-            seen.insert(key)
-        })
-        .collect()
-}
-
-/// Parent dirs of the ccflare candidate DBs, for the live file-watch.
-fn ccflare_watch_dirs() -> Vec<std::path::PathBuf> {
-    ccflare_db_paths()
-        .iter()
-        .filter_map(|p| p.parent().map(|d| d.to_path_buf()))
-        .collect()
-}
-
-fn db_path() -> std::path::PathBuf {
-    axon_core::store::default_path()
 }
 
 #[cfg(test)]

@@ -4,11 +4,12 @@
 
 import { createBrain, modelHarness } from "./brain.js";
 import { authFetch, showSignIn } from "./signin.js";
-import { clock, displayMoney, el, glyph, setText, tokens } from "./dom.js";
+import { clock, displayMoney, duration, el, glyph, setText, taskCost, tokens } from "./dom.js";
 
 const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All time"]];
 const POLL_MS = 5000;
 const FEED_ROWS = 12;
+const TOP_TASKS = 8;
 const HARNESS = { "claude-code": "claude" };
 
 const count = (n) => Number(n || 0).toLocaleString("en-US");
@@ -81,10 +82,12 @@ export function createUsage(container, { onUnavailable, projectOf }) {
 
   const models = el("tbody");
   const agents = el("tbody");
+  const topTasks = el("tbody");
   const tables = el("div", "usage-tables");
   tables.append(
     table("Models", ["Model", "Turns", "Tokens in", "Tokens out", "Cost"], models),
     table("Agents", ["Agent", "Turns", "Tokens in", "Tokens out", "Cost"], agents),
+    table("Top tasks", ["Task", "Turns", "Ran", "Waited on you", "Cost"], topTasks),
   );
   const rtk = el("p", "rtk");
   container.append(head, top, tables, rtk);
@@ -113,6 +116,33 @@ export function createUsage(container, { onUnavailable, projectOf }) {
     if (!response.ok || asked !== range) return;
     last = await response.json();
     render(last);
+    loadTasks(asked);
+  }
+
+  // The costliest tasks of the period; tasks sum only the period's turns, like the totals.
+  async function loadTasks(asked) {
+    const response = await authFetch(`/api/tasks?range=${asked}&order=cost`).catch(() => null);
+    if (!response || !response.ok || asked !== range) return;
+    const { tasks = [] } = await response.json().catch(() => ({}));
+    const costliest = [...tasks].sort((a, b) => b.cost.measured - a.cost.measured).slice(0, TOP_TASKS);
+    topTasks.replaceChildren(
+      ...costliest.map((t) => {
+        const name = el("td");
+        name.append(el("span", "u-name", t.name));
+        name.title = t.key || t.name;
+        name.append(el("small", "u-tag", t.kind === "declared" ? "ledger" : "request"));
+        const row = el("tr");
+        row.append(name, el("td", "num", count(t.turns)), el("td", "num", duration(t.elapsed_ms)), el("td", "num", duration(t.human_wait_ms)), el("td", "num", taskCost(t)));
+        return row;
+      }),
+    );
+    if (!costliest.length) {
+      const row = el("tr");
+      const cell = el("td", "f-empty", "No tasks in this period.");
+      cell.colSpan = 5;
+      row.append(cell);
+      topTasks.append(row);
+    }
   }
 
   function render(s) {

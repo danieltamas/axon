@@ -62,6 +62,9 @@ pub struct Pricing {
     pub fx_to_display: Option<f64>,
     #[serde(default)]
     pub models: HashMap<String, ModelRates>,
+    /// Per-call prices of MCP tools (`mcp__server__tool`), in the file's currency.
+    #[serde(default)]
+    pub tools: HashMap<String, f64>,
     #[serde(default)]
     local: LocalSection,
 }
@@ -121,6 +124,20 @@ impl Pricing {
             + per_m(b.cache_write_5m, r.cache_write_5m)
             + per_m(b.cache_write_1h, r.cache_write_1h);
         (raw * self.fx_to_display.unwrap_or(1.0), false)
+    }
+
+    /// The display-currency cost of `calls`, and the tool names `[tools]` does not price.
+    pub fn tool_cost(&self, calls: &[String]) -> (f64, Vec<String>) {
+        let mut cost = 0.0;
+        let mut unpriced: Vec<String> = Vec::new();
+        for name in calls {
+            match self.tools.get(name) {
+                Some(price) => cost += price * self.fx(),
+                None if !unpriced.contains(name) => unpriced.push(name.clone()),
+                None => {}
+            }
+        }
+        (cost, unpriced)
     }
 
     pub fn chatgpt_credit_rates(&self, model: &str) -> Option<CreditRates> {
