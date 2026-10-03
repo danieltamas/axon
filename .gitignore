@@ -26,3 +26,8 @@ brag*
 
 # The 45 s demo is embedded in the README from a GitHub attachment; the render stays local
 assets/media/*.mp4
+
+# Local working docs, not published
+/ARCHITECTURE.md
+/LOG.md
+docs/GAME-STUDIO.md

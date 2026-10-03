@@ -6,9 +6,9 @@
 
 > **Status (v0.4.4, 2026-10-03):** the ingest schemas (§6, Appendix A) still hold. The
 > frontend sections describe the original Vue/TresJS plan; the shipped dashboard is plain ES
-> modules in `crates/axon-bus/ui`. The system as built is in [ARCHITECTURE.md](./ARCHITECTURE.md),
-> dated changes in [LOG.md](./LOG.md), the control plane in [docs/BUS-PLAN.md](./docs/BUS-PLAN.md)
-> and machine-to-machine federation in [docs/P2P-SPEC.md](./docs/P2P-SPEC.md).
+> modules in `crates/axon-bus/ui`. The control plane is specified in
+> [docs/BUS-PLAN.md](./docs/BUS-PLAN.md) and machine-to-machine federation in
+> [docs/P2P-SPEC.md](./docs/P2P-SPEC.md).
 
 > **This is a hand-off spec.** Copy it into the new `axon/` repo as `DESIGN.md` and execute. It assumes no prior context. **§6 + Appendix A are verified against real logs on the author's machine** — trust them over any prior recon.
 
@@ -66,7 +66,7 @@ Serious AI-coding now spans **multiple harnesses** (Claude Code, Codex, OpenCode
 ---
 
 ## 5. Architecture
-> Original ingest plan, still accurate for `axon-core`. The whole shipped system (control plane, hooks, federation, one dashboard) is in [ARCHITECTURE.md](./ARCHITECTURE.md).
+> Original ingest plan, still accurate for `axon-core`. The control plane, hooks, federation and the one dashboard are in [docs/BUS-PLAN.md](./docs/BUS-PLAN.md) §2.
 
 ```
  ~/.claude/projects/<sid>.jsonl ─┐  (+ <sid>/subagents/agent-*.jsonl + .meta.json)
@@ -215,7 +215,7 @@ Rust: axum·tokio·rust-embed·notify·rusqlite(bundled)·serde·clap·webbrowse
 ---
 
 ## 12. Repo layout
-> Superseded: there is no `ui/` Vue app; the UI is `crates/axon-bus/ui` (plain ES modules, no build step). Current layout: [ARCHITECTURE.md](./ARCHITECTURE.md).
+> Superseded: there is no `ui/` Vue app; the UI is `crates/axon-bus/ui` (plain ES modules, no build step).
 
 ```
 axon/
