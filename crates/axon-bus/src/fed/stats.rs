@@ -5,7 +5,8 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
 use super::pairing::PeerRow;
-use super::{identity, rate};
+use super::shares::Share;
+use super::{discovery, identity, rate};
 
 /// `{count, bytes, oldest_at}` of the messages still queued for `peer_id`.
 pub fn queue(conn: &Connection, peer_id: &str) -> rusqlite::Result<Value> {
@@ -53,4 +54,45 @@ pub fn counters(conn: &Connection, peer: &PeerRow) -> rusqlite::Result<Value> {
             }))
         },
     )
+}
+
+/// `{bytes_sent, bytes_received}` of this pairing: delivered envelopes out, message bodies in
+/// (while they are kept, §12).
+pub fn traffic(conn: &Connection, peer: &PeerRow) -> rusqlite::Result<Value> {
+    conn.query_row(
+        "SELECT
+           (SELECT coalesce(sum(bytes), 0) FROM fed_outbox WHERE peer_id=?1 AND state='accepted'),
+           (SELECT coalesce(sum(length(CAST(m.body AS BLOB))), 0) FROM fed_inbox i
+              JOIN messages m ON m.id=i.local_message_id WHERE i.peer_id=?1 AND i.generation=?2)",
+        params![peer.peer_id, peer.generation],
+        |r| Ok(json!({"bytes_sent": r.get::<_, i64>(0)?, "bytes_received": r.get::<_, i64>(1)?})),
+    )
+}
+
+/// Who one share connects: the peer's sessions by harness and availability, as discovery
+/// last listed them, and the agents here that belong to the share.
+pub fn reach(conn: &Connection, share: &Share) -> rusqlite::Result<Value> {
+    let mut stmt = conn.prepare(
+        "SELECT label, availability FROM fed_remote_sessions WHERE peer_id=?1 AND share_id=?2",
+    )?;
+    let theirs: Vec<Value> = stmt
+        .query_map(params![share.peer_id, share.share_id], |r| {
+            let label: String = r.get(0)?;
+            // The label is `<harness>-<4 chars>` (§7).
+            let harness = label
+                .rsplit_once('-')
+                .map_or(label.as_str(), |(h, _)| h)
+                .to_owned();
+            Ok(json!({"harness": harness, "availability": r.get::<_, String>(1)?}))
+        })?
+        .collect::<Result<_, _>>()?;
+    let mine: Vec<Value> = if share.state == "active" {
+        discovery::members(conn, share)?
+            .into_iter()
+            .map(|(_, harness, status)| json!({"harness": harness, "availability": status}))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(json!({"theirs": theirs, "mine": mine}))
 }

@@ -68,6 +68,7 @@ enum Fail {
     /// The share is not in a state this change applies to.
     WrongState,
     AlreadyShared,
+    OfferedToYou,
     TooManyShares,
     NotPending,
     PairCodeMismatch,
@@ -101,6 +102,7 @@ impl IntoResponse for Fail {
             Self::PeerNotActive => (StatusCode::CONFLICT, json!({"error": "peer_not_active"})),
             Self::WrongState => (StatusCode::CONFLICT, json!({"error": "wrong_state"})),
             Self::AlreadyShared => (StatusCode::CONFLICT, json!({"error": "already_shared"})),
+            Self::OfferedToYou => (StatusCode::CONFLICT, json!({"error": "offered_to_you"})),
             Self::TooManyShares => (StatusCode::CONFLICT, json!({"error": "too_many_shares"})),
             Self::Unreachable => (
                 StatusCode::BAD_GATEWAY,
@@ -295,10 +297,15 @@ fn view(conn: &Connection, live: Option<Value>) -> anyhow::Result<Value> {
         let mut peer = peer_json(&row, own.as_ref(), live_peers.remove(&row.peer_id));
         peer["queue"] = stats::queue(conn, &row.peer_id)?;
         peer["counters"] = stats::counters(conn, &row)?;
-        peer["shares"] = shares::of_peer(conn, &row.peer_id)?
-            .iter()
-            .map(shares::Share::to_json)
-            .collect();
+        peer["traffic"] = stats::traffic(conn, &row)?;
+        let mut listed = Vec::new();
+        for share in shares::of_peer(conn, &row.peer_id)? {
+            let mut json = share.to_json();
+            json["suggested_repo"] = json!(shares::suggested_repo(conn, &share)?);
+            json["reach"] = stats::reach(conn, &share)?;
+            listed.push(json);
+        }
+        peer["shares"] = Value::Array(listed);
         peers.push(peer);
     }
     body["invites"] = Value::Array(if running {

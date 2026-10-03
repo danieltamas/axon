@@ -1,6 +1,7 @@
 //! Asking peers for their sessions: every active share is re-read every 30 s, and at once
-//! when its revision changes. What the answer no longer lists is dropped, and so is any row
-//! a peer has not confirmed for 60 s.
+//! when its revision changes. What the answer no longer lists is dropped. A row the peer
+//! has not confirmed for 60 s turns `away` (their machine is off or offline) and stays
+//! addressable for a message lifetime, so a message sent overnight queues until they return.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use super::{answer, PAGE, PEER_CAP};
+use crate::fed::envelope::LIFETIME_MS;
 use crate::fed::now_ms;
 use crate::fed::service::{FrameHandler, Handle};
 use crate::store;
@@ -126,12 +128,18 @@ fn due_targets(conn: &Connection) -> anyhow::Result<Vec<Target>> {
     Ok(targets)
 }
 
-/// Rows a peer has not confirmed within a minute: it is gone or has stopped answering.
-pub fn drop_stale(conn: &Connection, now: i64) -> rusqlite::Result<usize> {
+/// Rows a peer has not confirmed within a minute turn `away`; past a message lifetime
+/// nothing sent to them could still arrive, so they go.
+pub fn age_out(conn: &Connection, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE fed_remote_sessions SET availability='away' WHERE seen_at < ?1",
+        [now - STALE_AFTER_MS],
+    )?;
     conn.execute(
         "DELETE FROM fed_remote_sessions WHERE seen_at < ?1",
-        [now - STALE_AFTER_MS],
-    )
+        [now - LIFETIME_MS],
+    )?;
+    Ok(())
 }
 
 /// Replace what one share lists with `listed`, keeping the peer under its cap. Nothing is
@@ -204,7 +212,7 @@ async fn refresh_loop(handle: Handle, db: PathBuf) {
             let db = db.clone();
             move || -> anyhow::Result<Vec<Target>> {
                 let conn = store::open(&db)?;
-                drop_stale(&conn, now_ms())?;
+                age_out(&conn, now_ms())?;
                 due_targets(&conn)
             }
         })

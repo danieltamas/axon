@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::shares::{self, get, Share};
 use crate::store;
 
-pub use refresh::{drop_stale, install};
+pub use refresh::{age_out, install};
 
 /// Sessions in one `discovery` answer.
 pub const PAGE: usize = 100;
@@ -74,7 +74,10 @@ pub(super) fn session_for(
 
 /// The agents of `share` right now, oldest first and at most `PEER_CAP`: registered, not
 /// closed, and working in the share's repo. Each cwd is resolved on the spot.
-fn members(conn: &Connection, share: &Share) -> rusqlite::Result<Vec<(String, String, String)>> {
+pub(crate) fn members(
+    conn: &Connection,
+    share: &Share,
+) -> rusqlite::Result<Vec<(String, String, String)>> {
     let Some(repo) = &share.local_repo else {
         return Ok(Vec::new());
     };
@@ -192,8 +195,13 @@ pub fn remote_block(conn: &Connection, agent: &str) -> rusqlite::Result<Option<S
             "Remote (another person's agents, on their machine; project {project}):\n"
         ));
         for (session, label, availability) in sessions {
+            let note = if availability == "away" {
+                " (their machine is offline; a message waits up to 24h for it)"
+            } else {
+                ""
+            };
             text.push_str(&format!(
-                "  peer:{peer_label}/{session}  {label}  {availability}\n"
+                "  peer:{peer_label}/{session}  {label}  {availability}{note}\n"
             ));
         }
     }

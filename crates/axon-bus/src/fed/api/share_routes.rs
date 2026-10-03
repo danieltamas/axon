@@ -32,6 +32,7 @@ impl From<shares::Fail> for Fail {
             shares::Fail::WrongState => Self::WrongState,
             shares::Fail::Invalid(field) => Self::Invalid(field),
             shares::Fail::AlreadyShared => Self::AlreadyShared,
+            shares::Fail::OfferedToYou => Self::OfferedToYou,
             shares::Fail::TooMany => Self::TooManyShares,
         }
     }
