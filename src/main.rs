@@ -103,6 +103,19 @@ fn run_scan_only() -> anyhow::Result<()> {
 }
 
 fn open_in_browser(link: &str) {
+    // A minimal Linux session (no desktop env, no xdg-settings) has xdg-open but the
+    // webbrowser crate never reaches it, so it is asked first.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if std::process::Command::new("xdg-open")
+        .arg(link)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return;
+    }
     if let Err(e) = webbrowser::open(link) {
         eprintln!("axon: couldn't open a browser ({e}); open the link yourself");
     }
@@ -138,7 +151,9 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
         if axon_bus::session::app_takes_over(&db) {
             println!("  the installed Axon app reconnects on its own");
         } else {
-            open_in_browser(&link);
+            // An opener that blocks must not hold the dashboard back.
+            let link = link.clone();
+            std::thread::spawn(move || open_in_browser(&link));
         }
     }
     println!("  live (file-watch) — press Ctrl-C to stop\n");

@@ -39,8 +39,11 @@ impl Sandbox {
         for dir in ["home", "data", "config", "cache", "tmp", "outside"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
+        // Windows canonicalization adds a verbatim prefix that git worktree rejects.
+        #[cfg(not(windows))]
+        let root = root.canonicalize().unwrap();
         Self {
-            root: root.canonicalize().unwrap(),
+            root,
             deadline: Instant::now() + Duration::from_secs(45),
         }
     }

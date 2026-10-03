@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -149,15 +149,13 @@ impl Sandbox {
         };
         loop {
             server.assert_running();
-            if TcpStream::connect_timeout(&address, self.remaining().min(Duration::from_millis(50)))
-                .is_ok()
-            {
+            // Port reservations can accept and reset a connection before axon binds.
+            if let Ok(status) = self.readiness_status(&server) {
+                assert_eq!(status, 200);
                 break;
             }
             self.pause();
         }
-        // A bound socket alone is too early: wait for the server to serve a real response.
-        assert_eq!(self.http(&server, "GET", "/", &[], "").status, 200);
         let output = fs::read_to_string(&server.stdout).unwrap();
         server.login_url = output
             .lines()
@@ -174,6 +172,30 @@ impl Sandbox {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
         server
+    }
+    fn readiness_status(&self, server: &Server) -> io::Result<u16> {
+        let timeout = self.remaining().min(Duration::from_secs(5));
+        let mut socket = TcpStream::connect_timeout(&server.address, timeout)?;
+        socket.set_read_timeout(Some(timeout))?;
+        socket.set_write_timeout(Some(timeout))?;
+        write!(
+            socket,
+            "GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            server.address
+        )?;
+        let mut line = String::new();
+        if BufReader::new(socket).read_line(&mut line)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "EOF in status",
+            ));
+        }
+        Ok(line
+            .split_whitespace()
+            .nth(1)
+            .expect("HTTP status")
+            .parse()
+            .unwrap())
     }
     fn http(
         &self,
