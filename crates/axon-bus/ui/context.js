@@ -122,7 +122,7 @@ export function createContext(container, { onThread, onAgent, onBack }) {
     part("head", `thread|${threadId}|${people}`, () => {
       head.replaceChildren(back("Conversations"), el("h2", null, people.join(" ↔ ")), el("span", "ctx-sub", "Thread"));
     });
-    part("body", `thread|${threadId}|${inThread.map((m) => `${m.id}${m.delivered_at ? "d" : ""}${m.acked_at ? "a" : ""}`).join()}`, () => {
+    part("body", `thread|${threadId}|${inThread.map((m) => `${m.id}${m.delivered_at ? "d" : ""}${m.acked_at ? "a" : ""}${m.recipient_closed ? "c" : ""}`).join()}`, () => {
       const shown = new Set(inThread.map((m) => m.id));
       body.replaceChildren(...inThread.map((m) => message(m, now, shown)));
       body.scrollTop = body.scrollHeight;
@@ -133,7 +133,7 @@ export function createContext(container, { onThread, onAgent, onBack }) {
       peer.set(m.from, m.to);
     }
     const routes = [...peer].map(([to, from]) => ({ to, from }));
-    const question = inThread.filter((m) => m.kind === "question" && m.needs_reply && !m.acked_at).pop() || null;
+    const question = inThread.filter(awaited).pop() || null;
     part("foot", `thread|${threadId}|${JSON.stringify(routes)}|${question ? question.id : ""}`, () => {
       const intro = el("p", "foot-intro", question ? `${question.to} owes ${question.from} an answer. Answer on its behalf, or step in.` : "Step in on either side of this thread.");
       composer = createComposer({ routes, thread: threadId, question, drafts, draftKey: `thread:${threadId}` });
@@ -145,7 +145,11 @@ export function createContext(container, { onThread, onAgent, onBack }) {
     const item = el("article", `message k-${m.kind}`);
     const top = el("header");
     top.append(el("span", "m-kind", KIND_LABELS[m.kind] || m.kind), el("span", "m-route", `${m.from} → ${m.to}`), el("time", null, clock(m.sent_at)));
-    const state = m.acked_at ? (m.needs_reply ? `answered ${since(m.acked_at, now)}` : `acknowledged ${since(m.acked_at, now)}`) : m.delivered_at ? (m.needs_reply ? "delivered · awaiting an answer" : "delivered") : "not delivered yet";
+    const state = m.acked_at
+      ? (m.needs_reply ? `answered ${since(m.acked_at, now)}` : `acknowledged ${since(m.acked_at, now)}`)
+      : m.needs_reply && m.recipient_closed
+        ? `unanswered · ${m.to} closed`
+        : m.delivered_at ? (m.needs_reply ? "delivered · awaiting an answer" : "delivered") : "not delivered yet";
     item.append(top, m.body == null ? el("p", "withheld", "Message text is withheld: content capture is off.") : prose(m.body), el("span", "m-state", state));
     // A reference to a message already on screen (an answer's question) says nothing new.
     const refs = (m.refs || []).filter((ref) => !shown.has(ref));
@@ -337,8 +341,13 @@ function last(thread) {
   return thread.messages[thread.messages.length - 1];
 }
 
+// A question still owed an answer: unanswered, and its recipient still running.
+function awaited(m) {
+  return m.kind === "question" && m.needs_reply && !m.acked_at && !m.recipient_closed;
+}
+
 function pending(thread) {
-  return thread.messages.filter((m) => m.kind === "question" && m.needs_reply && !m.acked_at).pop() || null;
+  return thread.messages.filter(awaited).pop() || null;
 }
 
 function cap(text) {

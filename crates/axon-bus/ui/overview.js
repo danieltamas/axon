@@ -50,7 +50,7 @@ export function summarize(repo, messages, now) {
   const talk = messages.filter((m) => ids.has(m.from) || ids.has(m.to));
   for (const m of talk) {
     facts.last = Math.max(facts.last, m.sent_at || 0);
-    if (m.needs_reply && !m.acked_at) attention.push({ level: "ask", text: `${m.to} owes ${m.from} an answer`, thread: m.thread, since: m.sent_at });
+    if (m.needs_reply && !m.acked_at && !m.recipient_closed) attention.push({ level: "ask", text: `${m.to} owes ${m.from} an answer`, thread: m.thread, since: m.sent_at });
   }
   return { ids, harnesses, attention: group(attention), work, facts, recent: talk.filter((m) => m.sent_at && now - m.sent_at < RECENT_MS).length };
 }

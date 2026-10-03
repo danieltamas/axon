@@ -12,9 +12,10 @@ const RECENT_MESSAGES: i64 = 60;
 /// The newest messages, oldest first. Bodies are withheld without content capture and redacted with it, like narrative text.
 pub fn messages(conn: &Connection, content: bool) -> rusqlite::Result<Vec<Value>> {
     let mut stmt = conn.prepare(
-        "SELECT id,thread,seq,from_id,to_id,kind,body,needs_reply,sent_at,delivered_at,acked_at,
-                refs_json
-         FROM (SELECT rowid AS n, * FROM messages ORDER BY rowid DESC LIMIT ?1) ORDER BY n",
+        "SELECT m.id,m.thread,m.seq,m.from_id,m.to_id,m.kind,m.body,m.needs_reply,m.sent_at,
+                m.delivered_at,m.acked_at,m.refs_json,a.status IN ('closed','orphaned')
+         FROM (SELECT rowid AS n, * FROM messages ORDER BY rowid DESC LIMIT ?1) m
+         LEFT JOIN agents a ON a.id=m.to_id ORDER BY m.n",
     )?;
     let rows = stmt.query_map([RECENT_MESSAGES], |r| {
         let body: String = r.get(6)?;
@@ -31,6 +32,8 @@ pub fn messages(conn: &Connection, content: bool) -> rusqlite::Result<Vec<Value>
             "delivered_at": r.get::<_, Option<i64>>(9)?,
             "acked_at": r.get::<_, Option<i64>>(10)?,
             "refs": serde_json::from_str::<Value>(&r.get::<_, String>(11)?).unwrap_or_default(),
+            // A question to a session that has ended will not be answered.
+            "recipient_closed": r.get::<_, Option<bool>>(12)?.unwrap_or(false),
         }))
     })?;
     rows.collect()
