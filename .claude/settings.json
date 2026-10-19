@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/Applications/Amoeba.app/Contents/Resources/app/amoeba-runtime/daemon/dist/prompt-hook.js\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/Applications/Amoeba.app/Contents/Resources/app/amoeba-runtime/daemon/dist/turn-hook.js\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(?!(?:Read|Glob|Grep|LS|NotebookRead|TodoRead|TodoWrite|Task|ExitPlanMode|BashOutput|KillShell|SlashCommand|AskUserQuestion|view_image)$).+$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/Applications/Amoeba.app/Contents/Resources/app/amoeba-runtime/daemon/dist/pretool-hook.js\"",
+            "timeout": 120,
+            "statusMessage": "Amoeba: checking policy / waiting for approval",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}
