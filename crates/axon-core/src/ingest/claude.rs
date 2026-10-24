@@ -52,9 +52,29 @@ pub fn parse_subagent_jsonl(content: &str, meta: &SubagentMeta) -> Vec<RawTurn> 
     collapse(content, true, Some(meta))
 }
 
+/// Openers of `user` lines the harness writes itself: slash-command echoes, background task
+/// and bash output, bridge system prompts. None of them is a request from the operator.
+pub const INJECTED_PREFIXES: [&str; 9] = [
+    "<local-command-",
+    "<command-name>",
+    "<command-message>",
+    "<task-notification>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+    "<bash-input>",
+    "<system-reminder>",
+    "<system>",
+];
+
+/// True for a user line the harness injected rather than the operator typed.
+pub fn is_injected(text: &str) -> bool {
+    let text = text.trim_start();
+    INJECTED_PREFIXES.iter().any(|p| text.starts_with(p))
+}
+
 /// The operator's prompts in a main-thread `<session>.jsonl`: `user` lines whose content is
 /// text, not tool results, and not the client's own notes (`isMeta`, compaction summaries,
-/// local command output).
+/// anything in `INJECTED_PREFIXES`).
 pub fn parse_prompts(content: &str) -> Vec<Prompt> {
     content
         .lines()
@@ -67,7 +87,7 @@ pub fn parse_prompts(content: &str) -> Vec<Prompt> {
         })
         .filter_map(|v| {
             let text = prompt_text(v.get("message")?.get("content")?)?;
-            if text.starts_with("<local-command-") {
+            if is_injected(&text) {
                 return None;
             }
             Some(Prompt {

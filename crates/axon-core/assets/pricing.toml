@@ -46,6 +46,16 @@ cache_read = 0.3
 cache_write_5m = 3.75
 cache_write_1h = 6.0
 
+# Anthropic. claude-haiku-5.5: $0.10 input / $0.50 output per 1M for prompts up to 100K
+# tokens ($0.50 / $2.50 beyond; Axon has no per-request prompt size, so long prompts are
+# under-counted). Standard cache multipliers. Source: Anthropic pricing, Oct 2026.
+[models."claude-haiku-5.5"]
+input = 0.10
+output = 0.50
+cache_read = 0.01
+cache_write_5m = 0.125
+cache_write_1h = 0.20
+
 [models."claude-haiku-4.5"]
 input = 1.0
 output = 5.0
@@ -108,6 +118,35 @@ output = 50.0
 cache_read = 1.0
 cache_write_5m = 12.5
 cache_write_1h = 12.5
+
+# OpenAI (Codex). gpt-6.1-sol: $2 input / $0.10 cached / $10 output per 1M (no cache-write
+# fee; long-context requests bill more and are under-counted, as for gpt-6-astra).
+# Source: openai.com/index/introducing-gpt-6-1-sol, Oct 2026.
+[models."gpt-6.1-sol"]
+input = 2.0
+output = 10.0
+cache_read = 0.10
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+
+# OpenAI (Codex). gpt-6-luna: $0.10 input / $0.01 cached / $0.50 output per 1M.
+# Source: OpenAI API pricing, Oct 2026.
+[models."gpt-6-luna"]
+input = 0.10
+output = 0.50
+cache_read = 0.01
+cache_write_5m = 0.0
+cache_write_1h = 0.0
+
+# OpenAI (Codex). codex-auto-review: the "Approve for me" safety check. Free with a ChatGPT
+# sign-in and not counted against the plan, so its turns cost nothing rather than being
+# unpriced. Source: OpenAI Help Center, "Using Codex with your ChatGPT plan", Oct 2026.
+[models."codex-auto-review"]
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write_5m = 0.0
+cache_write_1h = 0.0
 
 # OpenAI (Codex). gpt-5.5: $5 input / $0.50 cached / $30 output per 1M (no cache-write fee).
 # Source: OpenAI API pricing / model docs, Jun 2026.

@@ -22,7 +22,7 @@ pub fn home() -> PathBuf {
         .unwrap_or_default()
 }
 
-/// Epoch-ms lower bound of a dashboard range: `today` (local midnight), `7d`/`30d`
+/// Epoch-ms lower bound of a dashboard range: `today` (local midnight), `7d`/`30d`/`90d`
 /// (rolling), anything else 0. Usage and tasks share it, so their totals agree.
 pub fn range_start_ms(range: &str) -> i64 {
     use chrono::{Duration, Local};
@@ -36,6 +36,7 @@ pub fn range_start_ms(range: &str) -> i64 {
             .unwrap_or(0),
         "7d" => (now - Duration::days(7)).timestamp_millis(),
         "30d" => (now - Duration::days(30)).timestamp_millis(),
+        "90d" => (now - Duration::days(90)).timestamp_millis(),
         _ => 0,
     }
 }
