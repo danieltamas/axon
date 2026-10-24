@@ -234,7 +234,7 @@ pub enum Command {
         /// Only work done inside the current repository.
         #[arg(long)]
         repo: bool,
-        /// today, 7d, 30d or all.
+        /// today, 7d, 30d, 90d or all.
         #[arg(long, default_value = "all")]
         range: String,
         #[arg(long)]

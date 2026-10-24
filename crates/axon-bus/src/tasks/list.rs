@@ -42,7 +42,7 @@ fn in_repo(project: &str, repo: &str, cache: &mut HashMap<String, bool>) -> bool
     })
 }
 
-/// `range` is a dashboard range (`today`, `7d`, `30d`, `all`); `repo` keeps only turns run
+/// `range` is a dashboard range (`today`, `7d`, `30d`, `90d`, `all`); `repo` keeps only turns run
 /// inside that repository. The newest tasks are kept, or with `by_cost` the costliest.
 pub fn list(
     conn: &Connection,

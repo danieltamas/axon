@@ -64,9 +64,17 @@ pub(crate) fn time_name(ts: i64) -> String {
     format!("request at {}", at.format("%H:%M"))
 }
 
+/// A paste the operator dropped into the prompt arrives wrapped in `<pasted_content id="..">`
+/// tags; the name carries the paste, not the wrapper.
+fn unwrap_paste(text: &str) -> String {
+    static PASTE_TAGS: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"</?pasted_content[^>]*>").unwrap());
+    PASTE_TAGS.replace_all(text, " ").into_owned()
+}
+
 /// With capture on, the prompt's first 80 characters, credentials masked; else the time.
 fn request_name(prompt: &Prompt, capture: bool) -> String {
-    let text = crate::redact::redact(&prompt.text);
+    let text = crate::redact::redact(&unwrap_paste(&prompt.text));
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if !capture || text.is_empty() {
         return time_name(prompt.ts);
@@ -307,11 +315,38 @@ impl Context {
     }
 }
 
+/// Settings key set once the requests opened from harness-injected lines are gone.
+const INJECTED_RETIRED: &str = "injected_requests_retired";
+
+/// Scans before 0.4.7 opened a request for every injected user line (`<task-notification>`,
+/// `<command-name>`, ...). Those tasks go, with their turn links, so the turns are assigned
+/// again to the operator's real request. Runs once; names kept as times cannot be told apart
+/// and stay.
+fn retire_injected_requests(tx: &Connection) -> rusqlite::Result<()> {
+    if crate::store::setting(tx, INJECTED_RETIRED)?.is_some() {
+        return Ok(());
+    }
+    for prefix in axon_core::ingest::claude::INJECTED_PREFIXES {
+        let pattern = format!("{prefix}%");
+        tx.execute(
+            "DELETE FROM task_turns WHERE task_id IN
+               (SELECT id FROM tasks WHERE kind='request' AND name LIKE ?1)",
+            [&pattern],
+        )?;
+        tx.execute(
+            "DELETE FROM tasks WHERE kind='request' AND name LIKE ?1",
+            [&pattern],
+        )?;
+    }
+    crate::store::put_setting(tx, INJECTED_RETIRED, Some("1"))
+}
+
 /// Give every turn not yet in a task its task. Existing assignments are never changed.
 pub fn assign(db: &Path) -> anyhow::Result<()> {
     let mut conn = crate::store::init(db)?;
     ensure(&conn)?;
     let tx = crate::store::write_tx(&mut conn)?;
+    retire_injected_requests(&tx)?;
     let (agents, refs) = agents(&tx)?;
     let takes = sync_declared(&tx, &agents)?;
     tx.execute(
