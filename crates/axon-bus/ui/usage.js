@@ -1,26 +1,60 @@
 // Usage: what the agents cost and where it went, from Axon's usage record
 // (/api/summary). Served only by `axon`; under the `axon-bus serve` alias the endpoint is
 // absent and the view reports itself unavailable.
+//
+// Top to bottom: the period's total with each harness under it beside the daily chart,
+// the totals row, tokens by type, the model/day breakdown, then the brain with the latest
+// turns, agents and the costliest tasks.
 
-import { createBrain, modelHarness } from "./brain.js";
+import { createBrain } from "./brain.js";
 import { authFetch, showSignIn } from "./signin.js";
 import { clock, displayMoney, duration, el, glyph, setText, taskCost, tokens } from "./dom.js";
+import { createDailyChart, createTokenTypes, HARNESS } from "./usage-chart.js";
+import { createBreakdown, createHero, createTotals } from "./usage-breakdown.js";
 
-const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All time"]];
+const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["all", "All time"]];
+const METRICS = [["tokens", "Tokens"], ["cost", "Cost"]];
 const POLL_MS = 5000;
 const FEED_ROWS = 12;
 const TOP_TASKS = 8;
-const HARNESS = { "claude-code": "claude" };
 
 const count = (n) => Number(n || 0).toLocaleString("en-US");
-const lines = (n) => (n >= 1e3 ? tokens(n) : String(n));
 
-function remembered() {
+function remembered(key, fallback, allowed) {
   try {
-    return localStorage.getItem("axon-usage-range") || "7d";
+    const value = localStorage.getItem(key);
+    return allowed.includes(value) ? value : fallback;
   } catch {
-    return "7d";
+    return fallback;
   }
+}
+
+function remember(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage can be off; the choice then lasts for this page only.
+  }
+}
+
+// A radio-style picker; `onPick` runs after the choice is marked.
+function picker(label, options, current, onPick) {
+  const box = el("div", "range");
+  box.setAttribute("role", "radiogroup");
+  box.setAttribute("aria-label", label);
+  for (const [key, text] of options) {
+    const option = el("button", null, text);
+    option.type = "button";
+    option.dataset.key = key;
+    option.setAttribute("role", "radio");
+    option.addEventListener("click", () => onPick(key));
+    box.append(option);
+  }
+  const mark = (key) => {
+    for (const option of box.children) option.setAttribute("aria-checked", String(option.dataset.key === key));
+  };
+  mark(current);
+  return { node: box, mark };
 }
 
 // The vendor prefix repeats on every row; the full name stays in the tooltip.
@@ -31,39 +65,41 @@ function modelCell(model) {
 }
 
 export function createUsage(container, { onUnavailable, projectOf }) {
-  let range = remembered();
+  let range = remembered("axon-usage-range", "30d", RANGES.map(([k]) => k));
+  let metric = remembered("axon-usage-metric", "tokens", METRICS.map(([k]) => k));
   let timer = 0;
   let showing = false;
   let last = null;
 
   const title = el("h1", null, "Usage");
-  const picker = el("div", "range");
-  picker.setAttribute("role", "radiogroup");
-  picker.setAttribute("aria-label", "Period");
-  for (const [key, label] of RANGES) {
-    const option = el("button", null, label);
-    option.type = "button";
-    option.dataset.range = key;
-    option.setAttribute("role", "radio");
-    option.addEventListener("click", () => {
-      range = key;
-      try {
-        localStorage.setItem("axon-usage-range", key);
-      } catch {
-        // Storage can be off; the period then lasts for this page only.
-      }
-      markRange();
-      load();
-    });
-    picker.append(option);
-  }
+  const metricPicker = picker("Metric", METRICS, metric, (key) => {
+    metric = key;
+    remember("axon-usage-metric", key);
+    metricPicker.mark(key);
+    if (last) render(last);
+  });
+  const rangePicker = picker("Period", RANGES, range, (key) => {
+    range = key;
+    remember("axon-usage-range", key);
+    rangePicker.mark(key);
+    load();
+  });
+  const controls = el("div", "usage-controls");
+  controls.append(metricPicker.node, rangePicker.node);
   const titleRow = el("div", "usage-title");
-  titleRow.append(title, picker);
-  const totals = el("p", "totals");
+  titleRow.append(title, controls);
   const periods = el("ul", "periods");
   const notices = el("div", "notices");
   const head = el("header", "usage-head");
-  head.append(titleRow, totals, periods, notices);
+  head.append(titleRow, periods, notices);
+
+  const hero = createHero();
+  const daily = createDailyChart();
+  const headline = el("div", "usage-headline");
+  headline.append(hero.node, daily.node);
+  const totals = createTotals();
+  const types = createTokenTypes();
+  const breakdown = createBreakdown();
 
   const canvas = el("canvas", "brain");
   canvas.setAttribute("role", "img");
@@ -80,22 +116,15 @@ export function createUsage(container, { onUnavailable, projectOf }) {
   const top = el("div", "usage-top");
   top.append(figure, feedBox);
 
-  const models = el("tbody");
   const agents = el("tbody");
   const topTasks = el("tbody");
   const tables = el("div", "usage-tables");
   tables.append(
-    table("Models", ["Model", "Turns", "Tokens in", "Tokens out", "Cost"], models),
     table("Agents", ["Agent", "Turns", "Tokens in", "Tokens out", "Cost"], agents),
     table("Top tasks", ["Task", "Turns", "Ran", "Waited on you", "Cost"], topTasks),
   );
   const rtk = el("p", "rtk");
-  container.append(head, top, tables, rtk);
-  markRange();
-
-  function markRange() {
-    for (const option of picker.children) option.setAttribute("aria-checked", String(option.dataset.range === range));
-  }
+  container.append(head, headline, totals.node, types.node, breakdown.node, top, tables, rtk);
 
   async function load() {
     const asked = range;
@@ -146,29 +175,15 @@ export function createUsage(container, { onUnavailable, projectOf }) {
   }
 
   function render(s) {
-    setText(
-      totals,
-      [
-        displayMoney(s.cost_eur),
-        `${count(s.sessions)} sessions`,
-        `${count(s.events)} turns`,
-        `${tokens(s.tokens_in)} in`,
-        `${tokens(s.tokens_out)} out`,
-        `${tokens(s.cache_read)} cache read`,
-        s.loc_added || s.loc_removed ? `+${lines(s.loc_added)} −${lines(s.loc_removed)} lines` : null,
-      ]
-        .filter(Boolean)
-        .join("  ·  "),
-    );
     renderPeriods(s);
     renderNotices(s);
+    hero.draw(s, metric);
+    daily.draw(s, metric, range);
+    totals.draw(s);
+    types.draw(s);
+    breakdown.draw(s, metric);
     brain.update(s);
     renderFeed(s.recent || []);
-    renderRows(models, s.by_model, s.cost_eur, (m) => {
-      const name = el("span", "u-name");
-      name.append(glyph(modelHarness(m.model)), el("span", null, m.model));
-      return [name, m.unpriced ? "unpriced" : null];
-    });
     renderRows(agents, s.by_agent, s.cost_eur, (a) => [el("span", "u-name", a.agent), a.is_subagent ? "subagent" : null]);
     const saved = s.rtk;
     setText(rtk, saved && saved.tokens_saved ? `rtk kept ${tokens(saved.tokens_saved)} tokens (${saved.saved_pct.toFixed(1)}%) out of context across ${count(saved.commands)} commands, all time.` : "");
@@ -195,11 +210,18 @@ export function createUsage(container, { onUnavailable, projectOf }) {
 
   function renderNotices(s) {
     const found = [
+      s.scanning && ["note", scanNotice(s)],
       s.unpriced_models.length && ["warn", `Unpriced, so cost is a floor: ${s.unpriced_models.join(", ")}`],
       s.credit_priced_models.length && ["note", `Included-plan credits (${s.total_credits.toFixed(0)}): ${s.credit_priced_models.join(", ")}`],
       s.preview_priced_models.length && ["note", `Research-preview limit, no published rate: ${s.preview_priced_models.join(", ")}`],
     ].filter(Boolean);
     notices.replaceChildren(...found.map(([level, text]) => el("p", `notice n-${level}`, text)));
+  }
+
+  // The figures shown are the store's; the scan adds what the logs hold beyond it.
+  function scanNotice(s) {
+    const progress = s.scan_total ? ` ${count(s.scan_read)} of ${count(s.scan_total)} files read.` : "";
+    return (s.events ? "Reading new logs; the figures update when it finishes." : "Reading the logs for the first time; the figures land when it finishes.") + progress;
   }
 
   function renderFeed(recent) {
@@ -249,7 +271,7 @@ function table(caption, columns, body) {
   return box;
 }
 
-// One row per model or agent, costliest first, with its share of spend as a bar.
+// One row per agent, costliest first, with its share of spend as a bar.
 function renderRows(body, rows, total, label) {
   body.replaceChildren(
     ...rows.map((r) => {

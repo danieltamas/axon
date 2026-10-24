@@ -35,6 +35,32 @@ pub struct AppState {
     pub summary: std::sync::RwLock<Summary>,
     /// Raw events, so `/api/summary?range=` can re-aggregate for a selected window.
     pub events: std::sync::RwLock<Vec<Event>>,
+    /// Set while a scan runs, so the page can say the figures are still filling in.
+    pub scanning: std::sync::atomic::AtomicBool,
+    /// The running scan's progress: sources read, sources to read (both 0 when idle).
+    pub scan_read: std::sync::atomic::AtomicUsize,
+    pub scan_total: std::sync::atomic::AtomicUsize,
+}
+
+impl AppState {
+    /// Empty figures and no scan running; the refresher fills both in.
+    pub fn empty() -> Self {
+        AppState {
+            summary: std::sync::RwLock::new(build_summary(&[])),
+            events: std::sync::RwLock::new(Vec::new()),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            scan_read: std::sync::atomic::AtomicUsize::new(0),
+            scan_total: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Copy the scan state into a summary about to be served.
+    fn stamp_scan(&self, s: &mut Summary) {
+        use std::sync::atomic::Ordering::Relaxed;
+        s.scanning = self.scanning.load(Relaxed);
+        s.scan_read = self.scan_read.load(Relaxed) as u64;
+        s.scan_total = self.scan_total.load(Relaxed) as u64;
+    }
 }
 
 /// The usage API merged with the dashboard, behind the loopback/Origin guard and gzip.
@@ -84,6 +110,7 @@ async fn api_summary(
     if range == "all" {
         let mut s = all.clone();
         s.recent = recent_events(events.iter(), FEED_LEN);
+        state.stamp_scan(&mut s);
         return Json(s);
     }
     // Re-aggregate over the selected window; carry the range-independent panels (rtk, budget,
@@ -98,6 +125,7 @@ async fn api_summary(
     s.budget_week_eur = all.budget_week_eur;
     s.budget_month_eur = all.budget_month_eur;
     s.recent = recent_events(events.iter().filter(|e| e.ts >= since), FEED_LEN);
+    state.stamp_scan(&mut s);
     Json(s)
 }
 
@@ -160,6 +188,9 @@ mod tests {
         let state = Arc::new(AppState {
             summary: std::sync::RwLock::new(build_summary(&[])),
             events: std::sync::RwLock::new(Vec::new()),
+            scanning: std::sync::atomic::AtomicBool::new(false),
+            scan_read: std::sync::atomic::AtomicUsize::new(0),
+            scan_total: std::sync::atomic::AtomicUsize::new(0),
         });
         let _merged = build_router(state, &db, dashboard);
         std::fs::remove_dir_all(&dir).ok();

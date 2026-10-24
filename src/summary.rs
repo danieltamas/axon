@@ -16,6 +16,9 @@ pub struct ModelStat {
     pub events: u64,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    pub cache_read: u64,
+    /// 5-minute and 1-hour cache writes together; the rates differ, the volume is one figure.
+    pub cache_write: u64,
     pub cost_eur: f64,
     pub cost_credits: Option<f64>,
     pub pricing_kind: String,
@@ -36,8 +39,26 @@ pub struct AgentStat {
 pub struct HarnessStat {
     pub harness: String,
     pub events: u64,
+    pub sessions: u64,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost_eur: f64,
+}
+
+/// One harness's turns on one local calendar day, for the daily chart and the per-day
+/// breakdown. Days follow the machine's time zone, like the dashboard ranges.
+#[derive(Debug, Clone, Serialize)]
+pub struct DayStat {
+    /// `YYYY-MM-DD`, local.
+    pub day: String,
+    pub harness: String,
+    pub events: u64,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
     pub cost_eur: f64,
 }
 
@@ -116,6 +137,8 @@ pub struct Summary {
     pub by_model: Vec<ModelStat>,
     pub by_agent: Vec<AgentStat>,
     pub by_harness: Vec<HarnessStat>,
+    /// Day by day per harness, oldest first; empty days are absent.
+    pub by_day: Vec<DayStat>,
     /// Optional RTK (token-saver) analytics; `None` if rtk is not installed.
     pub rtk: Option<RtkSavings>,
     /// Spend in the current local day / week / month (display currency).
@@ -128,6 +151,12 @@ pub struct Summary {
     pub budget_month_eur: Option<f64>,
     /// Newest turns for the live feed (filled by the server per request; empty in `--scan-only`).
     pub recent: Vec<RecentEvent>,
+    /// True while the server is reading changed logs; the figures may still be short of
+    /// them (filled by the server per request; false in `--scan-only`).
+    pub scanning: bool,
+    /// Log files read so far in the running scan, and how many it has to read (0 when idle).
+    pub scan_read: u64,
+    pub scan_total: u64,
 }
 
 /// Aggregate any set of events (a slice, or a filtered iterator for a time range).
@@ -151,6 +180,7 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         by_model: Vec::new(),
         by_agent: Vec::new(),
         by_harness: Vec::new(),
+        by_day: Vec::new(),
         rtk: None,
         today_cost_eur: 0.0,
         week_cost_eur: 0.0,
@@ -159,12 +189,18 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         budget_week_eur: None,
         budget_month_eur: None,
         recent: Vec::new(),
+        scanning: false,
+        scan_read: 0,
+        scan_total: 0,
     };
 
     let mut sessions = std::collections::BTreeSet::new();
     let mut models: BTreeMap<String, ModelStat> = BTreeMap::new();
     let mut agents: BTreeMap<String, AgentStat> = BTreeMap::new();
     let mut harnesses: BTreeMap<String, HarnessStat> = BTreeMap::new();
+    let mut harness_sessions: BTreeMap<String, std::collections::BTreeSet<String>> =
+        BTreeMap::new();
+    let mut days: BTreeMap<(String, String), DayStat> = BTreeMap::new();
     let mut credit_models = std::collections::BTreeSet::new();
     let mut preview_models = std::collections::BTreeSet::new();
     let mut unattributed_out: u64 = 0;
@@ -191,6 +227,8 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
             events: 0,
             tokens_in: 0,
             tokens_out: 0,
+            cache_read: 0,
+            cache_write: 0,
             cost_eur: 0.0,
             cost_credits: None,
             pricing_kind: e.pricing_kind.as_str().to_string(),
@@ -199,6 +237,8 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
         m.events += 1;
         m.tokens_in += e.tokens_in;
         m.tokens_out += e.tokens_out;
+        m.cache_read += e.cache_read;
+        m.cache_write += e.cache_write_5m + e.cache_write_1h;
         m.cost_eur += e.cost_eur;
         m.cost_credits = Some(m.cost_credits.unwrap_or(0.0) + e.cost_credits.unwrap_or(0.0))
             .filter(|v| *v > 0.0);
@@ -231,14 +271,48 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
             .or_insert_with(|| HarnessStat {
                 harness: e.harness.as_str().to_string(),
                 events: 0,
+                sessions: 0,
                 tokens_in: 0,
                 tokens_out: 0,
+                cache_read: 0,
+                cache_write: 0,
                 cost_eur: 0.0,
             });
         h.events += 1;
         h.tokens_in += e.tokens_in;
         h.tokens_out += e.tokens_out;
+        h.cache_read += e.cache_read;
+        h.cache_write += e.cache_write_5m + e.cache_write_1h;
         h.cost_eur += e.cost_eur;
+        harness_sessions
+            .entry(e.harness.as_str().to_string())
+            .or_default()
+            .insert(e.session_id.clone());
+
+        let day = local_day(e.ts);
+        let d = days
+            .entry((day.clone(), e.harness.as_str().to_string()))
+            .or_insert_with(|| DayStat {
+                day,
+                harness: e.harness.as_str().to_string(),
+                events: 0,
+                tokens_in: 0,
+                tokens_out: 0,
+                cache_read: 0,
+                cache_write: 0,
+                cost_eur: 0.0,
+            });
+        d.events += 1;
+        d.tokens_in += e.tokens_in;
+        d.tokens_out += e.tokens_out;
+        d.cache_read += e.cache_read;
+        d.cache_write += e.cache_write_5m + e.cache_write_1h;
+        d.cost_eur += e.cost_eur;
+    }
+    for (harness, ids) in &harness_sessions {
+        if let Some(h) = harnesses.get_mut(harness) {
+            h.sessions = ids.len() as u64;
+        }
     }
 
     s.sessions = sessions.len() as u64;
@@ -281,8 +355,20 @@ pub fn build_summary<'a>(events: impl IntoIterator<Item = &'a Event>) -> Summary
             .total_cmp(&a.cost_eur)
             .then(a.harness.cmp(&b.harness))
     });
+    // The map's key order is (day, harness), so this is already oldest first.
+    s.by_day = days.into_values().collect();
 
     s
+}
+
+/// The local calendar day of an epoch-ms timestamp, `YYYY-MM-DD`.
+fn local_day(ts: i64) -> String {
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_millis_opt(ts)
+        .single()
+        .map(|t| t.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Sum the cost of events at or after `since_ms` — used for today / this-week spend.

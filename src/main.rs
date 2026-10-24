@@ -21,7 +21,7 @@ use axon::normalize;
 use axon::pricing::Pricing;
 use axon::rtk;
 use axon::server;
-use axon::store::Store;
+use axon::store::{Stamp, Store};
 use axon::summary::{build_summary, windowed_cost, Summary};
 
 mod cli_summary;
@@ -99,7 +99,7 @@ fn main() -> ExitCode {
 
 /// `--scan-only`: print the JSON summary on stdout and exit.
 fn run_scan_only() -> anyhow::Result<()> {
-    let (summary, _) = scan()?;
+    let (summary, _) = scan(&|_, _| {})?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
 }
@@ -111,10 +111,7 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
         eprintln!("axon: --otel {otel} ignored (OTEL export is M6; needs --features otel)");
     }
 
-    let state = Arc::new(server::AppState {
-        summary: std::sync::RwLock::new(build_summary(&[])),
-        events: std::sync::RwLock::new(Vec::new()),
-    });
+    let state = Arc::new(server::AppState::empty());
 
     let addr: SocketAddr = ([127, 0, 0, 1], cli.port).into();
     let db = db_path();
@@ -150,7 +147,8 @@ async fn run_server(cli: &Cli) -> anyhow::Result<()> {
 /// file-watch), debounced, with a 15s periodic fallback. The scan is blocking (fs + SQLite)
 /// so it runs on the blocking pool — it never stalls the server, and the browser (a separate
 /// process) keeps animating at 60fps regardless. A min-gap caps re-scan frequency under load.
-/// The first pass runs at once and prints the CLI summary.
+/// The stored figures are served first, so a long first read never shows an empty page;
+/// then the first pass runs at once and prints the CLI summary.
 fn spawn_refresher(state: Arc<server::AppState>) {
     use std::time::Duration;
     let trigger = Arc::new(tokio::sync::Notify::new());
@@ -172,6 +170,16 @@ fn spawn_refresher(state: Arc<server::AppState>) {
                 let _ = w.watch(&path, RecursiveMode::Recursive);
             }
         }
+        // What the store already holds is served before any log is read: the first read
+        // after an upgrade or a long absence takes minutes.
+        match tokio::task::spawn_blocking(stored).await {
+            Ok(Ok((s, ev))) => {
+                *state.summary.write().unwrap_or_else(|p| p.into_inner()) = s;
+                *state.events.write().unwrap_or_else(|p| p.into_inner()) = ev;
+            }
+            Ok(Err(e)) => eprintln!("axon: reading the store failed: {e:#}"),
+            Err(e) => eprintln!("axon: store task error: {e}"),
+        }
         let mut first = true;
         loop {
             if !first {
@@ -181,7 +189,20 @@ fn spawn_refresher(state: Arc<server::AppState>) {
                 }
                 tokio::time::sleep(Duration::from_millis(600)).await; // debounce a write burst
             }
-            match tokio::task::spawn_blocking(scan).await {
+            use std::sync::atomic::Ordering::Relaxed;
+            state.scanning.store(true, Relaxed);
+            let progress = state.clone();
+            let scanned = tokio::task::spawn_blocking(move || {
+                scan(&|read, total| {
+                    progress.scan_read.store(read, Relaxed);
+                    progress.scan_total.store(total, Relaxed);
+                })
+            })
+            .await;
+            state.scanning.store(false, Relaxed);
+            state.scan_read.store(0, Relaxed);
+            state.scan_total.store(0, Relaxed);
+            match scanned {
                 Ok(Ok((s, ev))) => {
                     if std::mem::take(&mut first) {
                         print_cli_summary(&s);
@@ -197,10 +218,18 @@ fn spawn_refresher(state: Arc<server::AppState>) {
     });
 }
 
+/// The store's figures as they are, without reading a log.
+fn stored() -> anyhow::Result<(Summary, Vec<Event>)> {
+    let db = db_path();
+    let store = Store::open(db.to_str().context("db path is not valid UTF-8")?)?;
+    aggregate(&store)
+}
+
 /// Read the logs that changed since the last scan, normalize, persist to SQLite, and
 /// aggregate. Returns the all-time summary plus the raw events (so the server can
-/// re-aggregate for a selected time range).
-fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
+/// re-aggregate for a selected time range). `progress` hears (sources read, sources to
+/// read) after every source.
+fn scan(progress: &dyn Fn(usize, usize)) -> anyhow::Result<(Summary, Vec<Event>)> {
     let pricing = load_pricing();
     let mut sources = ingest::claude_sources(&claude_projects_dir());
     sources.extend(ingest::codex_sources(&codex_sessions_dir()));
@@ -229,15 +258,21 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     let mut prompts = Vec::new();
     let mut stamps = Vec::new();
     let mut skipped = 0usize;
-    for source in &sources {
-        // Stamped before the read: a write that lands during it changes the stamp again.
-        let Some(stamp) = stamp(source) else { continue };
-        let key = source.path.to_string_lossy().into_owned();
-        if known.get(&key) == Some(&stamp) {
-            continue;
-        }
+    // Stamped before the read: a write that lands during it changes the stamp again.
+    let pending: Vec<(&Source, String, Stamp)> = sources
+        .iter()
+        .filter_map(|source| {
+            let stamp = stamp(source)?;
+            let key = source.path.to_string_lossy().into_owned();
+            (known.get(&key) != Some(&stamp)).then_some((source, key, stamp))
+        })
+        .collect();
+    let total = pending.len();
+    progress(0, total);
+    for (read, (source, key, stamp)) in pending.into_iter().enumerate() {
         // An unreadable source keeps its old stamp, so the next scan tries it again.
         let Some((turns, read_prompts)) = source.read() else {
+            progress(read + 1, total);
             continue;
         };
         prompts.extend(read_prompts);
@@ -251,6 +286,7 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
             }
         }
         stamps.push((key, stamp));
+        progress(read + 1, total);
     }
     if skipped > 0 {
         eprintln!("axon: skipped {skipped} turn(s) with unparseable timestamps");
@@ -260,7 +296,12 @@ fn scan() -> anyhow::Result<(Summary, Vec<Event>)> {
     store.record_scan(&events, &stamps)?;
     // Every stored turn joins a task once, from the prompts and the bus's ledger and threads.
     axon_bus::tasks::assign(&db)?;
+    aggregate(&store)
+}
 
+/// The all-time summary and raw events of everything the store holds, with the panels
+/// that do not depend on a range (rtk, budgets, spend so far today/week/month).
+fn aggregate(store: &Store) -> anyhow::Result<(Summary, Vec<Event>)> {
     let all = store.all_events()?;
     let mut summary = build_summary(&all);
     summary.rtk = rtk::savings(); // optional; None if rtk is not installed

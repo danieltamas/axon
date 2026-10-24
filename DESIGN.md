@@ -201,6 +201,17 @@ struct Event {
 ### 10.2 Analytics
 Cost over time (stacked by model/harness), tokens (in/out/cache stacked), LOC over time, cache-hit %, activity heatmap, spend by project. Range-filterable.
 
+**Shipped shape (0.4.7):** the Usage view opens with the period's total in one metric
+(tokens processed, or cost; the switch is remembered), the sessions count, and each harness
+under it with its sessions, figure, share and the other metric. Beside it, a daily line
+chart per harness in the harness colour, with a crosshair tooltip. Then a totals row
+(processed, cached input, uncached input, output, cost), a tokens-by-type bar, and a
+breakdown table ranked by the metric, switchable between models and days, each row carrying
+its share as a bar. Ranges: today, 7, 30, 90 days, all time. "Processed" is
+`tokens_in + cache_read + cache_write_5m + cache_write_1h + tokens_out`; `/api/summary`
+carries `by_day` (per local day and harness) and per-harness `sessions` for it. Cache
+savings are not shown: events store a cost, not the rate they were priced at.
+
 ### 10.3 Leaderboards + Hall of Fame (local)
 Ranked by **model** and **agent**: **spend** and **LOC/€** in v1 (defer the other metrics — YAGNI). Personal **Hall of Fame** = your all-time bests (compete against yourself; retention without trust cost). Share-card/clip from here.
 

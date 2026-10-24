@@ -1,0 +1,74 @@
+/* Usage's headline block: hero, daily chart, totals, tokens by type, breakdown. The rest of
+   the view (brain, feed, tables) keeps its rules in style.css. */
+
+.usage-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.usage-headline { display: grid; grid-template-columns: minmax(16rem, 2fr) minmax(0, 3fr); gap: 32px 48px; margin-top: 28px; }
+
+/* ---- hero ---- */
+.hero-figure { margin: 0; font: 600 56px/1 var(--mono); letter-spacing: -0.02em; color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.hero-under { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.hero-harnesses { display: flex; flex-direction: column; gap: 18px; margin: 28px 0 0; padding: 0; list-style: none; }
+.hero-harness { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hero-harness i { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.hero-harness .glyph { width: 16px; height: 16px; fill: var(--h); }
+.hero-harness b { font-size: 16px; font-weight: 600; color: var(--ink-strong); }
+.hero-harness small { font-size: 13px; color: var(--muted); }
+.hero-value { margin-left: auto; padding-left: 16px; font: 600 16px var(--mono); color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.hero-share { margin: 4px 0 0 16px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---- daily chart ---- */
+.daily { margin: 0; min-width: 0; }
+.daily figcaption { font-size: 14px; font-weight: 600; color: var(--ink-strong); }
+.daily-wrap { position: relative; margin-top: 12px; }
+.daily-plot { display: block; width: 100%; height: auto; font: 11px var(--mono); cursor: crosshair; }
+.daily-plot .grid { stroke: var(--line); stroke-width: 1; }
+.daily-plot .tick { fill: var(--faint); }
+.daily-plot .area { opacity: 0.1; }
+.daily-plot .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.daily-plot .cursor { stroke: var(--wire); stroke-width: 1; stroke-dasharray: 2 3; }
+.daily-tip { position: absolute; top: 8px; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--raise); font: 12px var(--mono); color: var(--muted); pointer-events: none; white-space: nowrap; }
+.daily-tip[hidden] { display: none; }
+.daily-tip b { color: var(--ink-strong); }
+.daily-tip span { display: flex; align-items: center; gap: 6px; }
+.daily-tip i { width: 8px; height: 8px; border-radius: 50%; }
+.daily-tip-num { margin-left: auto; padding-left: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---- totals ---- */
+.totals-row { margin-top: 40px; }
+.totals-row dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 16px 24px; margin: 0; }
+.totals-row dt { font-size: 13px; color: var(--muted); }
+.totals-row dd { margin: 4px 0 0; font: 600 20px/1.2 var(--mono); color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+
+/* ---- tokens by type ---- */
+.types { margin-top: 36px; }
+.types-bar { display: flex; gap: 2px; height: 10px; max-width: 44rem; border-radius: 5px; overflow: hidden; }
+.types-bar i { display: block; min-width: 2px; }
+.types-legend { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+.types-legend li { display: flex; align-items: center; gap: 8px; }
+.types-legend b { font: 600 13px var(--mono); color: var(--ink-strong); font-variant-numeric: tabular-nums; }
+.types-legend i { width: 8px; height: 8px; border-radius: 2px; }
+.t-input { background: var(--muted); }
+.t-cache-read { background: var(--line-strong); }
+.t-cache-write { background: var(--faint); }
+.t-output { background: var(--ink-strong); }
+
+/* ---- breakdown ---- */
+.breakdown { margin-top: 40px; }
+.breakdown-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.breakdown-head h2 { margin: 0; }
+.breakdown table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.breakdown th { padding: 0 0 8px; border-bottom: 1px solid var(--line-strong); font-size: 12px; font-weight: 500; color: var(--muted); text-align: left; }
+.breakdown td { padding: 10px 0 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.breakdown .rank { width: 2rem; padding-right: 12px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.breakdown .num { padding-left: 16px; font-family: var(--mono); font-size: 12px; text-align: right; white-space: nowrap; }
+.breakdown td.num:nth-child(3) { color: var(--ink-strong); }
+.breakdown .b-name .share { max-width: 28rem; }
+.breakdown .share i { opacity: 0.9; }
+.breakdown .f-empty { color: var(--faint); }
+
+@container (max-width: 760px) {
+  .usage-headline { grid-template-columns: minmax(0, 1fr); }
+  .hero-figure { font-size: 44px; }
+  .breakdown th:nth-child(4), .breakdown td:nth-child(4) { display: none; }
+}
