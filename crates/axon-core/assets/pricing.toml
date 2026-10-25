@@ -138,6 +138,27 @@ cache_read = 0.01
 cache_write_5m = 0.0
 cache_write_1h = 0.0
 
+# OpenAI (Codex). gpt-5.6-sol: $4 input / $0.40 cached / $20 output per 1M; cache writes
+# $5 (30-minute) and $10 (12-hour), mapped to the 5m and 1h buckets. Long-context requests
+# bill 2x input and 1.5x output and are under-counted, as for gpt-6-astra.
+# Source: developers.openai.com/api/docs/pricing, Oct 2026.
+[models."gpt-5.6-sol"]
+input = 4.0
+output = 20.0
+cache_read = 0.40
+cache_write_5m = 5.0
+cache_write_1h = 10.0
+
+# OpenAI (Codex). gpt-5.6-luna: $0.20 input / $0.02 cached / $1.20 output per 1M; cache
+# writes $0.25 (30-minute) and $0.50 (12-hour). Source: developers.openai.com/api/docs/pricing,
+# Oct 2026.
+[models."gpt-5.6-luna"]
+input = 0.20
+output = 1.20
+cache_read = 0.02
+cache_write_5m = 0.25
+cache_write_1h = 0.50
+
 # OpenAI (Codex). codex-auto-review: the "Approve for me" safety check. Free with a ChatGPT
 # sign-in and not counted against the plan, so its turns cost nothing rather than being
 # unpriced. Source: OpenAI Help Center, "Using Codex with your ChatGPT plan", Oct 2026.

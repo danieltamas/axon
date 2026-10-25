@@ -292,6 +292,13 @@ fn migrate_schema(conn: &Connection) -> anyhow::Result<()> {
          WHERE pricing_kind = 'unknown' AND unpriced = 0 AND cost_eur > 0",
         [],
     )?;
+    // Early parsers flagged `<synthetic>` turns unpriced. A re-read corrects the rows whose
+    // source still exists; rows from since-deleted session files would stay flagged forever.
+    conn.execute(
+        "UPDATE usage_events SET pricing_kind = 'api-money', unpriced = 0, cost_eur = 0 \
+         WHERE model = ?1 AND unpriced = 1",
+        params![crate::pricing::SYNTHETIC_MODEL],
+    )?;
     Ok(())
 }
 
