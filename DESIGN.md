@@ -205,9 +205,9 @@ Cost over time (stacked by model/harness), tokens (in/out/cache stacked), LOC ov
 (tokens processed, or cost; the switch is remembered), the sessions count, and each harness
 under it with its sessions, figure, share and the other metric. Beside it, a daily line
 chart per harness in the harness colour, with a crosshair tooltip. Then a totals row
-(processed, cached input, uncached input, output, cost), a tokens-by-type bar, and a
-breakdown table ranked by the metric, switchable between models and days, each row carrying
-its share as a bar. Ranges: today, 7, 30, 90 days, all time. "Processed" is
+(processed, cached input, uncached input, output, cost), a tokens-by-type bar (green input,
+amber cache read, rose cache write, ink output), and a breakdown table ranked by the metric,
+ten rows a page, switchable between models and days, each row carrying its share as a bar. Ranges: today, 7, 30, 90 days, all time. "Processed" is
 `tokens_in + cache_read + cache_write_5m + cache_write_1h + tokens_out`; `/api/summary`
 carries `by_day` (per local day and harness) and per-harness `sessions` for it. Cache
 savings are not shown: events store a cost, not the rate they were priced at.

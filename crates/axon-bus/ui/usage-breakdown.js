@@ -6,6 +6,7 @@ import { el, glyph, displayMoney, tokens } from "./dom.js";
 import { modelHarness } from "./brain.js";
 import { HARNESS, colour, metricLabel, metricValue, processed } from "./usage-chart.js";
 
+const PAGE = 10;
 const NAMES = { "claude-code": "Claude Code", claude: "Claude Code", codex: "Codex", opencode: "OpenCode", hermes: "Hermes" };
 const count = (n) => Number(n || 0).toLocaleString("en-US");
 const sessions = (n) => `${count(n)} ${n === 1 ? "session" : "sessions"}`;
@@ -69,8 +70,8 @@ export function createTotals() {
   return { node: box, draw };
 }
 
-// Models or days, ranked by the metric. A model row is coloured by the family its id names;
-// a day row sums every harness and takes the costliest harness's colour.
+// Models or days, ranked by the metric, ten to a page. A model row is coloured by the family
+// its id names; a day row sums every harness and takes the costliest harness's colour.
 export function createBreakdown() {
   const box = el("section", "breakdown");
   const head = el("div", "breakdown-head");
@@ -85,6 +86,7 @@ export function createBreakdown() {
     option.setAttribute("role", "radio");
     option.addEventListener("click", () => {
       by = key;
+      page = 0;
       mark();
       if (last) draw(...last);
     });
@@ -94,13 +96,27 @@ export function createBreakdown() {
   const body = el("tbody");
   const table = el("table");
   const columns = el("tr");
-  const metricHead = el("th", "num", "Tokens");
-  columns.append(el("th", "rank", "#"), el("th", null, "Model"), el("th", "num", "Cost"), el("th", "num", "Share"), metricHead);
+  columns.append(el("th", "rank", "#"), el("th", null, "Model"), el("th", "num", "Cost"), el("th", "num", "Share"), el("th", "num", "Tokens"));
   const thead = el("thead");
   thead.append(columns);
   table.append(thead, body);
-  box.append(head, table);
+  const foot = el("div", "breakdown-foot");
+  const where = el("span");
+  const pager = el("div", "range");
+  const prev = el("button", null, "Previous");
+  const next = el("button", null, "Next");
+  for (const [button, step] of [[prev, -1], [next, 1]]) {
+    button.type = "button";
+    button.addEventListener("click", () => {
+      page += step;
+      if (last) draw(...last);
+    });
+  }
+  pager.append(prev, next);
+  foot.append(where, pager);
+  box.append(head, table, foot);
   let last = null;
+  let page = 0;
   mark();
 
   function mark() {
@@ -123,15 +139,23 @@ export function createBreakdown() {
   }
 
   function draw(s, metric) {
+    if (last && last[1] !== metric) page = 0;
     last = [s, metric];
     columns.children[1].textContent = by === "model" ? "Model" : "Day";
-    metricHead.textContent = metric === "cost" ? "Tokens" : "Tokens";
     const list = rows(s);
     const value = (r) => (metric === "cost" ? r.cost_eur : r.tokens);
     list.sort((a, b) => value(b) - value(a) || a.name.localeCompare(b.name));
     const total = list.reduce((sum, r) => sum + value(r), 0);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE));
+    page = Math.min(Math.max(0, page), pages - 1);
+    const first = page * PAGE;
+    const shown = list.slice(first, first + PAGE);
+    foot.hidden = list.length <= PAGE;
+    where.textContent = `${first + 1}-${first + shown.length} of ${list.length}`;
+    prev.disabled = page === 0;
+    next.disabled = page >= pages - 1;
     body.replaceChildren(
-      ...list.map((r, i) => {
+      ...shown.map((r, i) => {
         const name = el("td", "b-name");
         const label = el("span", "u-name");
         if (r.glyph) label.append(glyph(r.glyph));
@@ -145,7 +169,7 @@ export function createBreakdown() {
         share.append(fill);
         name.append(share);
         const row = el("tr");
-        row.append(el("td", "rank", String(i + 1)), name, el("td", "num", displayMoney(r.cost_eur)), el("td", "num", percent(value(r), total)), el("td", "num", tokens(r.tokens)));
+        row.append(el("td", "rank", String(first + i + 1)), name, el("td", "num", displayMoney(r.cost_eur)), el("td", "num", percent(value(r), total)), el("td", "num", tokens(r.tokens)));
         return row;
       }),
     );

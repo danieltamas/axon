@@ -25,6 +25,9 @@
   --h-opencode: #5a8519;
   --h-hermes: #8747c2;
   --h-virtual: #66756c;
+  --t-input: #1baf7a;
+  --t-cache-read: #eda100;
+  --t-cache-write: #e87ba4;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --ease: cubic-bezier(0.25, 1, 0.5, 1);
@@ -39,6 +42,7 @@
     --wire: rgba(211, 227, 217, 0.22); --signal: #34d399; --signal-wash: rgba(52, 211, 153, 0.09);
     --warn: #f5c451; --warn-wash: rgba(245, 196, 81, 0.1); --stop: #ff6b72; --stop-wash: rgba(255, 107, 114, 0.1);
     --redirect: #ff9f6e; --h-claude: #eb9a70; --h-codex: #7ebdff; --h-opencode: #b5d86a; --h-hermes: #c79bf2; --h-virtual: #8a9a90;
+    --t-input: #199e70; --t-cache-read: #c98500; --t-cache-write: #d55181;
     color-scheme: dark;
   }
 }
@@ -48,6 +52,7 @@
   --wire: rgba(211, 227, 217, 0.22); --signal: #34d399; --signal-wash: rgba(52, 211, 153, 0.09);
   --warn: #f5c451; --warn-wash: rgba(245, 196, 81, 0.1); --stop: #ff6b72; --stop-wash: rgba(255, 107, 114, 0.1);
   --redirect: #ff9f6e; --h-claude: #eb9a70; --h-codex: #7ebdff; --h-opencode: #b5d86a; --h-hermes: #c79bf2; --h-virtual: #8a9a90;
+    --t-input: #199e70; --t-cache-read: #c98500; --t-cache-write: #d55181;
   color-scheme: dark;
 }
 

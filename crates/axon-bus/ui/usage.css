@@ -48,9 +48,11 @@
 .types-legend li { display: flex; align-items: center; gap: 8px; }
 .types-legend b { font: 600 13px var(--mono); color: var(--ink-strong); font-variant-numeric: tabular-nums; }
 .types-legend i { width: 8px; height: 8px; border-radius: 2px; }
-.t-input { background: var(--muted); }
-.t-cache-read { background: var(--line-strong); }
-.t-cache-write { background: var(--faint); }
+/* Three hues validated for CVD separation on both surfaces; output is ink, the text the
+   model wrote. */
+.t-input { background: var(--t-input); }
+.t-cache-read { background: var(--t-cache-read); }
+.t-cache-write { background: var(--t-cache-write); }
 .t-output { background: var(--ink-strong); }
 
 /* ---- breakdown ---- */
@@ -66,6 +68,9 @@
 .breakdown .b-name .share { max-width: 28rem; }
 .breakdown .share i { opacity: 0.9; }
 .breakdown .f-empty { color: var(--faint); }
+.breakdown-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 10px; font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.breakdown-foot[hidden] { display: none; }
+.breakdown-foot .range button:disabled { color: var(--faint); cursor: default; }
 
 @container (max-width: 760px) {
   .usage-headline { grid-template-columns: minmax(0, 1fr); }
